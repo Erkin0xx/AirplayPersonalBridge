@@ -9,16 +9,25 @@ deux fichiers et de l'historique git (CDC section 14).
 
 ## Mode de collaboration (décidé par Baptiste, 2026-08-05)
 
-- **Autonomie sur l'exécution.** Ne pas demander d'accord pour lancer des commandes,
-  installer des paquets, accorder/réinitialiser des autorisations, ou faire des essais.
-  Agir, puis rendre compte.
+Ces règles valent pour tout le projet, à chaque session et à chaque jalon.
+
+- **Autonomie totale sur l'exécution.** Ne pas demander d'accord pour lancer des commandes,
+  installer des paquets, accorder/réinitialiser des autorisations, choisir entre deux
+  implémentations équivalentes, ou faire des essais. Agir, puis rendre compte.
+- **Ne jamais poser de question fermée de type oui/non, ni demander d'autoriser une
+  commande.** Baptiste fait confiance sur ces points : une question dont la réponse est
+  « oui, vas-y » ne doit pas être posée. En cas d'hésitation entre deux options techniques,
+  trancher soi-même, appliquer, et signaler le choix dans le compte rendu de fin d'étape.
 - **Push git automatique**, sans demander à chaque fois. Dépôt :
   `https://github.com/Erkin0xx/AirplayPersonalBridge.git` (branche `main`).
-- **Solliciter Baptiste uniquement dans deux cas** : (1) une étape/un jalon est terminé et
-  il faut faire le point ; (2) une action ne peut être faite que par lui physiquement
-  (lancer une vidéo Netflix, brancher un ampli, basculer un réglage d'interface graphique).
+- **Solliciter Baptiste uniquement dans deux cas :**
+  1. une étape ou un jalon est terminé, et il faut faire le point ;
+  2. il y a une **action concrète que lui seul peut faire** : lancer une vidéo dans un
+     service où il est connecté, brancher un ampli ou une interface audio, basculer un
+     réglage dans une interface graphique, valider un rendu à l'oreille. Autrement dit du
+     travail réel de sa part — jamais une simple confirmation ni une autorisation.
 - Le point d'arrêt en fin de jalon reste obligatoire (CDC section 14) : ne jamais enchaîner
-  sur le jalon suivant sans son accord explicite.
+  sur le jalon suivant sans son accord explicite. C'est la seule exception à ce qui précède.
 
 ---
 
