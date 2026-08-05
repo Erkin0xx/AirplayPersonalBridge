@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Lance audiocap via son bundle. À utiliser à la place du binaire interne.
+#
+#   ./audiocap [durée_s] [sortie.wav] [options...]
+#
+# Pourquoi ce wrapper : exécuter directement `build/audiocap.app/Contents/MacOS/audiocap`
+# fait perdre l'autorisation TCC. macOS attribue « Enregistrement des sons du système »
+# (kTCCServiceAudioCapture) à l'identité du **bundle** ; un binaire interne lancé
+# directement depuis le shell n'en hérite pas et le Process Tap ne renvoie que du silence,
+# sans jamais signaler d'erreur. `open` fait passer le lancement par LaunchServices, qui
+# attribue correctement l'identité.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP="${REPO_ROOT}/build/audiocap.app"
+
+if [ ! -d "$APP" ]; then
+  echo "Bundle absent. Lancer d'abord : ./make-cli-bundle.sh" >&2
+  exit 1
+fi
+
+# `-W` attend la fin du process ; `--args` transmet les arguments au binaire.
+# La sortie du CLI (stderr/stdout) n'est pas relayée par `open`, elle part dans les logs
+# unifiés : `log stream --predicate 'subsystem == "fr.baptiste.airplaymultioutput"'`.
+open -W "$APP" --args "$@"

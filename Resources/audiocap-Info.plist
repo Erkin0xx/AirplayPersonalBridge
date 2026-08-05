@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>fr.baptiste.airplaymultioutput.audiocap</string>
+	<key>CFBundleName</key>
+	<string>audiocap</string>
+	<key>CFBundleExecutable</key>
+	<string>audiocap</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.2</string>
+	<!-- Deux bascules de confidentialité distinctes selon le mode de capture (CDC 4.2) :
+	     enregistrement audio système pour les modes Process Tap (global / application),
+	     micro classique pour le mode entrée physique. -->
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Capture le son système pour le diffuser vers les enceintes AirPlay.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Capture l'entrée audio physique (ligne/micro) pour la diffuser vers les enceintes AirPlay.</string>
+</dict>
+</plist>

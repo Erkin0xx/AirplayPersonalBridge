@@ -1,0 +1,161 @@
+# AirPlay Personal Bridge
+
+Application macOS native de diffusion audio multi-sortie, à usage strictement personnel.
+
+Capture le son du Mac (système global, application précise, ou entrée physique) et le
+diffuse **simultanément** vers une enceinte **AirPlay 1** (Geneva) et un groupe
+**AirPlay 2** (Apple TV + 2 HomePod), avec volume indépendant par sortie et compensation
+du décalage temporel entre elles.
+
+## Pourquoi ce projet
+
+macOS ne sait pas faire. Le périphérique de sortie multiple (Audio MIDI Setup) n'agrège pas
+un appareil AirPlay 1 et un groupe AirPlay 2 simultanément. Airfoil y arrive en gérant
+lui-même les deux protocoles en parallèle au lieu de s'appuyer sur le système : c'est
+l'approche reprise ici, avec deux senders AirPlay implémentés en interne.
+
+## État d'avancement
+
+| Jalon | Contenu | État |
+|---|---|---|
+| -1 | Setup, émulateurs de récepteurs | ✅ validé contre mock |
+| 0 | Validation OwnTone | ⏸️ décalé (nécessite le matériel réel) |
+| 1 | Capture Core Audio (3 modes + test DRM) | 🚧 en cours |
+| 2 | Sender RAOP (Geneva) | ⬜ |
+| 3 | Sender AirPlay 2 (Apple TV/HomePod) | ⬜ |
+| 4 | Synchronisation et dérive | ⬜ |
+| 5 | Interface SwiftUI | ⬜ |
+
+> **Important** : « validé » signifie *validé contre les émulateurs logiciels*. Le
+> développement a démarré sans accès au matériel AirPlay réel. La validation contre la vraie
+> Geneva et le vrai groupe Apple TV/HomePod reste une étape distincte.
+> Voir [`PROGRESS.md`](PROGRESS.md) pour le détail par jalon.
+
+## Architecture
+
+Process unique, natif Swift. **Aucune dépendance runtime à un sous-processus externe** :
+OwnTone et pyatv servent au développement et au pairing initial, jamais à l'exécution.
+
+```
+                  ┌────────────────────┐
+   Process Tap ──▶│                    │──▶ ring buffer ──▶ Sender RAOP    ──▶ Geneva
+   ou entrée      │  Capture (1 seule  │      lock-free
+   physique       │  active à la fois) │──▶ ring buffer ──▶ Sender AirPlay 2 ──▶ ApTV+HomePod
+                  └────────────────────┘      lock-free
+```
+
+Deux règles structurantes : la capture ne connaît **jamais** les destinations, et chaque
+sender ignore l'existence de l'autre. Le flux PCM est dupliqué en lecture seule ; aucun
+sender ne modifie le buffer partagé.
+
+L'ensemble des invariants est listé dans [`CLAUDE.md`](CLAUDE.md) et en section 12 du
+cahier des charges — ils ne sont pas négociables, y compris pour un développement assisté
+par agent.
+
+### Organisation du dépôt
+
+```
+Sources/AudioCore/     bibliothèque cœur (capture, senders, DSP) — sans interface
+Sources/audiocap/      exécutable CLI de validation (dump .wav, logs)
+Tests/                 tests unitaires
+docs/                  cahier des charges + guide d'installation et de tests
+tools/                 émulateurs et venvs Python (gitignoré)
+```
+
+## Démarrage rapide
+
+Prérequis : macOS 14.2+ (Process Tap), Xcode Command Line Tools. Xcode complet n'est
+nécessaire qu'au jalon 5.
+
+```bash
+git clone https://github.com/Erkin0xx/AirplayPersonalBridge.git
+cd AirplayPersonalBridge
+./setup.sh            # Homebrew, mocks, pyatv, fichiers de suivi — idempotent
+```
+
+### Lancer les émulateurs de récepteurs
+
+Le développement ne nécessite pas le matériel AirPlay réel : deux récepteurs logiciels
+tiennent lieu de cibles de test.
+
+```bash
+./run-mocks.sh          # lance les deux mocks + vérifie leur annonce Bonjour
+./run-mocks.sh check    # vérifie seulement
+./run-mocks.sh stop     # arrête
+```
+
+| Mock | Émule | Outil | Service |
+|---|---|---|---|
+| `Geneva-Mock` | l'enceinte Geneva (AirPlay 1) | shairport-sync | `_raop._tcp` |
+| `ApTV-HomePod-Mock` | le groupe Apple TV + HomePod (AirPlay 2) | airplay2-receiver | `_airplay._tcp` |
+
+> Un seul mock suffit pour le groupe Apple TV/HomePod : le sender l'adresse comme **une
+> seule destination**, jamais les HomePod individuellement.
+
+> ⚠️ **Le récepteur AirPlay natif de macOS doit rester désactivé** (Réglages Système >
+> Général > AirDrop et Handoff). Il occupe le port 5000 et empêche shairport-sync de
+> démarrer ; l'option `-p` est ignorée par cette build.
+
+### Capturer du son
+
+```bash
+./make-cli-bundle.sh                                   # compile + signe + enregistre
+./build/audiocap.app/Contents/MacOS/audiocap 10 out.wav
+afplay out.wav
+```
+
+Le bundle signé n'est pas un caprice : un exécutable SwiftPM nu n'a ni `Info.plist` ni
+identité de code stable, macOS ne peut donc lui accorder aucune autorisation.
+
+> ⚠️ **Autorisation requise, et ce n'est pas celle du micro.** Le Process Tap dépend de
+> « Enregistrement des sons du système », distincte de « Microphone ». Sans elle, le tap
+> **ne renvoie aucune erreur** : il livre des buffers de silence numérique, ce qui ressemble
+> trompeusement à un blocage DRM.
+>
+> Réglages Système > Confidentialité et sécurité > « Enregistrement de l'écran et des sons
+> du système » > section « Enregistrement des sons du système uniquement » > **+** >
+> ajouter `build/audiocap.app`.
+>
+> Ré-exécuter `make-cli-bundle.sh` change la signature du binaire et **invalide
+> l'autorisation** : il faut la ré-accorder.
+
+## Développement
+
+```bash
+swift build      # compile la bibliothèque et le CLI
+swift test       # tests unitaires
+```
+
+Le travail se fait jalon par jalon. Chaque jalon se clôt par une mise à jour de
+`PROGRESS.md`, un commit qui le référence, et un point d'arrêt — jamais d'enchaînement
+automatique sur le suivant.
+
+Toute session de travail (humaine ou agent) commence par lire [`PROGRESS.md`](PROGRESS.md)
+et [`CLAUDE.md`](CLAUDE.md) : ces deux fichiers et l'historique git constituent la seule
+mémoire du projet d'un jalon à l'autre.
+
+## Documentation
+
+- [Cahier des charges](docs/cahier_des_charges_diffusion_audio.md) — périmètre,
+  architecture, invariants, jalons.
+- [Guide d'installation et de tests](docs/guide_installation_et_tests.md) — mise en place
+  des émulateurs, checklists de validation par jalon.
+- [`CLAUDE.md`](CLAUDE.md) — invariants recopiés littéralement et faits vérifiés sur la
+  machine de dev (formats, pièges d'API, chemins de config).
+- [`PROGRESS.md`](PROGRESS.md) — journal par jalon.
+
+## Limites connues
+
+- **AirPlay 2 est un protocole propriétaire non documenté.** La logique portée depuis
+  OwnTone/pyatv peut cesser de fonctionner après une mise à jour tvOS ou HomePod, sans
+  préavis ni recours.
+- **Les émulateurs ne prouvent rien sur le matériel réel.** `airplay2-receiver` est
+  expérimental de son propre aveu : un handshake qui passe contre lui est un signal de
+  départ, pas une garantie contre le vrai firmware Apple.
+- **Le debug est limité au-delà du handshake** : le trafic AirPlay 2 est chiffré.
+- Pas de spatialisation 3D, pas de portage vers un autre OS, pas de fonction récepteur :
+  l'application est un sender exclusivement (section 3 du CDC).
+
+## Licence
+
+Projet personnel, non distribué.

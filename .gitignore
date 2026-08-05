@@ -6,6 +6,8 @@ tools/
 
 # Swift Package Manager
 .build/
+# Bundle CLI signé produit par make-cli-bundle.sh (régénérable)
+build/
 .swiftpm/
 *.xcodeproj/
 *.xcworkspace/
