@@ -7,6 +7,19 @@ Voir docs/cahier_des_charges_diffusion_audio.md section 13.
 Claude Code n'a aucune mémoire automatique du projet d'un jalon à l'autre en dehors de ces
 deux fichiers et de l'historique git (CDC section 14).
 
+## Mode de collaboration (décidé par Baptiste, 2026-08-05)
+
+- **Autonomie sur l'exécution.** Ne pas demander d'accord pour lancer des commandes,
+  installer des paquets, accorder/réinitialiser des autorisations, ou faire des essais.
+  Agir, puis rendre compte.
+- **Push git automatique**, sans demander à chaque fois. Dépôt :
+  `https://github.com/Erkin0xx/AirplayPersonalBridge.git` (branche `main`).
+- **Solliciter Baptiste uniquement dans deux cas** : (1) une étape/un jalon est terminé et
+  il faut faire le point ; (2) une action ne peut être faite que par lui physiquement
+  (lancer une vidéo Netflix, brancher un ampli, basculer un réglage d'interface graphique).
+- Le point d'arrêt en fin de jalon reste obligatoire (CDC section 14) : ne jamais enchaîner
+  sur le jalon suivant sans son accord explicite.
+
 ---
 
 ## Invariants d'architecture — recopiés littéralement du CDC section 12

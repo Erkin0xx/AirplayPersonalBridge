@@ -20,7 +20,16 @@ if [ ! -d "$APP" ]; then
   exit 1
 fi
 
+# `open` ne relaie ni stdout ni stderr du process lancé. Le CLI écrit donc sa sortie dans
+# un fichier que ce wrapper affiche ensuite, pour rester utilisable au terminal.
+# Chemin fixe, connu du binaire (`AudioCLIOutput.path`) : `open` ne transmet pas non plus
+# les variables d'environnement au process lancé.
+OUT="/tmp/audiocap-output.txt"
+rm -f "$OUT"
+
 # `-W` attend la fin du process ; `--args` transmet les arguments au binaire.
-# La sortie du CLI (stderr/stdout) n'est pas relayée par `open`, elle part dans les logs
-# unifiés : `log stream --predicate 'subsystem == "fr.baptiste.airplaymultioutput"'`.
 open -W "$APP" --args "$@"
+status=$?
+
+[ -f "$OUT" ] && cat "$OUT"
+exit $status

@@ -14,11 +14,18 @@ let package = Package(
         // 14.0, d'où l'attribut @available(macOS 14.2) sur ProcessTapCapture lui-même.
         .macOS(.v15)
     ],
+    dependencies: [
+        // Primitives atomiques pour le ring buffer lock-free (invariant section 12).
+        // Bibliothèque officielle Apple ; l'alternative serait d'appeler les atomiques C
+        // à la main, ce qui contredirait la règle « aucun pointeur C manipulé à nu ».
+        .package(url: "https://github.com/apple/swift-atomics.git", from: "1.2.0")
+    ],
     targets: [
         // Cœur : capture, senders, DSP. Ne connaît aucune interface, ne dépend d'aucun
         // exécutable. Invariant section 12 : toute dépendance de code pointe vers ce cœur.
         .target(
             name: "AudioCore",
+            dependencies: [.product(name: "Atomics", package: "swift-atomics")],
             path: "Sources/AudioCore"
         ),
         // CLI de validation : dump .wav, logs. Dépend du cœur, jamais l'inverse.
