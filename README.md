@@ -20,7 +20,7 @@ l'approche reprise ici, avec deux senders AirPlay implémentés en interne.
 |---|---|---|
 | -1 | Setup, émulateurs de récepteurs | ✅ validé contre mock |
 | 0 | Validation OwnTone | ⏸️ décalé (nécessite le matériel réel) |
-| 1 | Capture Core Audio (3 modes + test DRM) | 🚧 en cours |
+| 1 | Capture Core Audio (3 modes + test DRM) | ✅ validé en local |
 | 2 | Sender RAOP (Geneva) | ⬜ |
 | 3 | Sender AirPlay 2 (Apple TV/HomePod) | ⬜ |
 | 4 | Synchronisation et dérive | ⬜ |
@@ -99,25 +99,41 @@ tiennent lieu de cibles de test.
 ### Capturer du son
 
 ```bash
-./make-cli-bundle.sh                                   # compile + signe + enregistre
-./build/audiocap.app/Contents/MacOS/audiocap 10 out.wav
-afplay out.wav
+./make-cli-bundle.sh                          # compile + signe + enregistre le bundle
+
+./audiocap --list                             # process audio (● = en train de jouer)
+./audiocap 10 systeme.wav                     # son système global
+./audiocap --app Music 10 music.wav           # une application précise
+./audiocap --mode input 10 entree.wav         # entrée physique (micro/ligne)
+
+./analyse-wav.py systeme.wav                  # son capté ? silence ? fichier vide ?
+afplay systeme.wav
 ```
 
-Le bundle signé n'est pas un caprice : un exécutable SwiftPM nu n'a ni `Info.plist` ni
-identité de code stable, macOS ne peut donc lui accorder aucune autorisation.
+**Toujours passer par `./audiocap`**, jamais par le binaire interne du bundle : macOS
+attribue l'autorisation à l'identité de l'**app**, et un binaire lancé directement depuis le
+shell n'en hérite pas — le tap renvoie alors du silence sans la moindre erreur. Le wrapper
+lance le bundle via `open`, ce qui règle le problème.
 
 > ⚠️ **Autorisation requise, et ce n'est pas celle du micro.** Le Process Tap dépend de
-> « Enregistrement des sons du système », distincte de « Microphone ». Sans elle, le tap
-> **ne renvoie aucune erreur** : il livre des buffers de silence numérique, ce qui ressemble
-> trompeusement à un blocage DRM.
+> « Enregistrement des sons du système » (`kTCCServiceAudioCapture`), distincte de
+> « Microphone ». Sans elle, le tap **ne renvoie aucune erreur** : il livre des buffers de
+> silence numérique, ce qui ressemble trompeusement à un blocage DRM.
 >
 > Réglages Système > Confidentialité et sécurité > « Enregistrement de l'écran et des sons
 > du système » > section « Enregistrement des sons du système uniquement » > **+** >
 > ajouter `build/audiocap.app`.
 >
 > Ré-exécuter `make-cli-bundle.sh` change la signature du binaire et **invalide
-> l'autorisation** : il faut la ré-accorder.
+> l'autorisation** : il faut la retirer puis la ré-ajouter. Un silence inexpliqué juste
+> après un rebuild, c'est presque toujours ça.
+
+### Le DRM bloque-t-il la capture ?
+
+**Non, d'après les mesures du jalon 1.** Apple Music et une vidéo Netflix ont été captés
+sans blocage (99,1 % et 96,0 % d'échantillons non nuls, fichiers relus à l'oreille). Le DRM
+protège le fichier chiffré, pas les échantillons PCM déjà décodés quand ils atteignent le
+graphe Core Audio. Détail des mesures dans [`PROGRESS.md`](PROGRESS.md).
 
 ## Développement
 

@@ -79,6 +79,56 @@ Environnement constaté au jalon -1 (2026-08-05) :
   sont marqués `NS_REFINED_FOR_SWIFT` : côté Swift ils sont exposés sous une forme affinée,
   ne pas s'attendre au nom Objective-C littéral.
 
+## Capture Core Audio — faits vérifiés au jalon 1
+
+Format livré par le Process Tap sur cette machine : **48 000 Hz, 2 canaux, float32
+ENTRELACÉ** (`mBytesPerFrame` = 8). Deux conséquences vérifiées à la dure :
+- le nombre de trames se déduit de `mBytesPerFrame`, pas de `MemoryLayout<Float>.size` —
+  sinon on compte le double des trames réelles ;
+- `AVAudioFile(forWriting:..., interleaved:)` décrit le format des buffers **fournis**, pas
+  celui du fichier. Une valeur incohérente fait échouer `ExtAudioFileWrite` (OSStatus -50).
+
+Le mode entrée physique (`AVAudioEngine.inputNode`) livre en revanche du **mono planaire**
+à 48 kHz : les deux formats coexistent, le code ne doit jamais supposer l'un ou l'autre.
+
+### Les trois pièges du Process Tap (chacun coûte des heures)
+
+1. **`kAudioSubTapUIDKey` attend `CATapDescription.uuid`**, pas la valeur lue via
+   `kAudioTapPropertyUID`. Avec la mauvaise valeur, tout « réussit » : le tap se crée,
+   l'agrégat se crée, le callback d'IO est appelé au rythme normal avec des buffers de la
+   bonne taille — mais entièrement remplis de zéros.
+2. **L'agrégat doit porter le périphérique de sortie courant** comme
+   `kAudioAggregateDeviceMainSubDeviceKey` **et** dans `kAudioAggregateDeviceSubDeviceListKey` :
+   c'est lui qui fournit l'horloge.
+3. **Le binaire doit être lancé via le bundle** (`open`, d'où le wrapper `./audiocap`).
+   Exécuter `build/audiocap.app/Contents/MacOS/audiocap` directement fait perdre
+   l'autorisation TCC : silence numérique, sans erreur.
+
+### Autorisations : deux services TCC distincts
+
+- **Process Tap** (modes global et application) → `kTCCServiceAudioCapture`, panneau
+  « Enregistrement de l'écran et des sons du système » > section **« Enregistrement des
+  sons du système uniquement »**.
+- **Entrée physique** → `kTCCServiceMicrophone`, panneau « Microphone ».
+
+**`AVCaptureDevice.authorizationStatus(for: .audio)` renvoie l'état du MICRO**, jamais
+celui de `kTCCServiceAudioCapture`. Elle peut répondre `authorized` alors que le tap ne
+livre que du silence : ne jamais s'en servir pour décider si le Process Tap est autorisé.
+Aucune API publique n'expose `kTCCServiceAudioCapture` ; `CapturePermission` passe par les
+SPI privées `TCCAccessPreflight`/`TCCAccessRequest` (`TCC.framework`), comme le projet de
+référence `insidegui/AudioCap`. Ces SPI interdisent une soumission au Mac App Store — sans
+objet pour un usage personnel.
+
+**Piège opérationnel** : chaque `./make-cli-bundle.sh` re-signe le bundle, change son CDHash
+et **révoque l'autorisation accordée**. Après un rebuild, la retirer puis la ré-ajouter dans
+le panneau. Un test qui renvoie du silence juste après un rebuild teste presque toujours ça,
+pas le code.
+
+**Diagnostic** : un silence numérique **strict** (0 échantillon non nul) signale une
+autorisation manquante ou un tap mal câblé — jamais un blocage DRM (voir le résultat du test
+DRM dans `PROGRESS.md`). Un fichier **vide** (0 échantillon écrit) signifie que rien ne
+jouait : résultat non concluant, pas un blocage.
+
 ## Mocks AirPlay — état et pièges
 
 Lancer/vérifier les deux mocks : **`./run-mocks.sh`** (`start` / `check` / `stop`).
