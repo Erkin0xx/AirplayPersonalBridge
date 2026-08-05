@@ -8,6 +8,31 @@ Distinguer explicitement "validé contre mock" et "validé contre matériel rée
 
 ---
 
+## OÙ ON EN EST — à lire en premier
+
+| | |
+|---|---|
+| **Dernier jalon terminé** | Jalon 1 — capture Core Audio (validé le 2026-08-05) |
+| **Prochain jalon** | **Jalon 2 — sender RAOP vers la Geneva** (prompt : CDC section 14) |
+| **Dépôt** | `github.com/Erkin0xx/AirplayPersonalBridge`, branche `main` |
+
+**Acquis réutilisables au jalon 2** : le CLI `./audiocap` produit un flux PCM (48 kHz,
+2 canaux, float32 entrelacé) déjà disponible en sortie d'un ring buffer lock-free
+(`AudioRingBuffer`). Le sender RAOP se branche **en lecture** sur ce ring buffer, sans jamais
+modifier le buffer partagé (invariant section 12).
+
+**Prêt pour le jalon 2** : Wireshark 4.6.7 + `tshark` installés, capture sans `sudo` sur
+`en0`. Mock Geneva opérationnel (`./run-mocks.sh`), annoncé en `_raop._tcp`.
+
+**Piège à ne pas réapprendre** : le mock s'annonce sous `65D15B6D3AC1@Geneva-Mock`, avec un
+préfixe d'adresse matérielle. Le sender doit **parcourir `_raop._tcp` et résoudre le
+service** — jamais supposer le nom ni le port en dur.
+
+**Avant de coder quoi que ce soit au jalon 2** : lire `CLAUDE.md` en entier (invariants
+section 12 recopiés littéralement + pièges vérifiés), puis le détail du jalon 1 ci-dessous.
+
+---
+
 ## Jalon -1 : setup initial — TERMINÉ (validé contre mock)
 
 Date : 2026-08-05
