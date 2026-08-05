@@ -1,6 +1,0 @@
-Browsing for _raop._tcp.local
-DATE: ---Wed 05 Aug 2026---
-22:37:36.605  ...STARTING...
-Timestamp     A/R    Flags  if Domain               Service Type         Instance Name
-22:37:36.605  Add        3   1 local.               _raop._tcp.          65D15B6D3AC1@Geneva-Mock
-22:37:36.605  Add        2  14 local.               _raop._tcp.          65D15B6D3AC1@Geneva-Mock

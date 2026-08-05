@@ -1,6 +1,9 @@
 # Outils externes installés par setup.sh (clones + venv Python), jamais versionnés
 tools/
 
+# Logs runtime des mocks (produits par run-mocks.sh)
+.mock-logs/
+
 # Swift Package Manager
 .build/
 .swiftpm/
