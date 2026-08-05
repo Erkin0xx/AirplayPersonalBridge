@@ -40,8 +40,10 @@ corrigés dans le script (il reste idempotent et relançable) :
 
 2. **Wireshark (cask) exige un `sudo` interactif** pour son pkg "add to system path",
    impossible en session non interactive.
-   → Résolution : rendu non bloquant. Wireshark n'est requis qu'au jalon 2 (comparaison
-   de trafic). **Reste à installer manuellement avant le jalon 2.**
+   → Résolution : rendu non bloquant dans le script. Wireshark n'est requis qu'au jalon 2
+   (comparaison de trafic). **Installé manuellement par Baptiste depuis, en fin de
+   jalon -1** : Wireshark 4.6.7, avec `tshark` dans le PATH et capture possible sans `sudo`
+   (membre du groupe `access_bpf`). Le prérequis du jalon 2 est donc satisfait.
 
 3. **PEP 668 / "externally-managed-environment"** : le Python 3.14 de Homebrew refuse
    `pip3 install virtualenv` et `pip3 install pyatv` en global.
@@ -86,8 +88,8 @@ lancé avec `-p 5010`). Décision validée avec Baptiste.
 
 ### Ce qui reste ouvert
 
-- **Wireshark non installé** (sudo interactif requis) — bloquant pour la validation du
-  jalon 2, pas avant.
+- ~~Wireshark non installé~~ — **résolu en fin de jalon -1** (4.6.7, `tshark` disponible,
+  capture sans `sudo`). Plus de blocage pour le jalon 2.
 - **OwnTone non installé** — à compiler depuis les sources au jalon 0.
 - Le mock AirPlay 2 émet un warning zeroconf non fatal au démarrage
   (`Error with socket ... No route to host` sur l'IPv6 link-local) ; l'enregistrement mDNS

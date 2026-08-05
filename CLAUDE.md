@@ -98,10 +98,15 @@ globale n'est possible**, tout passe par un venv.
 - `tools/` est gitignoré. pyatv et les mocks sont des outils de développement, **jamais des
   dépendances runtime de l'application** (CDC section 5).
 
+## Outillage réseau (jalon 2)
+
+**Wireshark 4.6.7 installé** (`/Applications/Wireshark.app`), avec **`tshark` dans le PATH**
+(`/opt/homebrew/bin/tshark`) : la comparaison de trafic du jalon 2 peut se scripter en CLI,
+sans passer par la GUI. La capture fonctionne **sans `sudo`** (utilisateur membre du groupe
+`access_bpf`, `/dev/bpf*` en `root:access_bpf` crw-rw----). Interface à capturer : `en0`.
+
 ## À installer avant certains jalons
 
-- **Wireshark** : requis au jalon 2 (comparaison de trafic). Non installé — le cask exige un
-  `sudo` interactif. `brew install --cask wireshark` à la main.
 - **OwnTone** : requis au jalon 0 uniquement. **N'existe plus dans homebrew-core** (ni
   `owntone`, ni `forked-daapd`) : à compiler depuis les sources
   (https://github.com/owntone/owntone-server).
