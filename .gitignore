@@ -1,0 +1,21 @@
+# Outils externes installés par setup.sh (clones + venv Python), jamais versionnés
+tools/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+
+# Artefacts de test audio (dumps de capture, captures réseau)
+*.wav
+*.pcap
+*.pcapng
+
+# Credentials de pairing AirPlay 2 (jalon 3) — ne jamais committer
+credentials/
+*.credentials
+
+# macOS
+.DS_Store
