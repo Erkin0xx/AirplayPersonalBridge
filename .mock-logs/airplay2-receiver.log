@@ -1,0 +1,12 @@
+[Receiver]: Name: ApTV-HomePod-Mock
+[Receiver]: Enabled features: 0001c300405f4200
+[Receiver]: 495880824111616
+[Receiver]: Interface: en0
+[Receiver]: Mac: 1e:88:d1:55:d6:fd
+[Receiver]: IPv4: 192.168.1.21
+[Receiver]: IPv6: fe80::1c2e:6a8:fe0:37a5
+[Receiver]: 
+[asyncio]: Using selector: KqueueSelector
+[Receiver]: mDNS: service registered
+[Receiver]: Starting RTSP server, press Ctrl-C to exit...
+[Receiver]: serving on 192.168.1.21:7000

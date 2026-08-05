@@ -1,0 +1,6 @@
+Browsing for _airplay._tcp.local
+DATE: ---Wed 05 Aug 2026---
+22:37:41.629  ...STARTING...
+Timestamp     A/R    Flags  if Domain               Service Type         Instance Name
+22:37:41.630  Add        3   1 local.               _airplay._tcp.       ApTV-HomePod-Mock
+22:37:41.630  Add        2  14 local.               _airplay._tcp.       ApTV-HomePod-Mock
