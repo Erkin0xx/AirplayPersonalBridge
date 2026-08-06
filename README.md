@@ -21,10 +21,21 @@ l'approche reprise ici, avec deux senders AirPlay implémentés en interne.
 | -1 | Setup, émulateurs de récepteurs | ✅ validé contre mock |
 | 0 | Validation OwnTone | ⏸️ décalé (nécessite le matériel réel) |
 | 1 | Capture Core Audio (3 modes + test DRM) | ✅ validé en local |
-| 2 | Sender RAOP (Geneva) | ⬜ |
-| 3 | Sender AirPlay 2 (Apple TV/HomePod) | ⬜ |
+| 2 | Sender RAOP (Geneva) | ✅ validé contre mock |
+| 3 | Sender AirPlay 2 (Apple TV/HomePod) | ✅ validé contre mock |
 | 4 | Synchronisation et dérive | ⬜ |
 | 5 | Interface SwiftUI | ⬜ |
+
+**Les deux sorties diffusent en parallèle depuis le jalon 3**, ce qui est l'objectif
+fonctionnel du projet :
+
+```bash
+./audiocap --airplay Geneva --airplay2 ApTV 30
+```
+
+Mesuré sur 15 s contre les émulateurs : 1 884 paquets RAOP et 1 882 paquets AirPlay 2,
+0 erreur de part et d'autre, 0 rupture de numéro de séquence. Une panne sur une sortie
+n'interrompt pas l'autre.
 
 > **Important** : « validé » signifie *validé contre les émulateurs logiciels*. Le
 > développement a démarré sans accès au matériel AirPlay réel. La validation contre la vraie
@@ -55,12 +66,22 @@ par agent.
 ### Organisation du dépôt
 
 ```
-Sources/AudioCore/     bibliothèque cœur (capture, senders, DSP) — sans interface
-Sources/audiocap/      exécutable CLI de validation (dump .wav, logs)
-Tests/                 tests unitaires
-docs/                  cahier des charges + guide d'installation et de tests
-tools/                 émulateurs et venvs Python (gitignoré)
+Sources/AudioCore/          bibliothèque cœur (capture, senders, DSP) — sans interface
+  ├── RAOP/                 sender AirPlay 1 + socle partagé (RTSP, UDP, RTP, resampling)
+  └── AirPlay2/             sender AirPlay 2 (pairing, canal chiffré, RTSP)
+      └── Crypto/           wrappers Swift des primitives C
+Sources/CCrypto/            bibliothèques C vendues (SRP, X25519, Ed25519, ChaCha20-Poly1305)
+Sources/audiocap/           exécutable CLI de validation (dump .wav, diffusion, logs)
+Tests/                      tests unitaires (79)
+docs/                       cahier des charges + guide d'installation et de tests
+tools/                      émulateurs et venvs Python (gitignoré)
 ```
+
+Les primitives cryptographiques d'AirPlay 2 ne sont **jamais réécrites en Swift** : quatre
+bibliothèques C éprouvées sont vendues telles quelles et pilotées par des wrappers dédiés
+qui gèrent leur mémoire. Une erreur de portage (endianness, off-by-one) casserait la
+compatibilité sans symptôme visible en test. Provenance, commits et écarts :
+[`Sources/CCrypto/README.md`](Sources/CCrypto/README.md).
 
 ## Démarrage rapide
 
@@ -127,6 +148,26 @@ lance le bundle via `open`, ce qui règle le problème.
 > Ré-exécuter `make-cli-bundle.sh` change la signature du binaire et **invalide
 > l'autorisation** : il faut la retirer puis la ré-ajouter. Un silence inexpliqué juste
 > après un rebuild, c'est presque toujours ça.
+
+### Diffuser vers les récepteurs
+
+```bash
+./audiocap --browse                            # récepteurs AirPlay 1 (_raop._tcp)
+./audiocap --browse2                           # récepteurs AirPlay 2 (_airplay._tcp)
+
+./audiocap --airplay Geneva 30                 # vers la Geneva seule
+./audiocap --airplay2 ApTV 30                  # vers le groupe Apple TV/HomePod seul
+./audiocap --airplay Geneva --airplay2 ApTV 30 # les deux en parallèle
+
+./audiocap --airplay Geneva --volume -15 30    # volume par sortie (--volume2 pour l'autre)
+```
+
+`--browse2` affiche les **bits de fonctionnalité** annoncés par le récepteur, dont son mode
+de pairing. C'est la première commande à lancer devant un récepteur inconnu : elle détermine
+en une fois si le sender saura lui parler.
+
+> Les mocks perdent leur annonce Bonjour au bout de quelques minutes. Devant un « récepteur
+> introuvable », relancer `./run-mocks.sh` avant de suspecter le code.
 
 ### Le DRM bloque-t-il la capture ?
 
