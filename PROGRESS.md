@@ -363,8 +363,14 @@ Le prompt du jalon demandait une comparaison avec **une session Airfoil ou macOS
 fonctionnelle vers le même appareil**. **Cette comparaison n'a pas pu être faite**, pour des
 raisons qui tiennent toutes à l'outillage, pas au sender :
 
-- **macOS natif** : sélectionner une sortie AirPlay passe obligatoirement par le menu son de
-  l'interface graphique. Action que seul Baptiste peut faire.
+- **macOS natif** : **vérifié par Baptiste le 2026-08-06, Wireshark ouvert — le mock Geneva
+  n'apparaît pas du tout dans le menu son.** macOS ne liste que `ApTV-HomePod-Mock`
+  (`_airplay._tcp`, AirPlay 2) et ignore Geneva-Mock (`_raop._tcp`, AirPlay 1) : macOS récent
+  ne propose comme sortie que les récepteurs AirPlay 2. Ce n'est donc pas une contrainte
+  d'outillage contournable, mais une **impossibilité de principe contre ce mock** : la
+  comparaison avec macOS natif ne pourra se faire **qu'avec la vraie Geneva**.
+  Le mock Apple TV n'est pas un substitut — il parle AirPlay 2, protocole différent, sans
+  rapport avec le sender RAOP de ce jalon (il servira au jalon 3).
 - **Airfoil** (présent dans `~/Downloads`) : son interface de script exige l'autorisation
   « Accessibilité », un interrupteur graphique. Il installe en outre un pilote audio qui
   demande d'accepter une licence.
@@ -385,9 +391,14 @@ meilleur usage de la première session avec la vraie Geneva.
 ### Ce qui reste ouvert
 
 - **Rien n'a été validé contre la vraie Geneva.** C'est la limite principale de ce jalon.
-- **La comparaison Wireshark avec un sender de référence reste à faire** (voir ci-dessus).
-  Elle demande une action physique de Baptiste : sélectionner la Geneva (ou le mock) comme
-  sortie AirPlay depuis le menu son de macOS pendant qu'une capture tourne.
+- **La comparaison Wireshark avec un sender de référence reste à faire, et elle est
+  reportée au premier accès à la vraie Geneva.** Tentée le 2026-08-06 : macOS ne propose
+  pas le mock Geneva comme sortie (voir ci-dessus), donc aucun sender de référence ne peut
+  atteindre ce mock sur cette machine. Ce n'est plus une question d'outillage à débloquer.
+  **Marche à suivre le jour J** : lancer `tshark -i en0 -f "tcp port 5000 or udp portrange
+  6000-6100"` (la vraie Geneva étant sur le réseau, c'est bien `en0` et non `lo0`),
+  sélectionner la Geneva dans le menu son de macOS, laisser jouer ~30 s, puis rejouer la
+  même séquence avec `./audiocap --airplay Geneva 30` et comparer les deux traces.
 - **~11 erreurs de décodage côté mock, groupées à la fin de chaque session.** Elles
   n'apparaissent jamais pendant la diffusion (log vérifié : elles sont contiguës en fin de
   fichier, jamais entrelacées avec les 40 s de flux), leur nombre ne croît pas avec la durée

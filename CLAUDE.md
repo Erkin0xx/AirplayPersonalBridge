@@ -220,9 +220,15 @@ suggestion.
   supprimé). Un venv Python 3.13 fonctionnel a été créé : **`tools/pyatv313/`**.
 - **Airfoil** (dans `~/Downloads`) exige l'autorisation « Accessibilité » pour son interface
   de script, et installe un pilote audio sous licence à accepter : deux actions graphiques.
-- **Sélectionner une sortie AirPlay dans macOS passe obligatoirement par le menu son**, il
-  n'existe pas d'équivalent en ligne de commande. Toute comparaison avec un sender de
-  référence demande donc une action physique de Baptiste.
+- **macOS ne propose PAS le mock Geneva comme sortie audio** (vérifié le 2026-08-06). Le
+  menu son ne liste que `ApTV-HomePod-Mock` (`_airplay._tcp`) et ignore Geneva-Mock
+  (`_raop._tcp`) : macOS récent ne propose comme sortie que les récepteurs **AirPlay 2**.
+  Conséquence durable : **aucune comparaison avec macOS natif n'est possible contre le mock
+  RAOP**, quelle que soit la manipulation — elle demandera la vraie Geneva. Ne pas y
+  repasser de temps.
+- **Sélectionner une sortie AirPlay dans macOS passe par le menu son**, sans équivalent en
+  ligne de commande. Toute comparaison avec un sender de référence demande donc une action
+  physique de Baptiste, sur du matériel réel.
 
 ### Capture réseau : filtrer sur la bonne interface
 
