@@ -7,6 +7,9 @@ public enum AirPlay2SenderState: String, Sendable {
     case idle
     case connecting
     case streaming
+    /// Session perdue, rétablissement en cours (CDC section 8), sans effet sur la capture
+    /// ni sur l'autre sortie.
+    case reconnecting
     case failed
 }
 
@@ -43,12 +46,22 @@ public actor AirPlay2Sender {
     /// 44,1 kHz tourne dans la tâche du sender, en aval du ring buffer (CDC 4.5).
     private static let streamSampleRate = 44_100
     private static let streamChannelCount = 2
+    /// Latence annoncée dans les paquets de synchronisation, en trames à 44,1 kHz (~2 s).
+    /// Identique à celle du sender RAOP : les deux sorties doivent viser la même profondeur
+    /// de restitution pour que l'ancrage commun ait un sens.
+    private static let latencyFrames: UInt32 = 88_200
+    /// Période des annonces de synchro, en paquets audio (~1 s).
+    private static let syncInterval = 126
+    /// Erreurs d'émission consécutives au-delà desquelles la session est réputée perdue.
+    private static let lostSessionErrorThreshold = 20
 
     public private(set) var state: AirPlay2SenderState = .idle
 
     private let device: AirPlay2Device
     private let ring: AudioRingBuffer
     private let captureFormat: AVAudioFormat
+    /// Alignement, réglage manuel et correction de dérive de **cette** sortie (CDC 4.5).
+    public nonisolated let synchronizer: OutputSynchronizer
     private let log = AudioLog.airplay2
 
     private var rtsp: RTSPClient?
@@ -58,12 +71,25 @@ public actor AirPlay2Sender {
     private var streamCipher: ChaChaPoly1305?
 
     private var audioChannel: UDPChannel?
+    /// Canal de contrôle : c'est par lui que passent les annonces de synchronisation NTP,
+    /// que le récepteur attend au même format qu'en RAOP (`TIME_ANNOUNCE_NTP`).
+    private var controlChannel: UDPChannel?
+    /// Canal d'événements, ouvert depuis l'`eventPort` du premier `SETUP` (jalon 4).
+    private var eventChannel: AirPlay2EventChannel?
 
     private let ssrc: UInt32 = UInt32.random(in: .min ... .max)
     private var sequenceNumber = UInt16.random(in: 0...UInt16.max / 2)
     private var rtpTimestamp: UInt32 = UInt32.random(in: 0...UInt32.max / 2)
     private var packetsSent = 0
+    /// Paquets émis depuis le début de la session courante : c'est lui qui décide du bit
+    /// marker et de la première annonce de synchro, qui doivent repartir à zéro à chaque
+    /// reconnexion.
+    private var packetsInSession = 0
     private var streamTask: Task<Void, Never>?
+    private var currentVolume: Float = -20
+    private let reconnects: Bool
+    private var sessionLost = false
+    private var consecutiveSendErrors = 0
 
     /// Échantillons convertis en attente de constituer un paquet complet de 352 trames.
     /// Propre au sender : c'est cette copie que tout le traitement manipule.
@@ -79,13 +105,38 @@ public actor AirPlay2Sender {
     ///   - ring: le ring buffer **propre à cette sortie**, alimenté par la capture. Chaque
     ///     pipeline de sortie a le sien (invariant section 12).
     ///   - captureFormat: format livré par la capture, pour configurer le rééchantillonneur.
-    public init(device: AirPlay2Device, ring: AudioRingBuffer, captureFormat: AVAudioFormat) {
+    ///   - clock: horloge de restitution commune (CDC 4.5). Passer **la même** aux deux
+    ///     senders est ce qui les aligne ; à défaut, chacun s'en fabrique une et se comporte
+    ///     comme au jalon 3.
+    ///   - reconnects: rétablissement automatique de la session après perte réseau.
+    public init(
+        device: AirPlay2Device,
+        ring: AudioRingBuffer,
+        captureFormat: AVAudioFormat,
+        clock: PlaybackClockProtocol? = nil,
+        reconnects: Bool = true
+    ) {
         self.device = device
         self.ring = ring
         self.captureFormat = captureFormat
+        self.reconnects = reconnects
+        let effectiveClock =
+            clock ?? SharedPlaybackClock(captureSampleRate: captureFormat.sampleRate)
+        (effectiveClock as? SharedPlaybackClock)?.startIfNeeded()
+        self.synchronizer = OutputSynchronizer(
+            label: "AirPlay2/\(device.serviceName)",
+            clock: effectiveClock,
+            outputSampleRate: Double(Self.streamSampleRate)
+        )
         self.readScratch = [Float](
             repeating: 0, count: 8_192 * Int(captureFormat.channelCount)
         )
+    }
+
+    /// Décalage manuel de cette sortie, en secondes (CDC 4.5 : fine-tune et filet de
+    /// sécurité). Positif = restituer plus tard. Applicable en cours de diffusion.
+    public func setManualDelay(seconds: TimeInterval) {
+        synchronizer.manualOffsetSeconds = seconds
     }
 
     // MARK: - Session
@@ -94,6 +145,7 @@ public actor AirPlay2Sender {
     public func start(volume: Float = -20) async throws {
         guard state == .idle else { return }
         state = .connecting
+        currentVolume = volume
 
         do {
             try await negotiate(volume: volume)
@@ -106,6 +158,16 @@ public actor AirPlay2Sender {
             throw error
         }
 
+        beginStreaming(firstSession: true)
+        state = .streaming
+        streamTask = Task { [weak self] in
+            await self?.supervise()
+        }
+        log.info("Diffusion AirPlay 2 démarrée vers \(self.device.serviceName, privacy: .public)")
+    }
+
+    /// Prépare le début (ou la reprise) de la diffusion.
+    private func beginStreaming(firstSession: Bool) {
         // La capture tourne pendant la découverte et toute la négociation (pairing SRP
         // compris, plusieurs secondes) : le ring buffer contient un arriéré périmé et a
         // sans doute déjà débordé. Le jeter évite de démarrer avec du retard sur le direct.
@@ -117,23 +179,65 @@ public actor AirPlay2Sender {
             discardStaleAudio()
             log.info("Arriéré de \(staleFrames) trames écarté avant le début de la diffusion")
         }
-        // Photographie du compteur de refus au démarrage réel de la diffusion : tout ce qui
-        // précède est imputable à la fenêtre de négociation, pendant laquelle la capture
-        // tourne sans consommateur.
-        statistics.droppedBeforeStreaming = ring.droppedFrames
-
-        state = .streaming
-        streamTask = Task { [weak self] in
-            await self?.streamLoop()
+        pendingSamples.removeAll(keepingCapacity: true)
+        if firstSession {
+            // Photographie du compteur de refus au démarrage réel de la diffusion : tout ce
+            // qui précède est imputable à la fenêtre de négociation, pendant laquelle la
+            // capture tourne sans consommateur.
+            statistics.droppedBeforeStreaming = ring.droppedFrames
         }
-        log.info("Diffusion AirPlay 2 démarrée vers \(self.device.serviceName, privacy: .public)")
+        packetsInSession = 0
+        consecutiveSendErrors = 0
+        sessionLost = false
+        synchronizer.beginStreaming(atCaptureFrame: ring.totalFramesRead)
+    }
+
+    /// Surveille la diffusion et rétablit la session après une perte réseau (CDC section 8).
+    ///
+    /// Isolée par construction : ni la capture, ni le ring buffer, ni l'autre sortie ne sont
+    /// touchés — cette dernière n'a d'ailleurs aucun moyen de savoir que celle-ci a décroché
+    /// (invariant section 12). La reconnexion refait **tout** le chemin, pair-setup compris :
+    /// les clés de session et le chiffrement du canal ne survivent pas à une coupure.
+    private func supervise() async {
+        while !Task.isCancelled {
+            await streamLoop()
+            guard !Task.isCancelled, sessionLost, reconnects else { break }
+
+            state = .reconnecting
+            statistics.reconnections += 1
+            log.error("Session AirPlay 2 perdue — tentative de rétablissement")
+            await teardown()
+
+            var backoff: Duration = .seconds(1)
+            var reconnected = false
+            while !Task.isCancelled && !reconnected {
+                do {
+                    try await Task.sleep(for: backoff)
+                    try await negotiate(volume: currentVolume)
+                    reconnected = true
+                } catch is CancellationError {
+                    return
+                } catch {
+                    statistics.reconnectionAttempts += 1
+                    log.error(
+                        "Reconnexion AirPlay 2 en échec : \(String(describing: error), privacy: .public)"
+                    )
+                    await teardown()
+                    backoff = min(backoff * 2, .seconds(15))
+                }
+            }
+            guard reconnected, !Task.isCancelled else { break }
+            beginStreaming(firstSession: false)
+            state = .streaming
+            log.info("Session AirPlay 2 rétablie")
+        }
     }
 
     /// Arrête la diffusion et libère la session.
     public func stop() async {
         streamTask?.cancel()
         streamTask = nil
-        if state == .streaming, let session {
+        if state == .streaming || state == .reconnecting, let session {
             await session.teardown()
         }
         await teardown()
@@ -174,6 +278,38 @@ public actor AirPlay2Sender {
         try audio.setDestination(host: device.host, port: endpoints.dataPort)
         audioChannel = audio
 
+        // Canal de contrôle : c'est par lui que partent les annonces de synchronisation NTP
+        // (jalon 4). Le récepteur les attend dans le même format qu'en RAOP — un RTCP
+        // `TIME_ANNOUNCE_NTP`, type 0x54 — puisque le `SETUP` a négocié `timingProtocol=NTP`.
+        // Il y renvoie ses demandes de retransmission, d'où l'écoute.
+        if endpoints.controlPort != 0 {
+            let control = try UDPChannel(label: "airplay2-control")
+            try control.setDestination(host: device.host, port: endpoints.controlPort)
+            installControlObserver(on: control)
+            control.startReceiving()
+            controlChannel = control
+        } else {
+            log.error("Aucun port de contrôle annoncé : les annonces de synchro ne partiront pas")
+        }
+
+        // `audioBufferSize` est rapporté brut, **sans** être converti en latence : son unité
+        // n'est pas établie et le mock y met une taille en octets (voir la documentation du
+        // champ). La latence de référence d'AirPlay 2 reste celle que nous annonçons
+        // nous-mêmes dans les paquets de synchronisation.
+        statistics.receiverBufferSize = endpoints.audioBufferSize
+
+        // Canal d'événements : récupéré dès le jalon 3, exploité seulement ici. Il sert de
+        // signal de vie — le canal audio étant en UDP, rien d'autre ne signale un récepteur
+        // disparu. Son indisponibilité n'empêche pas de diffuser.
+        if endpoints.eventPort != 0 {
+            let events = AirPlay2EventChannel(host: device.host, port: endpoints.eventPort)
+            let connected = await events.connect { [weak self] in
+                Task { await self?.noteEventChannelLost() }
+            }
+            eventChannel = events
+            statistics.eventChannelConnected = connected
+        }
+
         encoder = ALACEncoder()
         // Même rééchantillonneur qu'au jalon 2 : la capture livre du 48 kHz, le flux exige
         // 44,1 kHz. Il tourne dans la tâche du sender, en aval du ring buffer — emplacement
@@ -207,7 +343,7 @@ public actor AirPlay2Sender {
         )
         var nextDeadline = ContinuousClock.now
 
-        while !Task.isCancelled {
+        while !Task.isCancelled && !sessionLost {
             do {
                 try drainRingBuffer()
             } catch {
@@ -219,7 +355,9 @@ public actor AirPlay2Sender {
                 // capture ni l'autre sortie ; la boucle continue et retentera.
             }
 
-            guard pendingSamples.count >= Self.framesPerPacket * Self.streamChannelCount else {
+            // Une correction de dérive peut demander une trame de plus que le paquet.
+            let needed = (Self.framesPerPacket + 1) * Self.streamChannelCount
+            guard pendingSamples.count >= needed else {
                 try? await Task.sleep(for: .milliseconds(2))
                 continue
             }
@@ -236,14 +374,46 @@ public actor AirPlay2Sender {
 
             do {
                 try sendNextPacket()
+                consecutiveSendErrors = 0
                 nextDeadline += packetDuration
             } catch {
                 log.error(
                     "Erreur d'émission AirPlay 2 : \(String(describing: error), privacy: .public)")
                 statistics.errors += 1
+                consecutiveSendErrors += 1
+                if consecutiveSendErrors >= Self.lostSessionErrorThreshold { sessionLost = true }
                 nextDeadline += packetDuration
             }
         }
+    }
+
+    /// La rupture du canal d'événements vaut perte de session.
+    ///
+    /// C'est le seul signal franc dont dispose AirPlay 2 : le flux audio étant en UDP, un
+    /// récepteur disparu ne provoque aucune erreur d'émission — les datagrammes partiraient
+    /// indéfiniment dans le vide.
+    private func noteEventChannelLost() {
+        guard state == .streaming else { return }
+        log.error("Canal d'événements rompu — session réputée perdue")
+        sessionLost = true
+    }
+
+    /// Observe le canal de contrôle : demandes de retransmission du récepteur.
+    ///
+    /// La retransmission elle-même n'est pas implémentée (hors périmètre du jalon) ; les
+    /// demandes sont comptées, car leur apparition est le premier signe d'un flux qui perd
+    /// des paquets — donc d'un problème de cadencement ou de réseau.
+    private nonisolated func installControlObserver(on control: UDPChannel) {
+        control.onReceive = { [weak self] data, _ in
+            guard data.count >= 2,
+                  data[data.startIndex + 1] & 0x7F == RTPPayloadType.retransmitRequest.rawValue
+            else { return }
+            Task { await self?.countRetransmitRequest() }
+        }
+    }
+
+    private func countRetransmitRequest() {
+        statistics.retransmitRequests += 1
     }
 
     /// Vide le ring buffer sans rien émettre, pour repartir du direct.
@@ -293,19 +463,49 @@ public actor AirPlay2Sender {
     /// modifier en transit.
     private func sendNextPacket() throws {
         guard let encoder, let cipher = streamCipher, let audio = audioChannel else { return }
-        let sampleCount = Self.framesPerPacket * Self.streamChannelCount
-        let block = Array(pendingSamples[0..<sampleCount])
-        pendingSamples.removeFirst(sampleCount)
+        let channels = Self.streamChannelCount
+        let sampleCount = Self.framesPerPacket * channels
+
+        // Correction de dérive (CDC 4.5, technique Snapcast), appliquée exactement comme
+        // côté RAOP : le paquet émis fait toujours 352 trames, seule la position du flux se
+        // décale d'une trame. La manipulation porte sur `pendingSamples`, copie propre au
+        // sender ; le tampon partagé n'est jamais touché (invariant section 12).
+        let correction = synchronizer.observe(pipelineDelayOutputFrames: pipelineDelayOutputFrames)
+        var consumedFrames = Self.framesPerPacket
+        let block: [Int16]
+        switch correction {
+        case .none:
+            block = Array(pendingSamples[0..<sampleCount])
+        case .removeFrame:
+            consumedFrames = Self.framesPerPacket + 1
+            block = SampleSplice.removingOneFrame(
+                from: Array(pendingSamples[0..<(sampleCount + channels)]),
+                channelCount: channels
+            )
+            statistics.framesRemoved += 1
+        case .insertFrame:
+            consumedFrames = Self.framesPerPacket - 1
+            block = SampleSplice.insertingOneFrame(
+                into: Array(pendingSamples[0..<(sampleCount - channels)]),
+                channelCount: channels
+            )
+            statistics.framesInserted += 1
+        }
+        // L'ancrage décrit le paquet qu'on émet : le calculer avant d'avancer la position.
+        let anchor = synchronizer.syncAnchorUnixTime(latencyFrames: Self.latencyFrames)
+        pendingSamples.removeFirst(consumedFrames * channels)
+        synchronizer.didConsume(outputFrames: consumedFrames)
 
         let payload = Data(encoder.encode(block, frameCount: Self.framesPerPacket))
 
         // Le bit marker signale le premier paquet du flux : le récepteur y réinitialise
-        // ses tampons.
+        // ses tampons. Compteur de session, pas compteur global : après une reconnexion le
+        // récepteur doit repartir sur des tampons neufs.
         let header = RTPPacketBuilder.audioHeader(
             sequenceNumber: sequenceNumber,
             timestamp: rtpTimestamp,
             ssrc: ssrc,
-            marker: packetsSent == 0
+            marker: packetsInSession == 0
         )
         // Nonce : 4 octets nuls puis le compteur de paquets sur 64 bits little-endian.
         // Il ne se répète jamais tant que la session vit, condition de sûreté de l'AEAD.
@@ -315,16 +515,64 @@ public actor AirPlay2Sender {
         let sealed = try cipher.seal(payload, nonce: nonce, additionalData: header)
         try audio.send(header + sealed)
 
+        if packetsInSession % Self.syncInterval == 0 {
+            sendSync(isFirst: packetsInSession == 0, anchorUnixTime: anchor)
+        }
+
         sequenceNumber &+= 1
         rtpTimestamp &+= UInt32(Self.framesPerPacket)
         packetsSent += 1
+        packetsInSession += 1
         statistics.packetsSent = packetsSent
+    }
+
+    /// Annonce de synchronisation NTP sur le canal de contrôle.
+    ///
+    /// **C'est ici que se fait l'alignement automatique de cette sortie** (CDC 4.5), au même
+    /// endroit et par le même mécanisme qu'en RAOP : l'instant annoncé sort de l'horloge de
+    /// restitution commune, pas de « maintenant ». Deux sorties qui la partagent annoncent le
+    /// même instant pour la même trame captée.
+    ///
+    /// Le format est celui de RAOP (`TIME_ANNOUNCE_NTP`, type 0x54) : le `SETUP` ayant
+    /// négocié `timingProtocol=NTP`, c'est bien ce que le récepteur attend. Les erreurs sont
+    /// journalisées sans être propagées : perdre une annonce dégrade le calage, perdre le
+    /// flux audio l'interromprait.
+    private func sendSync(isFirst: Bool, anchorUnixTime: TimeInterval?) {
+        guard let control = controlChannel else { return }
+        let ntp = anchorUnixTime.map { NTPTime(unixTime: $0) } ?? NTPTime.now()
+        let packet = RTPPacketBuilder.sync(
+            rtpTimestamp: rtpTimestamp,
+            latencyFrames: Self.latencyFrames,
+            ntp: ntp,
+            isFirst: isFirst
+        )
+        do {
+            try control.send(packet)
+            statistics.syncPacketsSent += 1
+            if anchorUnixTime != nil { statistics.anchoredSyncPackets += 1 }
+        } catch {
+            log.error(
+                "Annonce de synchro AirPlay 2 en échec : \(String(describing: error), privacy: .public)"
+            )
+        }
+    }
+
+    /// Délai de pipeline courant, en trames de sortie : audio capté mais pas encore émis.
+    private var pipelineDelayOutputFrames: Double {
+        let ratio = Double(Self.streamSampleRate) / captureFormat.sampleRate
+        let ringFrames = Double(ring.availableFrames) * ratio
+        let pendingFrames = Double(pendingSamples.count / Self.streamChannelCount)
+        return ringFrames + pendingFrames
     }
 
     /// Ferme les ressources réseau. Idempotent : appelable après un échec partiel.
     private func teardown() async {
         audioChannel?.stop()
         audioChannel = nil
+        controlChannel?.stop()
+        controlChannel = nil
+        eventChannel?.close()
+        eventChannel = nil
         await rtsp?.disconnect()
         rtsp = nil
         session = nil
@@ -346,6 +594,22 @@ public struct AirPlay2Statistics: Sendable {
     /// la fenêtre de négociation, pendant laquelle la capture tourne sans consommateur. Seul
     /// l'écart mesuré ensuite signale un vrai sous-dimensionnement du tampon.
     public var droppedBeforeStreaming = 0
+    /// Annonces de synchronisation NTP émises sur le canal de contrôle (jalon 4), dont
+    /// celles portant un ancrage issu de l'horloge commune.
+    public var syncPacketsSent = 0
+    public var anchoredSyncPackets = 0
+    /// Corrections de dérive appliquées (technique Snapcast, CDC 4.5).
+    public var framesInserted = 0
+    public var framesRemoved = 0
+    /// Demandes de retransmission reçues du récepteur : indicateur de pertes de paquets.
+    public var retransmitRequests = 0
+    /// Valeur brute d'`audioBufferSize` annoncée par le récepteur, unité non établie.
+    public var receiverBufferSize = 0
+    /// Canal d'événements effectivement ouvert.
+    public var eventChannelConnected = false
+    /// Sessions rétablies après une perte réseau, et tentatives infructueuses (CDC section 8).
+    public var reconnections = 0
+    public var reconnectionAttempts = 0
 
     public init() {}
 }

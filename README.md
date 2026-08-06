@@ -23,19 +23,21 @@ l'approche reprise ici, avec deux senders AirPlay implémentés en interne.
 | 1 | Capture Core Audio (3 modes + test DRM) | ✅ validé en local |
 | 2 | Sender RAOP (Geneva) | ✅ validé contre mock |
 | 3 | Sender AirPlay 2 (Apple TV/HomePod) | ✅ validé contre mock |
-| 4 | Synchronisation et dérive | ⬜ |
+| 4 | Synchronisation et dérive | ✅ validé contre mock |
 | 5 | Interface SwiftUI | ⬜ |
 
-**Les deux sorties diffusent en parallèle depuis le jalon 3**, ce qui est l'objectif
-fonctionnel du projet :
+**Les deux sorties diffusent en parallèle depuis le jalon 3**, et **synchronisées depuis le
+jalon 4**, ce qui est l'objectif fonctionnel du projet :
 
 ```bash
 ./audiocap --airplay Geneva --airplay2 ApTV 30
 ```
 
-Mesuré sur 15 s contre les émulateurs : 1 884 paquets RAOP et 1 882 paquets AirPlay 2,
-0 erreur de part et d'autre, 0 rupture de numéro de séquence. Une panne sur une sortie
-n'interrompt pas l'autre.
+Mesuré sur **1 h 02 de diffusion continue** contre les émulateurs : 454 621 paquets RAOP et
+466 088 paquets AirPlay 2, **0 erreur de part et d'autre**, écart de synchronisation résiduel
+sous **0,1 ms** (le critère du cahier des charges est de 20 à 30 ms). Une panne sur une sortie
+n'interrompt pas l'autre : le mock RAOP est mort 90 fois pendant cette heure, la sortie
+AirPlay 2 ne s'en est pas aperçue et les 90 reconnexions ont toutes abouti.
 
 > **Important** : « validé » signifie *validé contre les émulateurs logiciels*. Le
 > développement a démarré sans accès au matériel AirPlay réel. La validation contre la vraie
@@ -68,11 +70,12 @@ par agent.
 ```
 Sources/AudioCore/          bibliothèque cœur (capture, senders, DSP) — sans interface
   ├── RAOP/                 sender AirPlay 1 + socle partagé (RTSP, UDP, RTP, resampling)
-  └── AirPlay2/             sender AirPlay 2 (pairing, canal chiffré, RTSP)
-      └── Crypto/           wrappers Swift des primitives C
+  ├── AirPlay2/             sender AirPlay 2 (pairing, canal chiffré, RTSP, événements)
+  │   └── Crypto/           wrappers Swift des primitives C
 Sources/CCrypto/            bibliothèques C vendues (SRP, X25519, Ed25519, ChaCha20-Poly1305)
 Sources/audiocap/           exécutable CLI de validation (dump .wav, diffusion, logs)
-Tests/                      tests unitaires (79)
+Sources/AudioCore/Sync/     horloge commune, mesure de timing, correction de dérive
+Tests/                      tests unitaires (105)
 docs/                       cahier des charges + guide d'installation et de tests
 tools/                      émulateurs et venvs Python (gitignoré)
 ```
@@ -160,6 +163,7 @@ lance le bundle via `open`, ce qui règle le problème.
 ./audiocap --airplay Geneva --airplay2 ApTV 30 # les deux en parallèle
 
 ./audiocap --airplay Geneva --volume -15 30    # volume par sortie (--volume2 pour l'autre)
+./audiocap --airplay Geneva --airplay2 ApTV --delay2 25 30   # décalage manuel, en ms
 ```
 
 `--browse2` affiche les **bits de fonctionnalité** annoncés par le récepteur, dont son mode
@@ -201,6 +205,27 @@ mémoire du projet d'un jalon à l'autre.
   machine de dev (formats, pièges d'API, chemins de config).
 - [`PROGRESS.md`](PROGRESS.md) — journal par jalon.
 
+### Synchroniser les deux sorties
+
+Depuis le jalon 4, les deux sorties partagent une **horloge de restitution commune** : elle
+traduit un numéro de trame de capture en instant de restitution attendu, et chaque sender en
+tire l'ancrage NTP qu'il annonce au récepteur. C'est le récepteur qui cale sa restitution
+dessus — le mécanisme natif d'AirPlay, pas une mesure de trajet réseau. Aucun des deux
+senders ne sait que l'autre existe.
+
+```bash
+./audiocap --airplay Geneva --airplay2 ApTV --delay2 25 30   # fine-tune : +25 ms sur l'AP2
+```
+
+Le décalage manuel n'insère aucun échantillon : il décale l'instant annoncé, donc s'applique
+sans rupture de flux. Il reste un fine-tune et un filet de sécurité, en complément de
+l'alignement automatique — pas à sa place.
+
+La **dérive** entre l'horloge du périphérique audio (qui cadence la capture) et celle de
+l'hôte (qui cadence l'émission) est corrigée par ajout ou suppression d'**une** trame, avec
+un fondu de 32 trames — la technique de Snapcast. Le compte rendu de fin de session affiche
+l'écart résiduel, la latence annoncée par chaque récepteur et le nombre de corrections.
+
 ## Limites connues
 
 - **AirPlay 2 est un protocole propriétaire non documenté.** La logique portée depuis
@@ -210,6 +235,14 @@ mémoire du projet d'un jalon à l'autre.
   expérimental de son propre aveu : un handshake qui passe contre lui est un signal de
   départ, pas une garantie contre le vrai firmware Apple.
 - **Le debug est limité au-delà du handshake** : le trafic AirPlay 2 est chiffré.
+- **Le mock shairport-sync meurt ~25 s après le début de chaque session** (`Bus error`,
+  précédé de `client announced rsaaeskey of 256 bytes, wanted 16`). Comportement apparu au
+  jalon 4 alors que le code RAOP n'a pas bougé depuis le jalon 2 ; à élucider en premier au
+  jalon 5. La reconnexion automatique le rattrape, mais toute validation RAOP de longue
+  durée en est affectée.
+- **La mesure de décalage d'horloge n'a jamais produit de valeur** : shairport-sync envoie ses
+  requêtes de timing à zéro. Le code est en place et testé, il attend un récepteur qui
+  remplisse le champ.
 - Pas de spatialisation 3D, pas de portage vers un autre OS, pas de fonction récepteur :
   l'application est un sender exclusivement (section 3 du CDC).
 

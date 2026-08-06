@@ -51,6 +51,10 @@ var browseOnly = false
 var airplay2Target: String?
 var airplay2Volume: Float = -20
 var browse2Only = false
+/// Réglage manuel du délai par sortie, en millisecondes (CDC 4.5 : fine-tune et filet de
+/// sécurité, en complément de l'alignement automatique, jamais à sa place).
+var airplayDelayMs: Double = 0
+var airplay2DelayMs: Double = 0
 
 var arguments = Array(CommandLine.arguments.dropFirst())
 var index = 0
@@ -104,11 +108,25 @@ while index < arguments.count {
             exit(2)
         }
         airplay2Volume = value
+    case "--delay":
+        index += 1
+        guard index < arguments.count, let value = Double(arguments[index]) else {
+            FileHandle.standardError.write(Data("--delay attend un nombre en ms\n".utf8))
+            exit(2)
+        }
+        airplayDelayMs = value
+    case "--delay2":
+        index += 1
+        guard index < arguments.count, let value = Double(arguments[index]) else {
+            FileHandle.standardError.write(Data("--delay2 attend un nombre en ms\n".utf8))
+            exit(2)
+        }
+        airplay2DelayMs = value
     case "--browse2":
         browse2Only = true
     case "--help", "-h":
         note("""
-            audiocap — capture audio et diffusion AirPlay 1/2 (jalons 1 à 3)
+            audiocap — capture audio et diffusion AirPlay 1/2 synchronisée (jalons 1 à 4)
 
               --mode global|app|input   mode de capture (défaut : global)
               --app <nom|pid>           application à capter (implique --mode app)
@@ -120,6 +138,10 @@ while index < arguments.count {
               --browse2                 liste les récepteurs _airplay._tcp et quitte
               --airplay2 <nom>          diffuse vers ce récepteur AirPlay 2
               --volume2 <dB>            volume AirPlay 2 (défaut : −20)
+              --delay <ms>              décalage manuel de la sortie RAOP, en ms
+                                        (positif = restituer plus tard). Fine-tune en
+                                        complément de l'alignement automatique, pas à sa place
+              --delay2 <ms>             décalage manuel de la sortie AirPlay 2, en ms
               <durée_s> <sortie.wav>    durée et fichier de sortie
 
             Exemples :
@@ -132,6 +154,7 @@ while index < arguments.count {
               ./audiocap --browse2
               ./audiocap --airplay2 ApTV 30
               ./audiocap --airplay Geneva --airplay2 ApTV 30   # deux sorties en parallèle
+              ./audiocap --airplay Geneva --airplay2 ApTV --delay2 25 3700   # validation 1 h
             """)
         exit(0)
     default:
@@ -349,6 +372,35 @@ func report(_ writer: WAVWriter, _ meter: LevelMeter, _ ring: AudioRingBuffer) {
         """)
 }
 
+/// Cadence des lignes d'avancement : une par seconde sur une session courte, une toutes les
+/// 30 s au-delà. Une validation d'une heure produirait sinon 7 200 lignes illisibles.
+func progressInterval(for duration: Double) -> Double { duration > 300 ? 30 : 1 }
+
+/// Résumé d'une sortie du point de vue de la synchronisation (CDC 4.5).
+func describe(_ snapshot: SyncSnapshot) -> String {
+    func ms(_ value: TimeInterval?) -> String {
+        guard let value else { return "—" }
+        return String(format: "%.2f ms", value * 1000)
+    }
+    let timing = snapshot.timing
+    // Un décalage absent doit se lire comme tel, avec sa raison : un récepteur qui n'horodate
+    // pas ses requêtes rend la mesure impossible, ce qui n'est pas un défaut du sender.
+    let offset = timing.offsetSeconds.map { String(format: "%.3f ms", $0 * 1000) }
+        ?? (timing.unstampedCount > 0 ? "non mesurable (requêtes non horodatées)" : "—")
+    let spread = timing.spreadSeconds.map { String(format: "%.3f ms", $0 * 1000) } ?? "—"
+    return """
+          délai manuel        : \(ms(snapshot.manualOffsetSeconds))
+          latence récepteur   : \(snapshot.receiverLatencySeconds > 0 ? ms(snapshot.receiverLatencySeconds) + " (annoncée par lui)" : "non annoncée")
+          délai de pipeline   : \(ms(snapshot.pipelineDelaySeconds))
+          consigne            : \(ms(snapshot.targetDelaySeconds))
+          écart résiduel      : \(ms(snapshot.residualErrorSeconds))
+          latence totale est. : \(ms(snapshot.estimatedTotalLatencySeconds))
+          corrections         : +\(snapshot.framesInserted) / −\(snapshot.framesRemoved) trames
+          canal de timing     : \(timing.sampleCount) requêtes (\(timing.unstampedCount) sans estampille)
+          décalage d'horloge  : \(offset), gigue \(spread)
+        """
+}
+
 /// Diffuse le contenu du ring buffer vers un récepteur RAOP pour la durée demandée.
 ///
 /// Le sender **lit** le ring buffer et ne l'écrit jamais : c'est exactement la frontière
@@ -358,7 +410,9 @@ func streamToRAOP(
     ring: AudioRingBuffer,
     format: AVAudioFormat,
     volume: Float,
-    duration: Double
+    duration: Double,
+    clock: PlaybackClockProtocol? = nil,
+    manualDelaySeconds: TimeInterval = 0
 ) async throws {
     note("Recherche du récepteur RAOP « \(target) »…")
     let device = try await RAOPDiscovery().find(named: target)
@@ -370,37 +424,48 @@ func streamToRAOP(
           chiffrement : \(device.supportsRSAEncryption ? "RSA-AES" : "aucun")
         """)
 
-    let sender = RAOPSender(device: device, ring: ring, captureFormat: format)
+    let sender = RAOPSender(device: device, ring: ring, captureFormat: format, clock: clock)
+    await sender.setManualDelay(seconds: manualDelaySeconds)
     try await sender.start(volume: volume)
     note("Session RAOP établie, diffusion pendant \(duration) s "
-        + "(volume \(volume) dB)…")
+        + "(volume \(volume) dB, délai manuel \(manualDelaySeconds * 1000) ms)…")
 
+    let interval = progressInterval(for: duration)
     let deadline = Date().addingTimeInterval(duration)
     while Date() < deadline {
-        try await Task.sleep(for: .seconds(1))
+        try await Task.sleep(for: .seconds(interval))
         let statistics = await sender.statistics
+        let sync = sender.synchronizer.snapshot()
+        let residual = sync.residualErrorSeconds.map { String(format: "%+.2f ms", $0 * 1000) }
+            ?? "stabilisation"
         note(String(
-            format: "  %5d paquets  %4d sync  %3d timing  %8d trames lues  %d erreurs",
+            format: "  RAOP %6d paquets  %4d sync  %3d timing  %d err  dérive %@  ±%d trames",
             statistics.packetsSent, statistics.syncPacketsSent,
-            statistics.timingResponsesSent, statistics.framesRead, statistics.errors
+            statistics.timingResponsesSent, statistics.errors,
+            residual as NSString, statistics.framesInserted + statistics.framesRemoved
         ))
     }
 
     let final = await sender.statistics
+    let sync = sender.synchronizer.snapshot()
     await sender.stop()
     note("""
 
         Résultat de la diffusion RAOP
           récepteur          : \(device.displayName) (\(device.host):\(device.port))
           paquets audio      : \(final.packetsSent)
-          paquets de synchro : \(final.syncPacketsSent)
+          paquets de synchro : \(final.syncPacketsSent) dont \(final.anchoredSyncPackets) ancrés
           réponses de timing : \(final.timingResponsesSent)
           trames lues        : \(final.framesRead)
           erreurs            : \(final.errors)
           recalages          : \(final.resyncs)
+          reconnexions       : \(final.reconnections) (dont \(final.reconnectionAttempts) tentatives échouées)
           trames refusées    : \(ring.droppedFrames) au total, dont \
         \(final.droppedBeforeStreaming) pendant la négociation
           dont en diffusion  : \(ring.droppedFrames - final.droppedBeforeStreaming)
+
+        Synchronisation RAOP (CDC 4.5)
+        \(describe(sync))
         """)
 }
 
@@ -413,7 +478,9 @@ func streamToAirPlay2(
     ring: AudioRingBuffer,
     format: AVAudioFormat,
     volume: Float,
-    duration: Double
+    duration: Double,
+    clock: PlaybackClockProtocol? = nil,
+    manualDelaySeconds: TimeInterval = 0
 ) async throws {
     note("Recherche du récepteur AirPlay 2 « \(target) »…")
     let device = try await AirPlay2Discovery().find(named: target)
@@ -424,33 +491,48 @@ func streamToAirPlay2(
           pairing     : \(device.supportsTransientPairing ? "transitoire" : "transitoire NON proposé")
         """)
 
-    let sender = AirPlay2Sender(device: device, ring: ring, captureFormat: format)
+    let sender = AirPlay2Sender(device: device, ring: ring, captureFormat: format, clock: clock)
+    await sender.setManualDelay(seconds: manualDelaySeconds)
     try await sender.start(volume: volume)
-    note("Session AirPlay 2 établie, diffusion pendant \(duration) s (volume \(volume) dB)…")
+    note("Session AirPlay 2 établie, diffusion pendant \(duration) s "
+        + "(volume \(volume) dB, délai manuel \(manualDelaySeconds * 1000) ms)…")
 
+    let interval = progressInterval(for: duration)
     let deadline = Date().addingTimeInterval(duration)
     while Date() < deadline {
-        try await Task.sleep(for: .seconds(1))
+        try await Task.sleep(for: .seconds(interval))
         let statistics = await sender.statistics
+        let sync = sender.synchronizer.snapshot()
+        let residual = sync.residualErrorSeconds.map { String(format: "%+.2f ms", $0 * 1000) }
+            ?? "stabilisation"
         note(String(
-            format: "  %5d paquets  %8d trames lues  %d erreurs",
-            statistics.packetsSent, statistics.framesRead, statistics.errors
+            format: "  AP2  %6d paquets  %4d sync  %d err  dérive %@  ±%d trames",
+            statistics.packetsSent, statistics.syncPacketsSent, statistics.errors,
+            residual as NSString, statistics.framesInserted + statistics.framesRemoved
         ))
     }
 
     let final = await sender.statistics
+    let sync = sender.synchronizer.snapshot()
     await sender.stop()
     note("""
 
         Résultat de la diffusion AirPlay 2
-          récepteur        : \(device.serviceName) (\(device.host):\(device.port))
-          paquets audio    : \(final.packetsSent)
-          trames lues      : \(final.framesRead)
-          erreurs          : \(final.errors)
-          recalages        : \(final.resyncs)
-          trames refusées  : \(ring.droppedFrames) au total, dont \
+          récepteur          : \(device.serviceName) (\(device.host):\(device.port))
+          paquets audio      : \(final.packetsSent)
+          paquets de synchro : \(final.syncPacketsSent) dont \(final.anchoredSyncPackets) ancrés
+          canal d'événements : \(final.eventChannelConnected ? "ouvert" : "indisponible")
+          retransmissions    : \(final.retransmitRequests) demandes reçues
+          trames lues        : \(final.framesRead)
+          erreurs            : \(final.errors)
+          recalages          : \(final.resyncs)
+          reconnexions       : \(final.reconnections) (dont \(final.reconnectionAttempts) tentatives échouées)
+          trames refusées    : \(ring.droppedFrames) au total, dont \
         \(final.droppedBeforeStreaming) pendant la négociation
-          dont en diffusion: \(ring.droppedFrames - final.droppedBeforeStreaming)
+          dont en diffusion  : \(ring.droppedFrames - final.droppedBeforeStreaming)
+
+        Synchronisation AirPlay 2 (CDC 4.5)
+        \(describe(sync))
         """)
 }
 
@@ -461,6 +543,11 @@ func streamToAirPlay2(
 /// une sortie n'interrompt jamais la capture ni l'autre sortie ». Un `async let` qui
 /// propagerait l'erreur annulerait l'autre branche ; ici chaque échec est capturé et
 /// journalisé dans sa propre tâche, sans toucher à l'autre.
+///
+/// **Jalon 4** : les deux senders reçoivent ici la **même** horloge de restitution. C'est
+/// elle, et rien d'autre, qui les aligne : chacun en tire l'instant auquel le récepteur doit
+/// restituer la trame captée qu'il est en train d'envoyer, et l'annonce sur son propre canal
+/// de synchronisation. Aucun des deux ne sait que l'autre existe (invariant section 12).
 func streamToBothOutputs(
     raopTarget: String,
     airplay2Target: String,
@@ -469,16 +556,20 @@ func streamToBothOutputs(
     format: AVAudioFormat,
     raopVolume: Float,
     airplay2Volume: Float,
-    duration: Double
+    duration: Double,
+    clock: PlaybackClockProtocol,
+    raopDelaySeconds: TimeInterval,
+    airplay2DelaySeconds: TimeInterval
 ) async {
-    note("Diffusion simultanée vers deux sorties (RAOP + AirPlay 2)\n")
+    note("Diffusion simultanée vers deux sorties (RAOP + AirPlay 2), horloge commune\n")
 
     await withTaskGroup(of: Void.self) { group in
         group.addTask {
             do {
                 try await streamToRAOP(
                     target: raopTarget, ring: raopRing, format: format,
-                    volume: raopVolume, duration: duration
+                    volume: raopVolume, duration: duration,
+                    clock: clock, manualDelaySeconds: raopDelaySeconds
                 )
             } catch {
                 // Panne confinée : l'autre sortie continue.
@@ -490,7 +581,8 @@ func streamToBothOutputs(
             do {
                 try await streamToAirPlay2(
                     target: airplay2Target, ring: airplay2Ring, format: format,
-                    volume: airplay2Volume, duration: duration
+                    volume: airplay2Volume, duration: duration,
+                    clock: clock, manualDelaySeconds: airplay2DelaySeconds
                 )
             } catch {
                 note("SORTIE AIRPLAY 2 EN ÉCHEC : \(error)")
@@ -498,6 +590,56 @@ func streamToBothOutputs(
             }
         }
     }
+}
+
+/// Aiguille vers la ou les sorties AirPlay demandées en ligne de commande.
+///
+/// Rend `false` si aucune n'est demandée — le CLI retombe alors sur le dump `.wav` du
+/// jalon 1. Factorisé parce que les trois modes de capture en ont besoin à l'identique : la
+/// capture ignore ses destinations (invariant section 12), c'est donc bien le même code.
+///
+/// **L'horloge de restitution commune est créée ici**, une seule fois, et passée aux deux
+/// senders. Elle est ancrée sur l'état courant de la capture pour que sa trame n° 0
+/// corresponde bien au premier échantillon capté, et non à l'instant de sa création.
+@MainActor
+func runRequestedOutputs(sink: CaptureSink, format: AVAudioFormat) async throws -> Bool {
+    guard airplayTarget != nil || airplay2Target != nil else { return false }
+
+    let clock = SharedPlaybackClock(captureSampleRate: format.sampleRate)
+    clock.startIfNeeded(framesAlreadyWritten: sink.ring.totalFramesWritten)
+    let raopDelay = airplayDelayMs / 1000
+    let airplay2Delay = airplay2DelayMs / 1000
+
+    if let raopTarget = airplayTarget, let ap2Target = airplay2Target,
+        let secondaryRing = sink.secondaryRing {
+        // Deux sorties : chacune son ring buffer (invariant section 12), la même horloge.
+        await streamToBothOutputs(
+            raopTarget: raopTarget, airplay2Target: ap2Target,
+            raopRing: sink.ring, airplay2Ring: secondaryRing,
+            format: format, raopVolume: airplayVolume,
+            airplay2Volume: airplay2Volume, duration: duration,
+            clock: clock, raopDelaySeconds: raopDelay,
+            airplay2DelaySeconds: airplay2Delay
+        )
+        return true
+    }
+    if let target = airplayTarget {
+        try await streamToRAOP(
+            target: target, ring: sink.ring, format: format,
+            volume: airplayVolume, duration: duration,
+            clock: clock, manualDelaySeconds: raopDelay
+        )
+        return true
+    }
+    if let target = airplay2Target {
+        try await streamToAirPlay2(
+            target: target, ring: sink.ring, format: format,
+            volume: airplay2Volume, duration: duration,
+            clock: clock, manualDelaySeconds: airplay2Delay
+        )
+        return true
+    }
+    return false
 }
 
 // --- Capture ---
@@ -554,37 +696,13 @@ do {
         // Second pipeline armé AVANT le démarrage de la capture, et seulement si deux
         // sorties sont demandées : le callback temps réel n'alloue jamais (invariant
         // section 12), et une sortie unique n'a aucune raison de payer un second tampon.
-        let secondaryRing =
-            (airplayTarget != nil && airplay2Target != nil)
-            ? activeSink.enableSecondaryPipeline() : nil
+        if airplayTarget != nil && airplay2Target != nil {
+            _ = activeSink.enableSecondaryPipeline()
+        }
         sink = activeSink
 
-        // --- Jalons 2 et 3 : diffusion réseau au lieu du dump .wav ---
-        if let raopTarget = airplayTarget, let ap2Target = airplay2Target,
-            let secondaryRing {
-            // Deux sorties : chacune son ring buffer (invariant section 12).
-            await streamToBothOutputs(
-                raopTarget: raopTarget, airplay2Target: ap2Target,
-                raopRing: activeSink.ring, airplay2Ring: secondaryRing,
-                format: format, raopVolume: airplayVolume,
-                airplay2Volume: airplay2Volume, duration: duration
-            )
-            capture.stop()
-            exit(0)
-        }
-        if let target = airplayTarget {
-            try await streamToRAOP(
-                target: target, ring: activeSink.ring, format: format,
-                volume: airplayVolume, duration: duration
-            )
-            capture.stop()
-            exit(0)
-        }
-        if let target = airplay2Target {
-            try await streamToAirPlay2(
-                target: target, ring: activeSink.ring, format: format,
-                volume: airplay2Volume, duration: duration
-            )
+        // --- Jalons 2 à 4 : diffusion réseau au lieu du dump .wav ---
+        if try await runRequestedOutputs(sink: activeSink, format: format) {
             capture.stop()
             exit(0)
         }
@@ -635,35 +753,12 @@ do {
         // Second pipeline armé AVANT le démarrage de la capture, et seulement si deux
         // sorties sont demandées : le callback temps réel n'alloue jamais (invariant
         // section 12), et une sortie unique n'a aucune raison de payer un second tampon.
-        let secondaryRing =
-            (airplayTarget != nil && airplay2Target != nil)
-            ? activeSink.enableSecondaryPipeline() : nil
+        if airplayTarget != nil && airplay2Target != nil {
+            _ = activeSink.enableSecondaryPipeline()
+        }
         sink = activeSink
 
-        if let raopTarget = airplayTarget, let ap2Target = airplay2Target,
-            let secondaryRing {
-            await streamToBothOutputs(
-                raopTarget: raopTarget, airplay2Target: ap2Target,
-                raopRing: activeSink.ring, airplay2Ring: secondaryRing,
-                format: format, raopVolume: airplayVolume,
-                airplay2Volume: airplay2Volume, duration: duration
-            )
-            capture.stop()
-            exit(0)
-        }
-        if let target = airplayTarget {
-            try await streamToRAOP(
-                target: target, ring: activeSink.ring, format: format,
-                volume: airplayVolume, duration: duration
-            )
-            capture.stop()
-            exit(0)
-        }
-        if let target = airplay2Target {
-            try await streamToAirPlay2(
-                target: target, ring: activeSink.ring, format: format,
-                volume: airplay2Volume, duration: duration
-            )
+        if try await runRequestedOutputs(sink: activeSink, format: format) {
             capture.stop()
             exit(0)
         }

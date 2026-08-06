@@ -59,6 +59,9 @@ public enum AudioLog {
     /// Catégorie distincte de `raop` : les deux sorties tournent en parallèle, et les
     /// mélanger rendrait un journal illisible en cas de panne d'une seule des deux.
     public static let airplay2 = Logger(subsystem: subsystem, category: "airplay2")
+    /// Synchronisation et dérive (CDC 4.5, jalon 4) : horloge commune, mesure de latence
+    /// par le canal de timing natif, corrections d'un échantillon.
+    public static let sync = Logger(subsystem: subsystem, category: "sync")
 }
 
 /// Accès typé aux propriétés d'objets Core Audio (`AudioObjectGetPropertyData`).

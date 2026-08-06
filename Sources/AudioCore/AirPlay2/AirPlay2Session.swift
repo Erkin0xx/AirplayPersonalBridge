@@ -72,6 +72,18 @@ public actor AirPlay2Session {
         public let controlPort: UInt16
         /// Identifiant de flux attribué par le récepteur, à rappeler au `TEARDOWN`.
         public let streamID: UInt32
+        /// Valeur brute d'`audioBufferSize` annoncée par le récepteur.
+        ///
+        /// **Ce n'est pas une latence, et l'unité n'est pas établie.** On aurait aimé y voir
+        /// l'équivalent AirPlay 2 de l'en-tête `Audio-Latency` de RAOP — la part de latence
+        /// interne au récepteur, celle qu'aucune mesure de trajet ne révèle (CDC 4.5). Mais
+        /// le mock rend 8 388 608, soit exactement 8 MiB : une **taille de tampon en octets**,
+        /// qui vaudrait 190 secondes si on la lisait en trames. Elle est donc rapportée telle
+        /// quelle, sans conversion, et n'alimente aucun calcul.
+        ///
+        /// À trancher contre un vrai Apple TV ; en attendant, la latence AirPlay 2 réellement
+        /// utilisée est celle que **nous** annonçons dans les paquets de synchronisation.
+        public let audioBufferSize: Int
     }
 
     /// Trames par paquet. 352 comme en RAOP : c'est la valeur qu'attendent les récepteurs
@@ -161,15 +173,21 @@ public actor AirPlay2Session {
         }
         let controlPort = stream["controlPort"] as? Int ?? 0
         let streamID = stream["streamID"] as? Int ?? 0
+        let audioBufferSize = stream["audioBufferSize"] as? Int ?? 0
 
         log.info(
-            "SETUP flux : dataPort=\(dataPort) controlPort=\(controlPort) streamID=\(streamID)")
+            """
+            SETUP flux : dataPort=\(dataPort) controlPort=\(controlPort) streamID=\(streamID) \
+            audioBufferSize=\(audioBufferSize)
+            """
+        )
 
         return Endpoints(
             eventPort: UInt16(truncatingIfNeeded: eventPort),
             dataPort: UInt16(truncatingIfNeeded: dataPort),
             controlPort: UInt16(truncatingIfNeeded: controlPort),
-            streamID: UInt32(truncatingIfNeeded: streamID)
+            streamID: UInt32(truncatingIfNeeded: streamID),
+            audioBufferSize: audioBufferSize
         )
     }
 

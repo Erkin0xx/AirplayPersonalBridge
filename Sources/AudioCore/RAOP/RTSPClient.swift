@@ -111,7 +111,39 @@ public actor RTSPClient {
         log.info("RTSP connecté à \(self.host, privacy: .public):\(self.port) (local \(self.localAddress, privacy: .public))")
     }
 
+    /// Signale la rupture de la connexion de contrôle, une fois celle-ci établie.
+    ///
+    /// ## Pourquoi ce détour
+    ///
+    /// Le flux audio circule en **UDP** : un récepteur qui disparaît ne provoque aucune
+    /// erreur d'émission, les datagrammes partent indéfiniment dans le vide. La connexion
+    /// RTSP, elle, est en TCP et sa rupture est immédiate et sans ambiguïté. C'est donc le
+    /// seul signal franc de perte de session côté RAOP — l'équivalent du canal d'événements
+    /// pour AirPlay 2.
+    ///
+    /// Le premier candidat, l'arrêt des requêtes d'horloge du récepteur, s'est révélé
+    /// **inutilisable comme critère** : shairport-sync interroge densément pendant la
+    /// trentaine de secondes qui suit le `RECORD`, puis se tait pendant que la session se
+    /// porte parfaitement (mesuré au jalon 4). En faire une condition de perte déclenchait une
+    /// reconnexion sur une session saine.
+    ///
+    /// Remplace le gestionnaire d'état posé par ``connect(timeout:)``, dont la continuation
+    /// est déjà reprise à ce stade.
+    public func onConnectionLost(_ handler: @escaping @Sendable () -> Void) {
+        connection?.stateUpdateHandler = { state in
+            switch state {
+            case .failed, .cancelled:
+                handler()
+            default:
+                break
+            }
+        }
+    }
+
     public func disconnect() {
+        // Le gestionnaire doit partir avant l'annulation : sans cela, un arrêt volontaire se
+        // signalerait lui-même comme une perte de session et déclencherait une reconnexion.
+        connection?.stateUpdateHandler = nil
         connection?.cancel()
         connection = nil
         pendingData.removeAll(keepingCapacity: false)

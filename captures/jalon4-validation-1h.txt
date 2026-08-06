@@ -1,0 +1,312 @@
+Mode : global   durée : 3700.0 s   sortie : /capture-global.wav
+Autorisation « sons du système » : authorized
+Format : 48000.0 Hz, 2 canaux, entrelacé
+Diffusion simultanée vers deux sorties (RAOP + AirPlay 2), horloge commune
+
+Recherche du récepteur RAOP « Geneva »…
+Recherche du récepteur AirPlay 2 « ApTV »…
+Récepteur : Geneva-Mock (65D15B6D3AC1@Geneva-Mock)
+  adresse     : 192.168.1.21:5000
+  format cible: 44100 Hz, 16 bits, 2 canaux
+  chiffrement : RSA-AES
+Récepteur : ApTV-HomePod-Mock
+  adresse     : 192.168.1.21:7000
+  features    : 0x1c300405f4200
+  pairing     : transitoire
+Session RAOP établie, diffusion pendant 3700.0 s (volume -20.0 dB, délai manuel 0.0 ms)…
+Session AirPlay 2 établie, diffusion pendant 3700.0 s (volume -20.0 dB, délai manuel 25.0 ms)…
+  RAOP   3631 paquets    30 sync    2 timing  0 err  dérive stabilisation  ±0 trames
+  AP2    3759 paquets    30 sync  0 err  dérive -0.01 ms  ±0 trames
+  RAOP   7263 paquets    60 sync    3 timing  0 err  dérive stabilisation  ±0 trames
+  AP2    7518 paquets    60 sync  0 err  dérive -0.01 ms  ±0 trames
+  RAOP  10897 paquets    90 sync    4 timing  0 err  dérive -0.39 ms  ±0 trames
+  AP2   11276 paquets    90 sync  0 err  dérive -0.03 ms  ±0 trames
+  RAOP  14527 paquets   119 sync    7 timing  0 err  dérive +0.39 ms  ±0 trames
+  AP2   15035 paquets   120 sync  0 err  dérive +0.01 ms  ±0 trames
+  RAOP  18159 paquets   148 sync    9 timing  0 err  dérive -0.15 ms  ±0 trames
+  AP2   18794 paquets   150 sync  0 err  dérive -0.04 ms  ±0 trames
+  RAOP  21789 paquets   177 sync   11 timing  0 err  dérive -0.10 ms  ±0 trames
+  AP2   22552 paquets   179 sync  0 err  dérive +0.03 ms  ±0 trames
+  RAOP  25420 paquets   207 sync   12 timing  0 err  dérive -0.07 ms  ±0 trames
+  AP2   26311 paquets   209 sync  0 err  dérive -0.04 ms  ±0 trames
+  RAOP  28924 paquets   235 sync   15 timing  0 err  dérive stabilisation  ±0 trames
+  AP2   30070 paquets   239 sync  0 err  dérive -0.01 ms  ±0 trames
+  RAOP  32556 paquets   265 sync   16 timing  0 err  dérive stabilisation  ±0 trames
+  AP2   33829 paquets   269 sync  0 err  dérive -0.02 ms  ±0 trames
+  RAOP  36186 paquets   294 sync   17 timing  0 err  dérive stabilisation  ±0 trames
+  AP2   37587 paquets   299 sync  0 err  dérive -0.03 ms  ±0 trames
+  RAOP  39818 paquets   323 sync   18 timing  0 err  dérive -0.23 ms  ±0 trames
+  AP2   41346 paquets   329 sync  0 err  dérive +0.01 ms  ±0 trames
+  RAOP  43449 paquets   352 sync   19 timing  0 err  dérive -0.14 ms  ±0 trames
+  AP2   45106 paquets   358 sync  0 err  dérive -0.04 ms  ±0 trames
+  RAOP  47081 paquets   382 sync   20 timing  0 err  dérive -0.04 ms  ±0 trames
+  AP2   48865 paquets   388 sync  0 err  dérive +0.03 ms  ±0 trames
+  RAOP  50712 paquets   411 sync   21 timing  0 err  dérive -0.06 ms  ±0 trames
+  AP2   52624 paquets   418 sync  0 err  dérive -0.04 ms  ±0 trames
+  RAOP  54214 paquets   439 sync   24 timing  0 err  dérive stabilisation  ±0 trames
+  AP2   56382 paquets   448 sync  0 err  dérive -0.01 ms  ±0 trames
+  RAOP  57846 paquets   469 sync   27 timing  0 err  dérive stabilisation  ±0 trames
+  AP2   60141 paquets   478 sync  0 err  dérive +0.00 ms  ±0 trames
+  RAOP  61478 paquets   498 sync   28 timing  0 err  dérive stabilisation  ±0 trames
+  AP2   63900 paquets   508 sync  0 err  dérive -0.02 ms  ±0 trames
+  RAOP  65108 paquets   527 sync   29 timing  0 err  dérive -0.33 ms  ±0 trames
+  AP2   67658 paquets   537 sync  0 err  dérive +0.01 ms  ±0 trames
+  RAOP  68740 paquets   557 sync   31 timing  0 err  dérive -0.16 ms  ±0 trames
+  AP2   71417 paquets   567 sync  0 err  dérive -0.04 ms  ±0 trames
+  RAOP  72371 paquets   586 sync   33 timing  0 err  dérive -0.10 ms  ±0 trames
+  AP2   75177 paquets   597 sync  0 err  dérive +0.03 ms  ±0 trames
+  RAOP  76001 paquets   616 sync   35 timing  0 err  dérive -0.08 ms  ±0 trames
+  AP2   78934 paquets   627 sync  0 err  dérive -0.02 ms  ±0 trames
+  RAOP  79506 paquets   645 sync   37 timing  0 err  dérive stabilisation  ±0 trames
+  AP2   82694 paquets   657 sync  0 err  dérive +0.00 ms  ±0 trames
+  RAOP  83137 paquets   674 sync   38 timing  0 err  dérive stabilisation  ±0 trames
+  AP2   86453 paquets   687 sync  0 err  dérive -0.01 ms  ±0 trames
+  RAOP  86768 paquets   704 sync   40 timing  0 err  dérive stabilisation  ±0 trames
+  AP2   90212 paquets   716 sync  0 err  dérive -0.03 ms  ±0 trames
+  RAOP  90400 paquets   733 sync   42 timing  0 err  dérive -0.50 ms  ±0 trames
+  AP2   93970 paquets   746 sync  0 err  dérive -0.00 ms  ±0 trames
+  RAOP  94032 paquets   762 sync   44 timing  0 err  dérive -0.27 ms  ±0 trames
+  AP2   97729 paquets   776 sync  0 err  dérive -0.04 ms  ±0 trames
+  RAOP  97671 paquets   792 sync   45 timing  0 err  dérive +1.59 ms  ±1 trames
+  AP2  101488 paquets   806 sync  0 err  dérive +1.56 ms  ±8 trames
+  RAOP 101301 paquets   821 sync   47 timing  0 err  dérive -0.08 ms  ±4 trames
+  AP2  105246 paquets   836 sync  0 err  dérive -0.04 ms  ±10 trames
+  RAOP 104932 paquets   851 sync   49 timing  0 err  dérive -0.05 ms  ±4 trames
+  AP2  109005 paquets   866 sync  0 err  dérive +0.02 ms  ±10 trames
+  RAOP 108435 paquets   880 sync   52 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  112764 paquets   895 sync  0 err  dérive -0.05 ms  ±10 trames
+  RAOP 112065 paquets   909 sync   53 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  116522 paquets   925 sync  0 err  dérive -0.02 ms  ±10 trames
+  RAOP 115697 paquets   939 sync   55 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  120281 paquets   955 sync  0 err  dérive -0.03 ms  ±10 trames
+  RAOP 119329 paquets   969 sync   58 timing  0 err  dérive -0.31 ms  ±4 trames
+  AP2  124039 paquets   985 sync  0 err  dérive -0.02 ms  ±10 trames
+  RAOP 122960 paquets   998 sync   59 timing  0 err  dérive -0.16 ms  ±4 trames
+  AP2  127798 paquets  1015 sync  0 err  dérive +0.00 ms  ±10 trames
+  RAOP 126592 paquets  1028 sync   60 timing  0 err  dérive -0.11 ms  ±4 trames
+  AP2  131558 paquets  1045 sync  0 err  dérive -0.05 ms  ±10 trames
+  RAOP 130221 paquets  1058 sync   61 timing  0 err  dérive -0.08 ms  ±4 trames
+  AP2  135317 paquets  1074 sync  0 err  dérive +0.01 ms  ±10 trames
+  RAOP 133726 paquets  1087 sync   65 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  139075 paquets  1104 sync  0 err  dérive -0.04 ms  ±10 trames
+  RAOP 137358 paquets  1116 sync   66 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  142834 paquets  1134 sync  0 err  dérive -0.02 ms  ±10 trames
+  RAOP 140990 paquets  1145 sync   67 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  146593 paquets  1164 sync  0 err  dérive -0.03 ms  ±10 trames
+  RAOP 144619 paquets  1174 sync   68 timing  0 err  dérive -0.44 ms  ±4 trames
+  AP2  150351 paquets  1194 sync  0 err  dérive -0.04 ms  ±10 trames
+  RAOP 148250 paquets  1204 sync   69 timing  0 err  dérive -0.22 ms  ±4 trames
+  AP2  154110 paquets  1224 sync  0 err  dérive +0.01 ms  ±10 trames
+  RAOP 151882 paquets  1233 sync   70 timing  0 err  dérive -0.08 ms  ±4 trames
+  AP2  157869 paquets  1253 sync  0 err  dérive -0.04 ms  ±10 trames
+  RAOP 155513 paquets  1263 sync   71 timing  0 err  dérive -0.07 ms  ±4 trames
+  AP2  161627 paquets  1283 sync  0 err  dérive +0.02 ms  ±10 trames
+  RAOP 159142 paquets  1293 sync   72 timing  0 err  dérive -0.02 ms  ±4 trames
+  AP2  165386 paquets  1313 sync  0 err  dérive -0.04 ms  ±10 trames
+  RAOP 162646 paquets  1322 sync   76 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  169146 paquets  1343 sync  0 err  dérive +0.01 ms  ±10 trames
+  RAOP 166277 paquets  1351 sync   77 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  172903 paquets  1373 sync  0 err  dérive -0.03 ms  ±10 trames
+  RAOP 169908 paquets  1381 sync   78 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  176663 paquets  1403 sync  0 err  dérive -0.04 ms  ±10 trames
+  RAOP 173539 paquets  1410 sync   79 timing  0 err  dérive -0.28 ms  ±4 trames
+  AP2  180422 paquets  1432 sync  0 err  dérive -0.00 ms  ±10 trames
+  RAOP 177170 paquets  1439 sync   80 timing  0 err  dérive -0.14 ms  ±4 trames
+  AP2  184181 paquets  1462 sync  0 err  dérive -0.05 ms  ±10 trames
+  RAOP 180801 paquets  1469 sync   81 timing  0 err  dérive -0.07 ms  ±4 trames
+  AP2  187939 paquets  1492 sync  0 err  dérive +0.02 ms  ±10 trames
+  RAOP 184432 paquets  1498 sync   82 timing  0 err  dérive -0.08 ms  ±4 trames
+  AP2  191698 paquets  1522 sync  0 err  dérive -0.05 ms  ±10 trames
+  RAOP 187936 paquets  1527 sync   86 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  195457 paquets  1552 sync  0 err  dérive -0.02 ms  ±10 trames
+  RAOP 191568 paquets  1556 sync   88 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  199216 paquets  1582 sync  0 err  dérive -0.03 ms  ±10 trames
+  RAOP 195200 paquets  1586 sync   89 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  202974 paquets  1611 sync  0 err  dérive -0.04 ms  ±10 trames
+  RAOP 198830 paquets  1616 sync   92 timing  0 err  dérive -0.41 ms  ±4 trames
+  AP2  206733 paquets  1641 sync  0 err  dérive +0.01 ms  ±10 trames
+  RAOP 202463 paquets  1645 sync   93 timing  0 err  dérive -0.19 ms  ±4 trames
+  AP2  210491 paquets  1671 sync  0 err  dérive -0.05 ms  ±10 trames
+  RAOP 206095 paquets  1674 sync   95 timing  0 err  dérive -0.10 ms  ±4 trames
+  AP2  214251 paquets  1701 sync  0 err  dérive +0.03 ms  ±10 trames
+  RAOP 209726 paquets  1703 sync   96 timing  0 err  dérive -0.05 ms  ±4 trames
+  AP2  218010 paquets  1731 sync  0 err  dérive -0.05 ms  ±10 trames
+  RAOP 213303 paquets  1732 sync   97 timing  0 err  dérive +0.01 ms  ±4 trames
+  AP2  221769 paquets  1761 sync  0 err  dérive -0.02 ms  ±10 trames
+  RAOP 216861 paquets  1761 sync  100 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  225527 paquets  1790 sync  0 err  dérive +0.04 ms  ±10 trames
+  RAOP 220492 paquets  1790 sync  101 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  229286 paquets  1820 sync  0 err  dérive -0.04 ms  ±10 trames
+  RAOP 224125 paquets  1820 sync  102 timing  0 err  dérive -0.46 ms  ±4 trames
+  AP2  233045 paquets  1850 sync  0 err  dérive -0.01 ms  ±10 trames
+  RAOP 227755 paquets  1849 sync  103 timing  0 err  dérive -0.18 ms  ±4 trames
+  AP2  236803 paquets  1880 sync  0 err  dérive -0.05 ms  ±10 trames
+  RAOP 231387 paquets  1878 sync  104 timing  0 err  dérive -0.12 ms  ±4 trames
+  AP2  240562 paquets  1910 sync  0 err  dérive +0.03 ms  ±10 trames
+  RAOP 235018 paquets  1907 sync  105 timing  0 err  dérive -0.06 ms  ±4 trames
+  AP2  244321 paquets  1940 sync  0 err  dérive -0.03 ms  ±10 trames
+  RAOP 238610 paquets  1937 sync  106 timing  0 err  dérive -0.01 ms  ±4 trames
+  AP2  248081 paquets  1969 sync  0 err  dérive -0.01 ms  ±10 trames
+  RAOP 242154 paquets  1966 sync  109 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  251839 paquets  1999 sync  0 err  dérive -0.03 ms  ±10 trames
+  RAOP 245786 paquets  1995 sync  111 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  255598 paquets  2029 sync  0 err  dérive -0.04 ms  ±10 trames
+  RAOP 249417 paquets  2024 sync  112 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  259357 paquets  2059 sync  0 err  dérive -0.01 ms  ±10 trames
+  RAOP 253048 paquets  2054 sync  115 timing  0 err  dérive -0.24 ms  ±4 trames
+  AP2  263116 paquets  2089 sync  0 err  dérive -0.05 ms  ±10 trames
+  RAOP 256680 paquets  2083 sync  116 timing  0 err  dérive -0.18 ms  ±4 trames
+  AP2  266875 paquets  2119 sync  0 err  dérive +0.03 ms  ±10 trames
+  RAOP 260311 paquets  2113 sync  117 timing  0 err  dérive -0.07 ms  ±4 trames
+  AP2  270633 paquets  2148 sync  0 err  dérive -0.05 ms  ±10 trames
+  RAOP 263942 paquets  2142 sync  118 timing  0 err  dérive +0.02 ms  ±4 trames
+  AP2  274392 paquets  2178 sync  0 err  dérive +0.01 ms  ±10 trames
+  RAOP 267446 paquets  2171 sync  121 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  278151 paquets  2208 sync  0 err  dérive -0.04 ms  ±10 trames
+  RAOP 271077 paquets  2201 sync  122 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  281911 paquets  2238 sync  0 err  dérive -0.01 ms  ±10 trames
+  RAOP 274707 paquets  2231 sync  123 timing  0 err  dérive stabilisation  ±4 trames
+  AP2  285670 paquets  2268 sync  0 err  dérive -0.01 ms  ±10 trames
+  RAOP 278340 paquets  2261 sync  124 timing  0 err  dérive -0.29 ms  ±4 trames
+  AP2  289429 paquets  2298 sync  0 err  dérive -0.05 ms  ±10 trames
+  RAOP 281971 paquets  2290 sync  126 timing  0 err  dérive -0.20 ms  ±4 trames
+  AP2  293188 paquets  2327 sync  0 err  dérive +0.03 ms  ±10 trames
+  RAOP 285603 paquets  2319 sync  128 timing  0 err  dérive -0.11 ms  ±4 trames
+  AP2  296946 paquets  2357 sync  0 err  dérive -0.05 ms  ±10 trames
+  RAOP 289234 paquets  2348 sync  139 timing  0 err  dérive -0.05 ms  ±4 trames
+  AP2  300705 paquets  2387 sync  0 err  dérive -0.01 ms  ±10 trames
+  RAOP 292993 paquets  2378 sync  149 timing  0 err  dérive -0.02 ms  ±4 trames
+  AP2  304463 paquets  2417 sync  0 err  dérive -0.04 ms  ±10 trames
+  RAOP 296751 paquets  2408 sync  159 timing  0 err  dérive -0.03 ms  ±4 trames
+  AP2  308222 paquets  2447 sync  0 err  dérive -0.03 ms  ±10 trames
+  RAOP 300510 paquets  2438 sync  169 timing  0 err  dérive +0.02 ms  ±4 trames
+  AP2  311981 paquets  2477 sync  0 err  dérive -0.00 ms  ±10 trames
+  RAOP 304270 paquets  2468 sync  179 timing  0 err  dérive -0.04 ms  ±4 trames
+  AP2  315740 paquets  2506 sync  0 err  dérive -0.04 ms  ±10 trames
+  RAOP 308029 paquets  2498 sync  189 timing  0 err  dérive +0.02 ms  ±4 trames
+  AP2  319498 paquets  2536 sync  0 err  dérive +0.02 ms  ±10 trames
+  RAOP 311787 paquets  2527 sync  199 timing  0 err  dérive -0.04 ms  ±4 trames
+  AP2  323257 paquets  2566 sync  0 err  dérive -0.04 ms  ±10 trames
+  RAOP 315546 paquets  2557 sync  209 timing  0 err  dérive -0.01 ms  ±4 trames
+  AP2  327016 paquets  2596 sync  0 err  dérive -0.01 ms  ±10 trames
+  RAOP 319305 paquets  2587 sync  219 timing  0 err  dérive -0.02 ms  ±4 trames
+  AP2  330775 paquets  2626 sync  0 err  dérive -0.03 ms  ±10 trames
+  RAOP 323063 paquets  2617 sync  229 timing  0 err  dérive +0.46 ms  ±10 trames
+  AP2  334534 paquets  2656 sync  0 err  dérive +0.40 ms  ±14 trames
+  RAOP 326822 paquets  2647 sync  239 timing  0 err  dérive +0.14 ms  ±10 trames
+  AP2  338292 paquets  2685 sync  0 err  dérive +0.10 ms  ±14 trames
+  RAOP 330581 paquets  2676 sync  249 timing  0 err  dérive -0.10 ms  ±10 trames
+  AP2  342051 paquets  2715 sync  0 err  dérive -0.05 ms  ±14 trames
+  RAOP 334339 paquets  2706 sync  259 timing  0 err  dérive -0.03 ms  ±10 trames
+  AP2  345810 paquets  2745 sync  0 err  dérive -0.01 ms  ±14 trames
+  RAOP 338098 paquets  2736 sync  269 timing  0 err  dérive -0.10 ms  ±10 trames
+  AP2  349569 paquets  2775 sync  0 err  dérive -0.07 ms  ±14 trames
+  RAOP 341858 paquets  2766 sync  279 timing  0 err  dérive -0.06 ms  ±10 trames
+  AP2  353327 paquets  2805 sync  0 err  dérive -0.01 ms  ±14 trames
+  RAOP 345617 paquets  2796 sync  289 timing  0 err  dérive -0.09 ms  ±10 trames
+  AP2  357086 paquets  2835 sync  0 err  dérive -0.04 ms  ±14 trames
+  RAOP 349376 paquets  2826 sync  299 timing  0 err  dérive -0.10 ms  ±10 trames
+  AP2  360844 paquets  2864 sync  0 err  dérive -0.05 ms  ±14 trames
+  RAOP 353135 paquets  2855 sync  309 timing  0 err  dérive -0.06 ms  ±10 trames
+  AP2  364603 paquets  2894 sync  0 err  dérive -0.04 ms  ±14 trames
+  RAOP 356893 paquets  2885 sync  319 timing  0 err  dérive -0.11 ms  ±10 trames
+  AP2  368362 paquets  2924 sync  0 err  dérive -0.06 ms  ±14 trames
+  RAOP 360652 paquets  2915 sync  329 timing  0 err  dérive -0.03 ms  ±10 trames
+  AP2  372120 paquets  2954 sync  0 err  dérive -0.01 ms  ±14 trames
+  RAOP 364410 paquets  2945 sync  339 timing  0 err  dérive -0.11 ms  ±10 trames
+  AP2  375879 paquets  2984 sync  0 err  dérive -0.06 ms  ±14 trames
+  RAOP 368169 paquets  2975 sync  349 timing  0 err  dérive -0.07 ms  ±10 trames
+  AP2  379638 paquets  3013 sync  0 err  dérive -0.01 ms  ±14 trames
+  RAOP 371927 paquets  3005 sync  358 timing  0 err  dérive -0.09 ms  ±10 trames
+  AP2  383397 paquets  3043 sync  0 err  dérive -0.06 ms  ±14 trames
+  RAOP 375686 paquets  3034 sync  368 timing  0 err  dérive -0.09 ms  ±10 trames
+  AP2  387155 paquets  3073 sync  0 err  dérive -0.04 ms  ±14 trames
+  RAOP 379445 paquets  3064 sync  378 timing  0 err  dérive -0.04 ms  ±10 trames
+  AP2  390914 paquets  3103 sync  0 err  dérive -0.02 ms  ±14 trames
+  RAOP 383203 paquets  3094 sync  388 timing  0 err  dérive -0.09 ms  ±10 trames
+  AP2  394673 paquets  3133 sync  0 err  dérive -0.05 ms  ±14 trames
+  RAOP 386962 paquets  3124 sync  398 timing  0 err  dérive -0.03 ms  ±10 trames
+  AP2  398432 paquets  3163 sync  0 err  dérive -0.01 ms  ±14 trames
+  RAOP 390722 paquets  3154 sync  408 timing  0 err  dérive -0.10 ms  ±10 trames
+  AP2  402190 paquets  3192 sync  0 err  dérive -0.07 ms  ±14 trames
+  RAOP 394481 paquets  3184 sync  418 timing  0 err  dérive -0.07 ms  ±10 trames
+  AP2  405949 paquets  3222 sync  0 err  dérive -0.01 ms  ±14 trames
+  RAOP 398239 paquets  3213 sync  428 timing  0 err  dérive -0.09 ms  ±10 trames
+  AP2  409708 paquets  3252 sync  0 err  dérive -0.06 ms  ±14 trames
+  RAOP 401998 paquets  3243 sync  438 timing  0 err  dérive -0.09 ms  ±10 trames
+  AP2  413466 paquets  3282 sync  0 err  dérive -0.04 ms  ±14 trames
+  RAOP 405757 paquets  3273 sync  448 timing  0 err  dérive -0.07 ms  ±10 trames
+  AP2  417225 paquets  3312 sync  0 err  dérive -0.05 ms  ±14 trames
+  RAOP 409515 paquets  3303 sync  458 timing  0 err  dérive -0.11 ms  ±10 trames
+  AP2  420983 paquets  3342 sync  0 err  dérive -0.06 ms  ±14 trames
+  RAOP 413274 paquets  3333 sync  468 timing  0 err  dérive -0.04 ms  ±10 trames
+  AP2  424742 paquets  3371 sync  0 err  dérive -0.00 ms  ±14 trames
+  RAOP 417032 paquets  3363 sync  478 timing  0 err  dérive -0.11 ms  ±10 trames
+  AP2  428500 paquets  3401 sync  0 err  dérive -0.07 ms  ±14 trames
+  RAOP 420791 paquets  3392 sync  488 timing  0 err  dérive -0.06 ms  ±10 trames
+  AP2  432259 paquets  3431 sync  0 err  dérive +0.00 ms  ±14 trames
+  RAOP 424550 paquets  3422 sync  498 timing  0 err  dérive -0.09 ms  ±10 trames
+  AP2  436018 paquets  3461 sync  0 err  dérive -0.06 ms  ±14 trames
+  RAOP 428308 paquets  3452 sync  508 timing  0 err  dérive -0.09 ms  ±10 trames
+  AP2  439777 paquets  3491 sync  0 err  dérive -0.04 ms  ±14 trames
+  RAOP 432067 paquets  3482 sync  518 timing  0 err  dérive -0.07 ms  ±10 trames
+  AP2  443536 paquets  3521 sync  0 err  dérive -0.05 ms  ±14 trames
+  RAOP 435827 paquets  3512 sync  528 timing  0 err  dérive -0.10 ms  ±10 trames
+  AP2  447295 paquets  3550 sync  0 err  dérive -0.06 ms  ±14 trames
+  RAOP 439586 paquets  3542 sync  538 timing  0 err  dérive -0.04 ms  ±10 trames
+  AP2  451053 paquets  3580 sync  0 err  dérive -0.02 ms  ±14 trames
+  RAOP 443344 paquets  3571 sync  548 timing  0 err  dérive -0.10 ms  ±10 trames
+  AP2  454812 paquets  3610 sync  0 err  dérive -0.06 ms  ±14 trames
+  RAOP 447103 paquets  3601 sync  558 timing  0 err  dérive -0.03 ms  ±10 trames
+  AP2  458571 paquets  3640 sync  0 err  dérive +0.02 ms  ±14 trames
+  RAOP 450862 paquets  3631 sync  568 timing  0 err  dérive -0.08 ms  ±10 trames
+  AP2  462330 paquets  3670 sync  0 err  dérive -0.06 ms  ±14 trames
+  RAOP 454621 paquets  3661 sync  578 timing  0 err  dérive -0.09 ms  ±10 trames
+  AP2  466088 paquets  3700 sync  0 err  dérive +0.00 ms  ±14 trames
+
+Résultat de la diffusion AirPlay 2
+  récepteur          : ApTV-HomePod-Mock (192.168.1.21:7000)
+  paquets audio      : 466088
+  paquets de synchro : 3700 dont 3700 ancrés
+  canal d'événements : ouvert
+  retransmissions    : 0 demandes reçues
+  trames lues        : 178572800
+  erreurs            : 0
+  recalages          : 0
+  reconnexions       : 0 (dont 0 tentatives échouées)
+  trames refusées    : 252032 au total, dont 252032 pendant la négociation
+  dont en diffusion  : 0
+
+Synchronisation AirPlay 2 (CDC 4.5)
+  délai manuel        : 25.00 ms
+  latence récepteur   : non annoncée
+  délai de pipeline   : 13.37 ms
+  consigne            : 13.37 ms
+  écart résiduel      : 0.00 ms
+  latence totale est. : 38.37 ms
+  corrections         : +0 / −14 trames
+  canal de timing     : 0 requêtes (0 sans estampille)
+  décalage d'horloge  : —, gigue —
+
+Résultat de la diffusion RAOP
+  récepteur          : Geneva-Mock (192.168.1.21:5000)
+  paquets audio      : 454621
+  paquets de synchro : 3661 dont 3661 ancrés
+  réponses de timing : 578
+  trames lues        : 174197760
+  erreurs            : 0
+  recalages          : 0
+  reconnexions       : 90 (dont 0 tentatives échouées)
+  trames refusées    : 322560 au total, dont 209024 pendant la négociation
+  dont en diffusion  : 113536
+
+Synchronisation RAOP (CDC 4.5)
+  délai manuel        : 0.00 ms
+  latence récepteur   : 250.00 ms (annoncée par lui)
+  délai de pipeline   : 13.28 ms
+  consigne            : 13.37 ms
+  écart résiduel      : -0.09 ms
+  latence totale est. : 263.28 ms
+  corrections         : +0 / −10 trames
+  canal de timing     : 578 requêtes (578 sans estampille)
+  décalage d'horloge  : non mesurable (requêtes non horodatées), gigue —

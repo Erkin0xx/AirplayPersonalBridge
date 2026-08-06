@@ -12,33 +12,34 @@ Distinguer explicitement "validé contre mock" et "validé contre matériel rée
 
 | | |
 |---|---|
-| **Dernier jalon terminé** | Jalon 3 — sender AirPlay 2 (validé **contre mock** le 2026-08-06) |
-| **Prochain jalon** | **Jalon 4 — synchronisation et dérive** (prompt : CDC section 14) |
+| **Dernier jalon terminé** | Jalon 4 — synchronisation et dérive (validé **contre mock** le 2026-08-07) |
+| **Prochain jalon** | **Jalon 5 — intégration et interface SwiftUI** (prompt : CDC section 14) |
 | **Dépôt** | `github.com/Erkin0xx/AirplayPersonalBridge`, branche `main` |
 
-**Les deux sorties diffusent désormais en parallèle**, ce qui est l'objectif fonctionnel du
-projet (CDC section 2) :
+**Les deux sorties diffusent en parallèle et synchronisées**, ce qui est l'objectif
+fonctionnel du projet (CDC section 2) :
 
 ```
-./audiocap --airplay Geneva --airplay2 ApTV 15
+./audiocap --airplay Geneva --airplay2 ApTV 30
+./audiocap --airplay Geneva --airplay2 ApTV --delay2 25 30   # fine-tune manuel, en ms
 ```
 
-Mesuré sur 15 s : 1 884 paquets RAOP et 1 882 paquets AirPlay 2, **0 erreur de part et
-d'autre**. Une panne sur une sortie n'affecte pas l'autre (vérifié en visant un récepteur
-RAOP inexistant : la sortie AirPlay 2 a continué sans dégradation).
-
-**Acquis réutilisables au jalon 4** : `RTSPClient`, `UDPChannel`, `RTPTransport` (horloge
-NTP), `RAOPResampler` sont partagés par les deux senders. Le canal de timing RAOP répond
-déjà aux requêtes du récepteur, et le `SETUP` AirPlay 2 négocie `timingProtocol=NTP` : ce
-sont les deux points d'ancrage dont le jalon 4 aura besoin (CDC 4.5).
+**Le mécanisme d'alignement, en une phrase** : une horloge de restitution commune traduit un
+numéro de trame de capture en instant de restitution attendu ; chaque sender en tire
+l'ancrage NTP qu'il annonce dans ses paquets de synchronisation, et c'est le récepteur qui
+cale sa restitution dessus. Deux sorties ancrées sur la même horloge restituent la même trame
+captée au même instant, sans jamais se connaître. Voir l'ADR `004` du vault : ce n'est **pas**
+la lecture littérale du CDC (« mesurer la latence puis compenser »), qui s'est révélée
+impraticable, mais ce qui en réalise l'intention.
 
 **Le patron, respecté par les deux senders** : un acteur qui **lit** son propre ring buffer
 et ne l'écrit jamais, ne connaît pas la source de capture, ignore l'autre sender, et confine
-ses pannes (invariant section 12).
+ses pannes (invariant section 12). La correction de dérive n'a rien changé à cela : elle
+opère sur la copie propre au sender, en aval du ring buffer.
 
-**Avant de coder quoi que ce soit au jalon 4** : lire `CLAUDE.md` en entier (invariants
-section 12 + pièges vérifiés, dont **les trois pièges RAOP** du jalon 2 et **le piège SRP**
-du jalon 3), puis le détail des jalons 2 et 3 ci-dessous.
+**Avant de coder quoi que ce soit au jalon 5** : lire `CLAUDE.md` en entier (invariants
+section 12 + pièges vérifiés, dont **les trois pièges RAOP** du jalon 2, **le piège SRP** du
+jalon 3, et **les faits de synchronisation** du jalon 4), puis le détail des jalons ci-dessous.
 
 ---
 
@@ -436,14 +437,13 @@ meilleur usage de la première session avec la vraie Geneva.
 - **Le mock quitte après chaque session.** Il est stable au repos (vérifié) et ne quitte
   qu'après un `TEARDOWN`. Sans conséquence pour la validation, mais il faut relancer
   `./run-mocks.sh` entre deux essais.
-- **Aucune reconnexion automatique.** Le CDC (section 8) l'exige : une perte réseau
-  temporaire doit être rattrapée sans redémarrer l'application. Le sender remonte
-  aujourd'hui l'erreur et continue sa boucle, mais ne rétablit pas la session RTSP. À traiter
-  au jalon 4 ou 5.
+- ~~**Aucune reconnexion automatique.**~~ — **faite au jalon 4**, et validée 90 fois de
+  suite sur une heure (voir le jalon 4).
 - **Le volume n'est réglé qu'au démarrage.** `setVolume` existe et fonctionne en cours de
   session, mais le CLI ne l'expose pas dynamiquement — l'interface du jalon 5 le fera.
-- **La taille du ring buffer (1 s) est confirmée suffisante en régime établi** : 0 trame
-  refusée pendant la diffusion sur toutes les sessions mesurées. Les refus observés
+- ~~**La taille du ring buffer (1 s) reste à éprouver sur une longue durée**~~ — **clos au
+  jalon 4** : 0 trame refusée en régime établi sur 1 h 02 et 466 088 paquets. Confirmé aussi
+  en régime établi sur toutes les sessions courtes : Les refus observés
   (~209 000) sont intégralement imputables à la fenêtre de négociation, pendant laquelle la
   capture tourne sans consommateur ; le CLI les distingue désormais explicitement.
 
@@ -613,14 +613,13 @@ exploitable.
   nécessaires sont déjà implémentées et testées contre les vecteurs des RFC** — c'est une
   extension, pas une réécriture. `./audiocap --browse2` affiche les bits annoncés, ce qui
   permettra de trancher en une commande le jour J.
-- **Le canal d'événements n'est pas exploité.** Le `SETUP` récupère bien son `eventPort`,
-  mais rien ne s'y connecte : le récepteur y pousse des changements d'état (volume distant,
-  arrêt côté récepteur). Sans objet pour diffuser, à traiter au jalon 5 si l'interface doit
-  refléter l'état réel des sorties.
-- **Aucune synchronisation entre les deux sorties.** Elles diffusent en parallèle mais
-  chacune à son propre rythme : c'est précisément l'objet du jalon 4.
-- **Aucune reconnexion automatique**, comme au jalon 2 (CDC section 8). Une panne est
-  confinée et journalisée, mais la session n'est pas rétablie. À traiter au jalon 4 ou 5.
+- **Le canal d'événements est branché au jalon 4**, mais seule la **connexion** est validée :
+  le mock n'émet jamais rien, donc le décodage des événements (volume distant, arrêt côté
+  récepteur) reste à faire au jalon 5.
+- ~~**Aucune synchronisation entre les deux sorties.**~~ — **faite au jalon 4** : horloge de
+  restitution commune, ancrage NTP, correction de dérive.
+- ~~**Aucune reconnexion automatique**, comme au jalon 2 (CDC section 8).~~ — **faite au
+  jalon 4** : pair-setup SRP refait à chaque rétablissement.
 - **L'enregistrement mDNS du mock devient périmé après quelques minutes** : `dns-sd` continue
   de l'annoncer alors que `NWBrowser` ne le voit plus, et il faut relancer
   `./run-mocks.sh start`. Comportement du mock, sans rapport avec le code du projet — mais
@@ -630,3 +629,295 @@ exploitable.
   réception des paquets fonctionnent, seul le décodage local du mock échoue. Conséquence
   pratique : **la validation de ce jalon porte sur le protocole et le flux réseau, pas sur
   une écoute**. Défaut du mock hérité du pin `av` relâché au jalon -1.
+
+---
+
+## Jalon 4 : synchronisation et dérive — TERMINÉ (validé CONTRE MOCK)
+
+Date : 2026-08-07
+
+> **Portée de la validation.** Contre les deux émulateurs, sur la machine locale. **Aucun
+> matériel réel n'a été sollicité.** La réserve est ici d'une nature particulière et il faut
+> la lire attentivement : l'alignement automatique repose sur le fait que **les récepteurs
+> honorent l'ancrage temporel annoncé**. Les mocks acceptent et journalisent les annonces de
+> synchronisation, mais **aucun des deux ne restitue réellement de l'audio** (shairport-sync
+> tourne sur un backend `ao` sans écoute, le puits du mock AirPlay 2 est cassé depuis le
+> jalon -1). **Le mécanisme est donc validé de bout en bout côté protocole, et pas du tout
+> côté restitution.** C'est la limite principale du jalon.
+
+### Ce qui a été construit
+
+Quatre briques, dans `Sources/AudioCore/Sync/` :
+
+| Brique | Rôle |
+|---|---|
+| `SharedPlaybackClock` | horloge de restitution commune : trame de capture → instant de restitution attendu |
+| `TimingEstimator` | mesure du décalage d'horloge depuis le canal de timing natif |
+| `SampleSplice` | ajout/suppression d'**une** trame avec fondu (technique Snapcast) |
+| `OutputSynchronizer` | par sortie : ancrage, réglage manuel, pilotage de la dérive |
+
+Plus, dans les senders : le canal de contrôle AirPlay 2 (annonces de synchro), le canal
+d'événements AirPlay 2, et la reconnexion automatique des deux sorties.
+
+### L'alignement automatique : pourquoi « ancrer » et non « mesurer puis compenser »
+
+C'est l'écart le plus important au prompt du jalon, et il est documenté en ADR
+(`decisions/004-alignement-par-horloge-de-restitution-commune.md`).
+
+Le prompt demande « l'alignement automatique par sortie via le canal de timing natif AirPlay
+(NTP/RTP), pas via un ping réseau ». La lecture littérale — mesurer la latence de chaque
+sortie, retarder la plus rapide — s'est révélée impraticable pour deux raisons **découvertes
+en implémentant**, pas anticipées :
+
+1. **La latence d'une sortie n'est pas observable depuis le sender.** Il voit sa propre file
+   d'attente et la profondeur de tampon *annoncée* par le récepteur ; il ne voit ni le DAC,
+   ni le haut-parleur, ni l'instant réel de restitution. Seule la calibration acoustique le
+   donnerait — l'évolution que le CDC 4.5 range explicitement en conditionnel.
+2. **shairport-sync n'horodate pas ses requêtes de timing** (voir ci-dessous) : il n'y a
+   littéralement rien à mesurer contre ce récepteur.
+
+Ce qui est fait à la place : les deux senders partagent une horloge de restitution qui
+traduit un **numéro de trame de capture** en **instant de restitution attendu**. Chaque
+sender en tire l'instant NTP annoncé dans ses paquets de synchronisation, et c'est le
+récepteur qui aligne. L'alignement est alors **exact par construction** — à l'arrondi de
+conversion 48 → 44,1 kHz près, soit 23 µs — au lieu d'être « aussi bon que la mesure ».
+
+Le canal de timing garde deux rôles réels : il fournit la **latence annoncée** par le
+récepteur (250 ms côté shairport-sync — précisément ce qu'un ping ne verrait pas), et il
+fournirait le décalage d'horloge si le récepteur horodatait ses requêtes.
+
+Le **réglage manuel** (`--delay`, `--delay2`, en ms) agit sur ce même ancrage, en s'y
+ajoutant : il reste bien le fine-tune et le filet de sécurité voulus par le CDC 4.5, et non
+un mécanisme parallèle. Il ne manipule aucun échantillon — le récepteur redate sa restitution
+à l'annonce suivante, sans rupture de flux.
+
+### La correction de dérive (technique Snapcast, CDC 4.5)
+
+Capture et émission ne partagent pas la même horloge : le périphérique audio cadence la
+première, `ContinuousClock` (horloge hôte) la seconde. Quelques dizaines de ppm suffisent à
+déplacer le calage de plus de 100 ms en une heure.
+
+La grandeur pilotée est le **délai de pipeline** : l'audio capté mais pas encore émis
+(arriéré du ring buffer + échantillons convertis en attente). Le maintenir constant, c'est
+maintenir constant le décalage capture → restitution, donc l'alignement.
+
+Trois choix d'implémentation qui méritent d'être notés :
+
+- **La consigne est observée, jamais décrétée.** Elle est la moyenne mesurée pendant 10 s de
+  stabilisation. Une constante arbitraire aurait obligé la correction à rattraper d'emblée un
+  écart qui n'est pas de la dérive.
+- **La mesure est lissée** (constante de temps 5 s). L'instantané est bruité de plusieurs
+  millisecondes : le ring buffer se remplit par blocs de ~256 trames et se vide par paquets
+  de 352. C'est la tendance qui est de la dérive, pas l'oscillation.
+- **Bande morte de 64 trames** (1,45 ms), un vingtième du seuil de perception de 20 à 30 ms
+  du CDC section 8. En deçà, corriger reviendrait à s'agiter dans le bruit de mesure.
+
+Le fondu est **obligatoire et exigé par le CDC 4.5**. `SampleSplice` ne coupe pas puis
+recolle : il fait glisser progressivement le flux d'une trame sur 32 trames (0,73 ms), en
+interpolant entre le flux d'origine et le flux décalé. La correction reste donc exacte — une
+trame pleine, pas 0,98 — et sans discontinuité. Un test le vérifie sur une sinusoïde proche
+de Nyquist : le raccord brut dépasse d'au moins 50 % le pas maximal naturel du signal, le
+raccord fondu reste dans son voisinage immédiat.
+
+**Le resampling continu (`libsamplerate`/`soxr`) n'a pas été engagé**, conformément à
+l'escalade conditionnelle du CDC 4.5 : la dérive mesurée reste deux ordres de grandeur sous
+le seuil, et l'escalade n'est justifiée que par un problème audible constaté à l'écoute
+réelle — qui n'est pas possible ici.
+
+### Les deux défauts trouvés, et comment
+
+**1. Un décalage d'horloge annoncé à 3 995 042 823 685 ms.**
+La première mesure sortait ce nombre. Le réflexe — chercher un facteur 1000 — était le
+mauvais : la valeur vaut exactement l'heure Unix courante **plus l'époque NTP**, c'est-à-dire
+`local − 0`. Vérifié en capture (`tshark -i lo0`) : **shairport-sync 5.2.1 envoie ses
+requêtes de timing intégralement à zéro**, alors que le protocole prévoit son instant
+d'émission aux octets 24–31. La mesure passive est donc impossible contre ce récepteur.
+→ Corrigé : `TimingEstimator` rejette les estampilles invraisemblables, les compte à part, et
+le compte rendu affiche « non mesurable (requêtes non horodatées) ». **Une mesure impossible
+doit rester absente, jamais devenir un nombre.** Le champ existe dans le protocole : à
+revérifier contre la vraie Geneva, où la mesure fonctionnerait sans changer une ligne.
+
+**2. Un détecteur de panne qui aurait cassé les sessions saines.**
+Comme signal de vie j'avais retenu l'arrêt des requêtes d'horloge du récepteur : natif au
+protocole, et bien meilleur qu'un ping puisqu'il ne se tait que si le récepteur cesse
+vraiment de tenir sa session. Sauf que **shairport-sync interroge densément pendant ~35 s
+après le `RECORD`, puis se tait complètement** alors que tout va bien : 14 requêtes en tout
+sur une session de 60 s, aucune après la 35ᵉ seconde. Mon délai de garde de 30 s aurait
+déclenché une reconnexion sur chaque session au bout d'une minute.
+Ce qui l'a révélé n'est pas un test mais **un compteur lu dans une mesure faite pour autre
+chose** — le nombre de réponses de timing qui plafonnait dans le compte rendu.
+→ Corrigé : le silence du canal de timing n'est plus qu'un avertissement journalisé (120 s).
+Le critère franc de perte est la **rupture de la connexion RTSP** côté RAOP et celle du
+**canal d'événements** côté AirPlay 2. Le flux audio étant en UDP, il ne signale jamais rien.
+
+### Le canal d'événements AirPlay 2 (resté ouvert au jalon 3)
+
+Branché. Le premier `SETUP` rendait déjà un `eventPort` que rien n'utilisait ; une connexion
+TCP y est maintenant ouverte et surveillée.
+
+**Ce qui est validé, et ce qui ne l'est pas** : la connexion est établie et sa rupture est
+détectée — c'est ce qui en fait le signal de perte de session pour AirPlay 2. **Le décodage
+des événements n'est pas validé**, faute de récepteur qui en émette : `EventGeneric` du mock
+accepte la connexion, lit les octets et les jette, sans jamais rien pousser. Sur du matériel
+réel le contenu est chiffré avec les clés du pairing et encadré comme le canal de contrôle.
+Les octets reçus sont donc journalisés et comptés, **jamais interprétés** : les interpréter à
+l'aveugle aurait été de la fiction.
+
+### La reconnexion automatique (CDC section 8, restée ouverte aux jalons 2 et 3)
+
+Implémentée pour les deux sorties. Sur perte de session : `TEARDOWN` des ressources réseau,
+repli exponentiel (1 s → 15 s), renégociation complète — pair-setup SRP compris côté
+AirPlay 2, les clés de session ne survivant pas à une coupure — puis reprise avec l'arriéré
+écarté. Le compteur de paquets *de session* repart à zéro, ce qui repose le bit marker et
+fait réinitialiser ses tampons au récepteur.
+
+**Isolée par construction** : ni la capture, ni le ring buffer, ni l'autre sortie ne sont
+touchés, et cette dernière n'a aucun moyen de savoir que sa voisine a décroché.
+
+**Vérifiée en conditions réelles, involontairement** : le mock shairport-sync est mort en
+cours de session pendant une première tentative de validation longue. Le journal montre la
+séquence complète — `Connexion RTSP rompue — session réputée perdue`, puis les tentatives de
+rétablissement espacées par le repli exponentiel — pendant que **la sortie AirPlay 2
+continuait sans la moindre dégradation**. C'est la meilleure preuve d'isolement du jalon, et
+elle n'a pas été mise en scène.
+
+**Limite assumée** : la reconnexion couvre la perte d'une session **établie**, pas un
+récepteur absent au démarrage. Un échec de la première négociation remonte à l'appelant, qui
+le signale et laisse l'autre sortie continuer.
+
+### Respect de l'invariant section 12
+
+- **La correction de dérive ne touche jamais le buffer partagé.** `SampleSplice` est composé
+  de **fonctions pures** : elles prennent un tableau et en rendent un autre. Ce tableau est
+  `pendingSamples`, la copie propre au sender extraite en aval du ring buffer. C'est ce qui
+  rend l'invariant vérifiable par simple lecture plutôt que par convention — et un test
+  vérifie explicitement que l'entrée n'est pas modifiée.
+- **Une panne sur une sortie n'affecte pas l'autre** : vérifié en conditions réelles (voir
+  ci-dessus), et par construction — deux tâches indépendantes, deux ring buffers, deux
+  synchroniseurs.
+- **L'horloge commune n'est pas un canal entre les senders.** C'est une graduation : elle ne
+  connaît aucune sortie et n'en distingue aucune. Deux senders qui la consultent ne
+  s'échangent rien et continuent de s'ignorer. Le ring buffer expose pour cela
+  `totalFramesWritten`, identique dans les deux pipelines puisqu'un unique producteur les
+  alimente — aucune sortie ne lit l'état de sa voisine.
+- **Rien n'a été ajouté au callback temps réel.** Toute la synchronisation vit dans les
+  tâches des senders, en aval du ring buffer (emplacement autorisé par le CDC 4.5).
+- Les verrous employés (`NSLock` dans l'horloge et les synchroniseurs) sont hors du chemin
+  temps réel, que l'invariant section 12 est seul à protéger.
+
+### Tests
+
+**105 tests unitaires, tous verts** (79 du jalon 3 + 26 ajoutés). Les 79 précédents sont
+restés verts en permanence.
+
+Les ajouts ne visent pas la couverture mais des affirmations précises : que deux sorties sur
+la même horloge s'accordent sur l'instant de restitution d'une même trame captée à moins
+d'une trame près ; que l'ancrage retranche exactement la latence annoncée ; que le réglage
+manuel décale l'ancrage d'exactement sa valeur ; que le sens de la correction suit le sens de
+la dérive ; que le fondu réduit franchement la discontinuité par rapport à une coupure
+brute ; et — régression du défaut n° 1 — qu'une requête non horodatée ne produit pas un
+décalage absurde.
+
+### La validation d'une heure (critère CDC section 8)
+
+`./audiocap --airplay Geneva --airplay2 ApTV --delay2 25 3700`, soit **1 h 02 de diffusion
+continue vers les deux sorties simultanément**. Trace complète :
+`captures/jalon4-validation-1h.txt`.
+
+| Mesure | RAOP (Geneva-Mock) | AirPlay 2 (ApTV-Mock) |
+|---|---|---|
+| Paquets audio émis | **454 621** | **466 088** |
+| Trames lues du ring buffer | 174 197 760 | 178 572 800 |
+| Erreurs d'émission | **0** | **0** |
+| Recalages de cadence | **0** | **0** |
+| Annonces de synchro ancrées | **3 661 / 3 661** | **3 700 / 3 700** |
+| Écart résiduel de dérive | **−0,09 ms** | **0,00 ms** |
+| Corrections d'un échantillon | −10 trames | −14 trames |
+| Délai de pipeline / consigne | 13,28 / 13,37 ms | 13,37 / 13,37 ms |
+| Latence annoncée par le récepteur | 250 ms | non annoncée |
+| Délai manuel appliqué | 0 ms | **25 ms** |
+| Reconnexions | **90 (0 échec)** | 0 |
+| Trames refusées **en diffusion** | 113 536 | **0** |
+
+**Ce que ces chiffres établissent :**
+
+- **L'écart résiduel reste sous 0,1 ms sur une heure**, là où le CDC section 8 vise un
+  décalage résiduel sous 20 à 30 ms. Deux ordres de grandeur de marge.
+- **La correction de dérive agit, et très peu** : 10 et 14 trames retirées en une heure, soit
+  ~0,3 ms de rattrapage total. C'est la mesure directe de l'écart entre l'horloge du
+  périphérique audio et celle de l'hôte sur cette machine — minuscule, mais non nulle, et
+  elle se serait accumulée sans correction. **Aucune trame ajoutée** : les deux sorties
+  dérivaient dans le même sens, ce qui est cohérent avec une seule horloge d'émission
+  commune (`ContinuousClock`) face à une seule horloge de capture.
+- **Toutes les annonces de synchro portent un ancrage issu de l'horloge commune**, sans
+  exception, y compris après chacune des 90 reconnexions.
+- **La taille du ring buffer (1 s) tient la durée** — question ouverte depuis le jalon 1.
+  Côté AirPlay 2 : **0 trame refusée en régime établi sur 466 088 paquets**. Les 252 032
+  refus sont intégralement imputables à la fenêtre de négociation. Le point est clos.
+  Les 113 536 refus côté RAOP correspondent aux 90 fenêtres de reconnexion, pendant
+  lesquelles le sender ne draine pas — ~1 260 trames par fenêtre, soit ~26 ms : cohérent.
+
+**La reconnexion automatique validée 90 fois de suite (CDC section 8).** Ce n'est pas une
+mise en scène : le mock shairport-sync meurt reproductiblement ~25 s après le début de chaque
+session (voir « ce qui reste ouvert »). Un script auxiliaire l'a relancé à chaque mort
+pendant l'heure ; **les 90 morts ont donné 90 reconnexions réussies et 0 tentative
+infructueuse**, la correspondance étant exacte. La sortie AirPlay 2, elle, n'a pas bronché :
+0 reconnexion, 0 erreur, 0 trame refusée. **C'est la démonstration la plus nette de
+l'invariant section 12 obtenue à ce jour** — une sortie qui décroche 90 fois en une heure
+sans que l'autre s'en aperçoive.
+
+**Réserve importante** : cette heure valide la tenue du flux, la stabilité des tampons et la
+convergence de la boucle de dérive. Elle **ne valide aucune écoute** : aucun des deux mocks
+ne restitue réellement d'audio. « Sans désynchronisation audible » reste donc à vérifier
+contre le matériel réel.
+
+### Décisions prises, hors CDC
+
+- **Ancrer plutôt que mesurer puis compenser** — le point important du jalon, tracé en ADR
+  `004`. Voir ci-dessus.
+- **Le décalage manuel agit sur l'ancrage, pas sur les échantillons.** Retarder une sortie de
+  30 ms ne consiste pas à insérer 1 323 trames mais à annoncer un instant de restitution
+  décalé de 30 ms. C'est instantané, sans rupture de flux, et réversible. La marge est
+  couverte par les 2 s de délai de restitution commun.
+- **Consigne de dérive observée sur 10 s plutôt que constante**, lissage à 5 s, bande morte à
+  64 trames. Justifications ci-dessus ; ces trois valeurs sont les seuls réglages du jalon.
+- **`audioBufferSize` d'AirPlay 2 rapporté brut, sans être converti en latence.** Le mock rend
+  8 388 608 — exactement 8 MiB, donc une taille en octets, qui vaudrait 190 secondes lue en
+  trames. Le champ est donc affiché tel quel et n'alimente aucun calcul, plutôt que de
+  publier une latence fausse. Même principe que pour le décalage d'horloge non mesurable.
+- **Pas de sondage actif du canal de timing.** Envoyer nos propres requêtes donnerait un vrai
+  aller-retour NTP, mais RAOP ne prévoit pas que le sender interroge, et le délai de trajet
+  sur un réseau local est de toute façon deux ordres de grandeur sous le seuil visé.
+- **Pas de `libsamplerate`/`soxr`.** L'escalade du CDC 4.5 est conditionnée à un problème
+  audible constaté à l'écoute réelle. La dérive mesurée reste sous 0,1 ms, et aucune écoute
+  n'est possible contre les mocks : engager cette dépendance maintenant serait spéculatif.
+
+### Ce qui reste ouvert
+
+- **Rien n'a été validé contre le matériel réel**, et la réserve est ici plus forte
+  qu'ailleurs : **aucun des deux mocks ne restitue réellement de l'audio**. L'alignement
+  repose sur le fait que les récepteurs honorent l'ancrage annoncé — c'est le pari du
+  protocole, celui que fait aussi OwnTone, mais il n'a été vérifié par aucune écoute.
+- **shairport-sync rejette notre SDP et meurt ~25 s après le début de chaque session** —
+  `client announced rsaaeskey of 256 bytes, wanted 16`, puis décodage de travers, puis arrêt
+  du process. **Comportement nouveau : le jalon 2 tenait des sessions de 40 s sans incident**,
+  et `RAOPCrypto.swift`/`ALACEncoder.swift` sont pourtant inchangés depuis (`git diff` vide).
+  Écarté au passage : le backend audio (`pipe` vers `/dev/null` ne change rien, config remise
+  à `ao`) et une build AirPlay 2 (`shairport-sync -V` n'en mentionne pas).
+  **C'est le point à élucider en premier au jalon 5** ; pistes classées par coût dans
+  `CLAUDE.md`, la moins chère étant d'essayer le base64 bourré pour `rsaaeskey`/`aesiv`.
+- **La validation d'une heure a exigé un script auxiliaire qui relance shairport-sync** à
+  chaque mort. Sans lui, la sortie RAOP se serait arrêtée après ~25 s. Le flux RAOP mesuré
+  est donc bien continu du point de vue du sender, mais il est fait de 91 sessions
+  successives, pas d'une seule. La sortie AirPlay 2, elle, a tenu l'heure d'une traite.
+- **La reconnexion ne couvre pas un récepteur absent au démarrage.** Un échec de la première
+  négociation remonte à l'appelant. Discutable : au jalon 5, l'interface aura probablement
+  intérêt à réessayer en tâche de fond plutôt qu'à déclarer la sortie perdue.
+- **Le décodage des événements AirPlay 2 n'est pas validé**, faute de récepteur qui en émette.
+  Seule la connexion l'est. À reprendre au jalon 5, où l'interface devra refléter le volume
+  changé depuis le récepteur.
+- **La mesure de décalage d'horloge n'a jamais pu produire une valeur**, shairport-sync
+  n'horodatant pas ses requêtes. Le code est là et testé ; il attend un récepteur qui remplit
+  le champ. À revérifier contre la vraie Geneva.
+- **Chaque `./make-cli-bundle.sh` coûte une autorisation TCC à redonner à la main.** Trois
+  fois pendant ce jalon. Pour une session de validation longue, geler le code d'abord.

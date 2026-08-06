@@ -411,6 +411,134 @@ désormais un délai court de 2 s.
   paquets fonctionnent, seul le décodage local échoue. Conséquence : la validation du jalon 3
   porte sur le protocole et le flux réseau, **pas sur une écoute**.
 
+## Synchronisation et dérive — faits vérifiés au jalon 4
+
+### shairport-sync n'horodate pas ses requêtes de timing
+
+**Le fait le plus coûteux du jalon.** Le canal de timing RAOP prévoit que le récepteur place
+son instant d'émission aux octets 24–31 de sa requête. shairport-sync 5.2.1 envoie ses
+requêtes **intégralement à zéro** :
+
+```
+6002 → 51534   80d2000700000000 0000000000000000 0000000000000000 0000000000000000
+51534 → 6002   80d30007000000000000000000000000 ee1f84870c0d9000 ee1f84870c0e0800
+```
+
+(capture `tshark -i lo0`, le second paquet étant notre réponse, correctement horodatée.)
+
+Conséquence : **la mesure passive du décalage d'horloge est impossible contre ce récepteur**.
+Une soustraction naïve donne `local − 0` = l'époque NTP, soit un décalage annoncé de
+**3 995 042 823 685 ms**. `TimingEstimator` rejette donc les estampilles invraisemblables
+(> 1 h d'écart) et les compte à part, plutôt que de publier un nombre absurde.
+
+À revérifier contre la vraie Geneva : le champ existe dans le protocole, rien ne dit qu'un
+récepteur matériel le laisse à zéro. Si elle l'horodate, la mesure fonctionne sans changer
+une ligne.
+
+### Le flux de requêtes d'horloge n'est PAS un signal de vie utilisable
+
+shairport-sync interroge densément pendant ~35 s après le `RECORD`, puis **se tait
+complètement** alors que la session se porte parfaitement (14 requêtes en tout sur une
+session de 60 s, aucune après la 35ᵉ seconde). Un délai de garde de 30 s sur ce silence
+déclenchait une reconnexion sur une session saine.
+
+**Le signal franc de perte de session est la rupture de la connexion RTSP** (TCP), côté RAOP,
+et celle du **canal d'événements** côté AirPlay 2. Le flux audio étant en UDP, il ne signale
+jamais rien : les datagrammes partent indéfiniment dans le vide vers un récepteur disparu.
+
+### Le canal de contrôle AirPlay 2 accepte le paquet de synchro RAOP
+
+Avec `timingProtocol=NTP`, le récepteur attend sur son `controlPort` un RTCP
+`TIME_ANNOUNCE_NTP` — type 0x54, exactement le paquet que `RTPPacketBuilder.sync` produit
+déjà pour RAOP (`ap2/connections/control.py`, `RTCP.PktType.TIME_ANNOUNCE_NTP = 212 = 0xd4`
+une fois le bit marker posé ; il accepte `plen` 20 comme 32). **Aucun format spécifique à
+écrire** : les deux sorties s'ancrent avec le même paquet.
+
+### Le canal d'événements du mock AirPlay 2 ne fait que lire
+
+`EventGeneric` (`ap2/connections/event.py`) accepte une connexion TCP, lit les octets et les
+jette ; il n'émet **jamais rien**. Son port « ntp » est la même classe, donc un simple
+listener TCP, pas un serveur NTP. Conséquence : **la connexion au canal d'événements est
+validée, le décodage des événements ne l'est pas** — faute de récepteur qui en émette. Sur
+du matériel réel le contenu est chiffré avec les clés du pairing et encadré comme le canal
+de contrôle.
+
+### La dérive réellement observée est minuscule, mais elle existe
+
+Capture et émission ne partagent pas la même horloge : le périphérique audio cadence la
+première, `ContinuousClock` (horloge hôte) la seconde. C'est ce que la correction Snapcast
+rattrape. Sur cette machine, l'écart mesuré reste sous **0,1 ms** en régime établi, très en
+deçà du seuil de perception de 20 à 30 ms — mais la boucle de correction reste indispensable
+tant qu'un autre matériel n'a pas été mesuré.
+
+**La consigne de délai de pipeline est observée, jamais décrétée** : elle est la moyenne
+mesurée pendant 10 s de stabilisation. Une constante arbitraire obligerait la correction à
+rattraper d'emblée un écart qui n'est pas de la dérive.
+
+### Un rebuild du bundle coûte une autorisation TCC, à chaque fois
+
+Rappel du jalon 1, revérifié à la dure ici : `./make-cli-bundle.sh` re-signe en ad-hoc, le
+CDHash change, et `tccd` journalise `Failed to match existing code requirement`. La bonne
+séquence pour une session de validation longue est donc :
+
+1. **geler le code**, `swift test` vert ;
+2. `./make-cli-bundle.sh` **une seule fois** ;
+3. `tccutil reset AudioCapture fr.baptiste.airplaymultioutput.audiocap` (purge l'entrée
+   périmée, sans quoi le dialogue ne réapparaît pas) ;
+4. lancer, faire autoriser le dialogue, **puis ne plus recompiler**.
+
+### shairport-sync rejette notre SDP et meurt en session — **à élucider au jalon 5**
+
+Constaté au jalon 4, **pas** au jalon 2 où la même session tenait 40 s sans incident. Le mock
+journalise à chaque `ANNOUNCE` :
+
+```
+warning: client announced rsaaeskey of 256 bytes, wanted 16
+warning: Can not process the following ANNOUNCE message:
+```
+
+puis décode de travers (`FIXME: unhandled prediction type`,
+`FIXME: Not enough space in the output buffer for audio frame - E2`) et **le process meurt
+au bout d'environ 25 s de diffusion**, reproductiblement, sur un **`Bus error: 10`** — un
+`SIGBUS`, donc un accès mémoire invalide, pas un arrêt propre. C'est cohérent avec un
+décodeur parti sur des paramètres par défaut faute d'avoir pu lire le SDP.
+
+Ce qu'on sait :
+
+- **Ce n'est pas une régression du jalon 4** : `RAOPCrypto.swift` et `ALACEncoder.swift` sont
+  inchangés depuis le jalon 2 (`git diff` vide). Les octets sur le fil sont exactement ceux
+  qui ont été validés alors, y compris l'aller-retour bit à bit du test unitaire.
+- **Ce n'est pas le backend audio** : basculer `ao` → `pipe` vers `/dev/null` ne change rien.
+  Le puits audio a donc été remis à `ao` (config d'origine du jalon -1).
+- **Ce n'est pas la build** : `shairport-sync -V` ne mentionne pas AirPlay 2, c'est bien une
+  build AirPlay 1 seule. L'hypothèse « il attend une clé FairPlay de 16 octets parce qu'il
+  est en mode AirPlay 2 » est donc écartée.
+- Le message signifie que **le déchiffrement RSA de `rsaaeskey` a échoué chez lui** : il
+  garde les 256 octets bruts au lieu des 16 attendus, part avec des paramètres de décodeur
+  par défaut, et finit par déborder.
+
+Pistes non explorées, par ordre de coût : essayer le base64 **bourré** pour `rsaaeskey` et
+`aesiv` (le jalon 2 avait retenu le non bourré, mais rien ne prouve que ce soit ce que
+shairport 5.2.1 attend) ; comparer octet pour octet avec l'`ANNOUNCE` d'un sender de
+référence ; vérifier si le padding OAEP attendu a changé.
+
+**Conséquence pratique** : toute validation RAOP de longue durée est bloquée tant que ce
+point n'est pas élucidé. La sortie AirPlay 2, elle, est stable.
+
+### Toujours vérifier que le mock ACCEPTE avant de lancer une session longue
+
+`./run-mocks.sh check` ne teste que l'annonce Bonjour. shairport-sync peut être annoncé alors
+que son port 5000 refuse encore les connexions (il quitte après chaque `TEARDOWN` et met
+quelques secondes à revenir), d'où un `Connection reset by peer` qui tue la sortie RAOP pour
+toute la session. Vérifier réellement le port :
+
+```bash
+nc -z 192.168.1.21 5000 && nc -z 192.168.1.21 7000
+```
+
+**La reconnexion automatique ne rattrape pas ce cas** : elle couvre la perte d'une session
+**établie**, pas un récepteur absent au démarrage, où `start()` remonte l'erreur à l'appelant.
+
 ### Capture réseau d'une session AirPlay 2
 
 Mock et sender sur la même machine : capturer sur **`lo0` et `en0` à la fois**, sans filtre

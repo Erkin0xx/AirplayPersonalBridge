@@ -57,7 +57,25 @@ public struct NTPTime {
         self.fraction = fraction
     }
 
+    /// Reconstruit un instant à partir des 8 octets gros-boutistes du protocole.
+    ///
+    /// Sert à lire les estampilles que **le récepteur** émet sur le canal de timing : c'est
+    /// la matière première de la mesure de décalage d'horloge du jalon 4 (CDC 4.5).
+    /// Renvoie `nil` si la tranche ne fait pas exactement 8 octets, plutôt que d'inventer
+    /// une valeur à partir d'un paquet tronqué.
+    public init?(bigEndianBytes bytes: [UInt8]) {
+        guard bytes.count == 8 else { return nil }
+        let seconds = bytes[0..<4].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+        let fraction = bytes[4..<8].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+        self.init(seconds: seconds, fraction: fraction)
+    }
+
     public static func now() -> NTPTime { NTPTime(unixTime: Date().timeIntervalSince1970) }
+
+    /// Instant correspondant, en temps Unix.
+    public var unixTime: TimeInterval {
+        Double(seconds) + Double(fraction) / 4_294_967_296 - Self.epochOffset
+    }
 
     public var bigEndianBytes: [UInt8] {
         withUnsafeBytes(of: seconds.bigEndian, Array.init)

@@ -62,6 +62,22 @@ public final class AudioRingBuffer: @unchecked Sendable {
         return write - read
     }
 
+    /// Nombre total de trames **écrites** depuis la création du tampon, sans repli modulo.
+    ///
+    /// C'est l'horloge de capture exprimée en trames : le producteur étant unique et commun
+    /// à tous les pipelines de sortie, deux ring buffers alimentés par la même capture
+    /// portent la **même** valeur au même instant. C'est ce qui donne aux deux sorties une
+    /// référence temporelle commune sans qu'aucune ne connaisse l'existence de l'autre
+    /// (invariant section 12) : elles lisent toutes deux la même graduation, pas l'état de
+    /// leur voisine.
+    public var totalFramesWritten: Int { writeIndex.load(ordering: .acquiring) }
+
+    /// Nombre total de trames **lues** depuis la création, sans repli modulo.
+    ///
+    /// Permet au consommateur de situer l'échantillon qu'il vient d'extraire sur l'horloge
+    /// de capture ci-dessus, donc de dater ce qu'il émet.
+    public var totalFramesRead: Int { readIndex.load(ordering: .relaxed) }
+
     /// Trames refusées depuis la création, faute de place.
     ///
     /// Compte chaque trame que `write` n'a pas pu accepter, y compris celles qu'un
