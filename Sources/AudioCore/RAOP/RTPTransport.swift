@@ -90,6 +90,29 @@ public enum RTPPacketBuilder {
         return bytes
     }
 
+    /// En-tête RTP audio seul, sans charge utile.
+    ///
+    /// Exposé pour AirPlay 2 : son chiffrement de flux (ChaCha20-Poly1305) prend l'en-tête
+    /// comme **données associées**, ce qui suppose de l'obtenir avant de chiffrer la charge
+    /// utile — impossible avec ``audio(sequenceNumber:timestamp:ssrc:marker:payload:)``, qui
+    /// assemble les deux d'un coup. RAOP continue d'utiliser cette dernière, inchangée.
+    public static func audioHeader(
+        sequenceNumber: UInt16,
+        timestamp: UInt32,
+        ssrc: UInt32,
+        marker: Bool
+    ) -> Data {
+        Data(
+            header(
+                payloadType: .audioData,
+                sequenceNumber: sequenceNumber,
+                timestamp: timestamp,
+                ssrc: ssrc,
+                marker: marker
+            )
+        )
+    }
+
     /// Paquet audio : en-tête RTP suivi de la charge utile ALAC chiffrée.
     public static func audio(
         sequenceNumber: UInt16,

@@ -55,6 +55,10 @@ public enum AudioLog {
     public static let cli = Logger(subsystem: subsystem, category: "cli")
     /// Sender AirPlay 1 / RAOP (CDC 4.3) : découverte, RTSP, RTP.
     public static let raop = Logger(subsystem: subsystem, category: "raop")
+    /// Sender AirPlay 2 (CDC 4.4) : découverte, pairing, RTSP, canal d'événements.
+    /// Catégorie distincte de `raop` : les deux sorties tournent en parallèle, et les
+    /// mélanger rendrait un journal illisible en cas de panne d'une seule des deux.
+    public static let airplay2 = Logger(subsystem: subsystem, category: "airplay2")
 }
 
 /// Accès typé aux propriétés d'objets Core Audio (`AudioObjectGetPropertyData`).

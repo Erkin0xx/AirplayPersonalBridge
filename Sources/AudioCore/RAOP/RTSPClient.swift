@@ -49,6 +49,17 @@ public actor RTSPClient {
     /// Elle alimente le champ `o=` du SDP, que certains récepteurs recoupent.
     public private(set) var localAddress: String = "0.0.0.0"
 
+    /// Chiffrement du canal, activé après un pair-setup AirPlay 2 réussi.
+    ///
+    /// Reste `nil` pour RAOP, dont le canal RTSP est en clair : le comportement du sender
+    /// du jalon 2 est donc rigoureusement inchangé. Ajouté ici plutôt que dans une
+    /// sous-classe parce que le chiffrement s'applique au **transport**, en dessous de la
+    /// sémantique RTSP qui, elle, est identique pour les deux protocoles.
+    private var controlChannel: AirPlay2ControlChannel?
+
+    /// Tampon des octets chiffrés reçus mais pas encore déchiffrables (bloc incomplet).
+    private var pendingCiphertext = Data()
+
     public init(host: String, port: UInt16, clientInstance: String? = nil) {
         self.host = host
         self.port = port
@@ -104,6 +115,18 @@ public actor RTSPClient {
         connection?.cancel()
         connection = nil
         pendingData.removeAll(keepingCapacity: false)
+        pendingCiphertext.removeAll(keepingCapacity: false)
+        controlChannel = nil
+    }
+
+    /// Bascule le canal en chiffré, à l'issue d'un pair-setup AirPlay 2.
+    ///
+    /// À n'appeler qu'une fois la réponse M4 **entièrement lue** : le récepteur chiffre à
+    /// partir du message suivant, et anticiper ferait déchiffrer une réponse en clair.
+    /// Sans appel, le client reste en clair — c'est le cas RAOP.
+    public func enableEncryption(keys: AirPlay2PairingSession.SessionKeys) throws {
+        controlChannel = try AirPlay2ControlChannel(keys: keys)
+        log.info("canal de contrôle chiffré (ChaCha20-Poly1305)")
     }
 
     // MARK: - Requêtes
@@ -125,7 +148,10 @@ public actor RTSPClient {
         outgoing.headers.append(("User-Agent", "AirPlayMultiOutput/1.0"))
         outgoing.headers.append(("Client-Instance", clientInstance))
 
-        let payload = outgoing.serialized()
+        var payload = outgoing.serialized()
+        if let controlChannel {
+            payload = try controlChannel.outbound.seal(payload)
+        }
         log.debug("→ \(outgoing.method, privacy: .public) \(outgoing.uri, privacy: .public) (CSeq \(self.sequenceNumber))")
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -159,27 +185,55 @@ public actor RTSPClient {
             guard ContinuousClock.now < deadline else {
                 throw RTSPError.timedOut(method: method)
             }
-            let chunk = try await receiveChunk()
+            let chunk = try await receiveChunk(deadline: deadline, method: method)
             guard !chunk.isEmpty else { throw RTSPError.malformedResponse }
-            pendingData.append(chunk)
+            if let controlChannel {
+                // Canal chiffré : les octets reçus sont accumulés jusqu'à former des blocs
+                // complets. Un bloc partiel reste en attente — c'est le cas normal en TCP.
+                pendingCiphertext.append(chunk)
+                let (plaintext, consumed) = try controlChannel.inbound.open(pendingCiphertext)
+                if consumed > 0 {
+                    pendingCiphertext.removeFirst(consumed)
+                }
+                pendingData.append(plaintext)
+            } else {
+                pendingData.append(chunk)
+            }
         }
     }
 
-    private func receiveChunk() async throws -> Data {
+    /// Lit un fragment, avec une échéance **propre à la lecture**.
+    ///
+    /// `NWConnection.receive` peut ne jamais rappeler : c'est le cas quand le pair disparaît
+    /// sans fermer proprement — précisément ce que fait le mock RAOP, qui quitte dès le
+    /// `TEARDOWN` reçu. Sans échéance ici, l'attente est infinie et le processus ne se
+    /// termine jamais, alors même que toute la diffusion s'est bien passée.
+    ///
+    /// Vérifier le délai seulement **entre** deux lectures, comme le faisait la première
+    /// version, ne suffit pas : le contrôle n'y revient jamais.
+    private func receiveChunk(deadline: ContinuousClock.Instant, method: String) async throws -> Data {
         guard let connection else { throw RTSPError.notConnected }
+        let box = ReceiveResumeBox()
         return try await withCheckedThrowingContinuation { continuation in
+            box.attach(continuation)
             connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) {
                 data, _, isComplete, error in
                 if let error {
-                    continuation.resume(
-                        throwing: RTSPError.connectionFailed(String(describing: error)))
+                    box.fail(RTSPError.connectionFailed(String(describing: error)))
                 } else if let data, !data.isEmpty {
-                    continuation.resume(returning: data)
+                    box.succeed(data)
                 } else if isComplete {
-                    continuation.resume(throwing: RTSPError.connectionFailed("flux RTSP fermé"))
+                    box.fail(RTSPError.connectionFailed("flux RTSP fermé"))
                 } else {
-                    continuation.resume(returning: Data())
+                    box.succeed(Data())
                 }
+            }
+            Task {
+                let remaining = deadline - ContinuousClock.now
+                if remaining > .zero {
+                    try? await Task.sleep(for: remaining)
+                }
+                box.fail(RTSPError.timedOut(method: method))
             }
         }
     }
@@ -221,5 +275,37 @@ private final class ConnectResumeBox: @unchecked Sendable {
         let pending = continuation
         continuation = nil
         return pending
+    }
+}
+
+/// Garantit qu'une continuation de lecture n'est reprise qu'une seule fois.
+///
+/// Deux chemins peuvent la reprendre en concurrence : le callback de `NWConnection.receive`
+/// et l'échéance de lecture. Reprendre deux fois une `CheckedContinuation` est une erreur
+/// fatale à l'exécution, d'où ce verrou.
+private final class ReceiveResumeBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Data, Error>?
+
+    func attach(_ continuation: CheckedContinuation<Data, Error>) {
+        lock.lock()
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func succeed(_ data: Data) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: data)
+    }
+
+    func fail(_ error: Error) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(throwing: error)
     }
 }

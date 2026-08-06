@@ -12,23 +12,33 @@ Distinguer explicitement "validé contre mock" et "validé contre matériel rée
 
 | | |
 |---|---|
-| **Dernier jalon terminé** | Jalon 2 — sender RAOP (validé **contre mock** le 2026-08-06) |
-| **Prochain jalon** | **Jalon 3 — sender AirPlay 2 (Apple TV/HomePod)** (prompt : CDC section 14) |
+| **Dernier jalon terminé** | Jalon 3 — sender AirPlay 2 (validé **contre mock** le 2026-08-06) |
+| **Prochain jalon** | **Jalon 4 — synchronisation et dérive** (prompt : CDC section 14) |
 | **Dépôt** | `github.com/Erkin0xx/AirplayPersonalBridge`, branche `main` |
 
-**Acquis réutilisables au jalon 3** : le sender RAOP (`Sources/AudioCore/RAOP/`) fournit des
-briques directement réemployables — client RTSP générique (`RTSPClient`, `RTSPMessage`),
-canaux UDP à port local fixé (`UDPChannel`), horloge NTP et fabrique de paquets RTP
-(`RTPTransport`), rééchantillonnage vers le format d'une sortie (`RAOPResampler`). Le
-jalon 3 remplace la crypto et la séquence de pairing, pas ce socle.
+**Les deux sorties diffusent désormais en parallèle**, ce qui est l'objectif fonctionnel du
+projet (CDC section 2) :
 
-**Le patron à reproduire** : `RAOPSender` est un acteur qui **lit** un ring buffer et ne
-l'écrit jamais, ne connaît pas la source de capture, et confine ses pannes (invariant
-section 12). Le sender AirPlay 2 doit être son jumeau sur son propre ring buffer.
+```
+./audiocap --airplay Geneva --airplay2 ApTV 15
+```
 
-**Avant de coder quoi que ce soit au jalon 3** : lire `CLAUDE.md` en entier (invariants
-section 12 + pièges vérifiés, dont **les trois pièges RAOP** ajoutés à ce jalon), puis le
-détail du jalon 2 ci-dessous.
+Mesuré sur 15 s : 1 884 paquets RAOP et 1 882 paquets AirPlay 2, **0 erreur de part et
+d'autre**. Une panne sur une sortie n'affecte pas l'autre (vérifié en visant un récepteur
+RAOP inexistant : la sortie AirPlay 2 a continué sans dégradation).
+
+**Acquis réutilisables au jalon 4** : `RTSPClient`, `UDPChannel`, `RTPTransport` (horloge
+NTP), `RAOPResampler` sont partagés par les deux senders. Le canal de timing RAOP répond
+déjà aux requêtes du récepteur, et le `SETUP` AirPlay 2 négocie `timingProtocol=NTP` : ce
+sont les deux points d'ancrage dont le jalon 4 aura besoin (CDC 4.5).
+
+**Le patron, respecté par les deux senders** : un acteur qui **lit** son propre ring buffer
+et ne l'écrit jamais, ne connaît pas la source de capture, ignore l'autre sender, et confine
+ses pannes (invariant section 12).
+
+**Avant de coder quoi que ce soit au jalon 4** : lire `CLAUDE.md` en entier (invariants
+section 12 + pièges vérifiés, dont **les trois pièges RAOP** du jalon 2 et **le piège SRP**
+du jalon 3), puis le détail des jalons 2 et 3 ci-dessous.
 
 ---
 
@@ -438,3 +448,185 @@ meilleur usage de la première session avec la vraie Geneva.
   capture tourne sans consommateur ; le CLI les distingue désormais explicitement.
 
 ---
+
+## Jalon 3 : sender AirPlay 2 (Apple TV/HomePod) — TERMINÉ (validé CONTRE MOCK)
+
+Date : 2026-08-06
+
+> **Portée de la validation.** Tout ce qui suit est mesuré contre `airplay2-receiver`
+> (mock « ApTV-HomePod-Mock »), sur la machine locale. **Aucun Apple TV ni HomePod réel n'a
+> été sollicité** : aucun accès au matériel à ce jour.
+>
+> Cette réserve est plus forte ici qu'au jalon 2, et le CDC (section 10) la formule
+> explicitement : `airplay2-receiver` est **expérimental de son propre aveu**
+> (« experimental, yet fully functional », il n'implémente pas tous les protocoles ni toutes
+> les méthodes d'authentification). **Un handshake qui passe contre cet émulateur ne
+> garantit pas le fonctionnement contre le vrai firmware Apple.** Le point le plus incertain
+> est identifié et documenté ci-dessous : le mode de pairing.
+
+### Ce qui fonctionne
+
+```
+./audiocap --browse2                              # liste les récepteurs _airplay._tcp
+./audiocap --airplay2 ApTV 30                     # capture système -> AirPlay 2
+./audiocap --airplay Geneva --airplay2 ApTV 30    # LES DEUX SORTIES EN PARALLÈLE
+```
+
+Séquence observée en capture (`captures/jalon3-airplay2-session.pcapng`) :
+
+| # | Requête | Réponse |
+|---|---|---|
+| 1 | `POST /pair-setup` (TLV8, M1, méthode 0 + drapeau transitoire) | 200 OK, M2 (sel 16 o, B 384 o) |
+| 2 | `POST /pair-setup` (TLV8, M3, A 384 o + preuve 64 o) | 200 OK, M4 (preuve serveur) |
+| — | *bascule du canal en chiffré* | *tout le reste est illisible en capture* |
+| 3 | `SETUP` (plist binaire, **sans** `streams`) | `eventPort` |
+| 4 | `SETUP` (plist binaire, **avec** `streams`) | `dataPort`, `controlPort`, `streamID` |
+| 5 | `SET_PARAMETER` (volume) | 200 OK |
+| 6 | `RECORD` (`RTP-Info: seq=…;rtptime=…`) | 200 OK |
+| 7 | `TEARDOWN` | 200 OK |
+
+**La capture prouve visuellement le chiffrement** : les deux premiers `POST /pair-setup`
+sont lisibles en clair, et à partir du message suivant plus aucun octet n'est interprétable.
+
+Qualité du flux RTP mesurée sur une session de 10 s (1 254 paquets audio) :
+
+| Mesure | Valeur | Attendu |
+|---|---|---|
+| Ruptures de numéro de séquence | **0** | 0 |
+| Intervalle moyen entre paquets | **7,985 ms** | 7,982 ms (352 trames à 44,1 kHz) |
+| Intervalle médian | 8,994 ms | ~7,98 ms |
+| Gigue p95 / max | 12,7 / 22,3 ms | << tampon récepteur |
+| Taille des paquets audio | **uniforme**, 1 447 o UDP | 8 + 12 RTP + 1 411 ALAC + 16 étiquette |
+| Trames perdues **en diffusion** | **0** | 0 |
+
+**79 tests unitaires, tous verts** (41 du jalon 2 + 38 ajoutés). Les 41 du jalon 2 sont
+restés verts en permanence : le socle partagé n'a pas été cassé.
+
+### Les quatre bibliothèques C, vendues et non réécrites (CDC 4.4)
+
+Dépôts vérifiés un par un avant vendorisation (`Sources/CCrypto/README.md` donne les commits
+exacts et les écarts) : `orlp/ed25519` (zlib), `agl/curve25519-donna` (BSD),
+`grigorig/chachapoly` (MIT), `cocagne/csrp` (MIT). Chacune est pilotée par un wrapper Swift
+dédié qui libère sa mémoire dans `deinit` ; aucun pointeur C hors de ces wrappers.
+
+**Tests contre les vecteurs des RFC officiels, verts avant toute intégration réseau** comme
+l'exige le prompt du jalon : X25519 (RFC 7748 §6.1), Ed25519 (RFC 8032 §7.1, TEST 1 à 3),
+ChaCha20-Poly1305 (RFC 7539 §2.8.2). Aucune valeur attendue ne sort de ce projet.
+
+HKDF-SHA512 fait exception et **n'est pas** wrappé depuis une bibliothèque C : CryptoKit le
+fournit nativement. Le CDC 4.4 proscrit de *retranscrire à la main* une primitive, pas
+d'employer une implémentation système éprouvée.
+
+### Le défaut qui a coûté le plus de temps : le bourrage SRP
+
+Le pairing échouait sur un laconique `invalid proof` du récepteur, alors que **A, B, le sel
+et toutes les longueurs concordaient octet pour octet des deux côtés** (vérifié en
+instrumentant le mock pour qu'il publie ses propres valeurs).
+
+Cause : SRP-6a se décline en conventions incompatibles pour le bourrage des opérandes.
+
+1. La branche `master` de csrp ne bourre **ni** `u = H(A,B)` **ni** `k = H(N,g)`. AirPlay 2
+   exige le bourrage RFC 5054 des deux. → bascule sur la branche **`rfc5054_compat`** du
+   même dépôt.
+2. Mais cette branche bourre **aussi** `g` avant d'en prendre le condensat dans le calcul de
+   la preuve `M1`, alors qu'**AirPlay 2 ne le fait pas** : il calcule `H(g)` sur l'octet
+   `0x05` seul. C'est un hybride qu'aucun réglage du drapeau n'exprime.
+   → **modification locale de six lignes** dans `calculate_M`, commentée dans le fichier et
+   documentée dans `Sources/CCrypto/README.md`. Elle ne touche pas l'arithmétique de SRP,
+   seulement le choix des opérandes d'un condensat.
+
+Vérifié contre l'implémentation de référence du récepteur (`ap2/pairing/srp.py`), où
+`H(self.N) ^ H(self.g)` est appelé **sans** `pad=True` tandis que `u` et `k` le sont.
+
+C'est exactement le risque que le CDC 4.4 cherche à écarter en interdisant de réécrire ces
+primitives : une divergence d'un seul opérande, sans symptôme exploitable.
+
+### Deux défauts trouvés dans le socle existant
+
+**1. `NWBrowser` écarte silencieusement un service dont le TXT lui déplaît.** Avec
+`bonjourWithTXTRecord`, le mock AirPlay 2 **n'apparaît pas du tout** dans les résultats —
+aucune erreur, juste une liste vide — alors que `dns-sd` et un parcours `.bonjour` sans TXT
+le voient tous les deux, et que le même code rend bien le service RAOP de shairport-sync.
+→ Parade : parcourir **sans** TXT, puis lire le TXT par une requête DNS dédiée
+(`BonjourTXTQuery`, API `dns_sd`). Sans cela les bits de fonctionnalité et la clé publique
+du récepteur seraient inaccessibles, et un récepteur matériel au TXT inhabituel serait
+invisible sans explication.
+
+**2. Attente infinie sur `NWConnection.receive` — défaut présent depuis le jalon 2.**
+`RTSPClient.receiveChunk` n'avait **aucune échéance propre** : le délai n'était vérifié
+qu'*entre* deux lectures, or le contrôle n'y revient jamais si le pair disparaît sans fermer
+proprement. C'est précisément ce que fait le mock RAOP, qui quitte dès le `TEARDOWN` reçu :
+**le processus ne se terminait jamais**, alors que toute la diffusion s'était bien passée.
+Passé inaperçu au jalon 2 parce que le symptôme apparaît après l'affichage des résultats.
+→ Corrigé (échéance par lecture, reprise unique garantie par un verrou), plus un délai court
+de 2 s sur les `TEARDOWN` des deux senders, dont la réponse n'est de toute façon plus
+exploitable.
+
+### Respect de l'invariant section 12
+
+- `AirPlay2Sender` reçoit un `AudioRingBuffer` et un format, **rien d'autre** : il ignore le
+  mode de capture comme l'existence du sender RAOP.
+- Il **lit** son ring buffer et ne l'écrit jamais. Un test écrit un motif connu, laisse le
+  sender vivre, et vérifie que le contenu est relu **à l'identique**.
+- **Un ring buffer par pipeline de sortie** : `CaptureSink.enableSecondaryPipeline()` en
+  crée un second, et le callback temps réel duplique le PCM vers les deux (lock-free, sans
+  allocation). Un test vérifie que vider l'un ne retire rien à l'autre.
+- **Pannes confinées** : les deux senders tournent dans des tâches indépendantes d'un
+  `withTaskGroup`, chaque échec étant capturé dans sa propre branche. Un `async let` aurait
+  annulé l'autre sortie. Vérifié en conditions réelles (voir ci-dessus).
+- Le rééchantillonnage 48 → 44,1 kHz tourne dans la tâche du sender, en aval du ring buffer,
+  jamais dans le callback temps réel (CDC 4.5).
+
+### Décisions prises, hors CDC
+
+- **Pairing transitoire au lieu de credentials long terme.** C'est l'écart le plus important
+  au prompt du jalon, et il est dicté par ce que le récepteur propose réellement. Trois
+  observations concordantes : le mock annonce le **bit 48** (`TransientPairing`) et **pas le
+  bit 43** (`SystemPairing`) ; **pyatv lui-même rapporte `Pairing: NotNeeded`** ; et
+  `atvremote pair` échoue contre lui (le mock lève `invalid proof`), alors que
+  `atvremote stream_file` fonctionne sans aucun pair-setup.
+  En transitoire, l'échange s'arrête à M4 et **aucune clé long terme n'est échangée** :
+  il n'y a, par construction, aucun credential à extraire ni à persister. **L'absence de
+  `credentials/` n'est donc pas un oubli.** Le sender refuse explicitement de continuer si un
+  récepteur n'annonce pas le transitoire, plutôt que d'échouer plus loin sur un message
+  cryptographique obscur. Décision tracée en ADR : `decisions/003-pairing-transitoire-airplay2.md`.
+- **ALAC non compressé et 352 trames par paquet**, comme au jalon 2 : le format négocié
+  (`ALAC_44100_16_2`) permet de réutiliser tel quel l'encodeur et le rééchantillonneur.
+- **Chiffrement du flux audio en ChaCha20-Poly1305**, nonce dérivé du compteur de paquets,
+  en-tête RTP en données associées. `RTPPacketBuilder.audioHeader` a été ajouté pour obtenir
+  l'en-tête avant de chiffrer ; la fabrique RAOP existante est inchangée.
+- **`RTSPClient` porte le chiffrement de canal en option** (`enableEncryption`), inerte pour
+  RAOP. Le chiffrement s'applique au transport, en dessous d'une sémantique RTSP identique
+  pour les deux protocoles : une sous-classe aurait dupliqué le reste.
+- **Découverte avec plusieurs tentatives** : `NWBrowser` rend parfois une liste vide au
+  premier passage puis la bonne au suivant, sans erreur (constaté de façon intermittente).
+
+### Ce qui reste ouvert
+
+- **Rien n'a été validé contre un vrai Apple TV ni un vrai HomePod.** C'est la limite
+  principale de ce jalon, et elle est plus lourde qu'au jalon 2 : l'émulateur est
+  expérimental de son propre aveu (CDC section 10).
+- **Le mode de pairing est le point le plus incertain pour le matériel réel.** Un Apple TV
+  rattaché à une maison HomeKit arme en général le **bit 43** et réclame un appairage
+  persistant avec code. Le travail restant est cadré et non spéculatif : `pair-setup` M5/M6
+  (échange de clés long terme signées) puis `pair-verify` M1–M4. **Toutes les primitives
+  nécessaires sont déjà implémentées et testées contre les vecteurs des RFC** — c'est une
+  extension, pas une réécriture. `./audiocap --browse2` affiche les bits annoncés, ce qui
+  permettra de trancher en une commande le jour J.
+- **Le canal d'événements n'est pas exploité.** Le `SETUP` récupère bien son `eventPort`,
+  mais rien ne s'y connecte : le récepteur y pousse des changements d'état (volume distant,
+  arrêt côté récepteur). Sans objet pour diffuser, à traiter au jalon 5 si l'interface doit
+  refléter l'état réel des sorties.
+- **Aucune synchronisation entre les deux sorties.** Elles diffusent en parallèle mais
+  chacune à son propre rythme : c'est précisément l'objet du jalon 4.
+- **Aucune reconnexion automatique**, comme au jalon 2 (CDC section 8). Une panne est
+  confinée et journalisée, mais la session n'est pas rétablie. À traiter au jalon 4 ou 5.
+- **L'enregistrement mDNS du mock devient périmé après quelques minutes** : `dns-sd` continue
+  de l'annoncer alors que `NWBrowser` ne le voit plus, et il faut relancer
+  `./run-mocks.sh start`. Comportement du mock, sans rapport avec le code du projet — mais
+  c'est la première chose à vérifier devant un « récepteur introuvable ».
+- **Le puits audio du mock plante sur `av` 18** (`codecContext.channels` en lecture seule),
+  y compris avec pyatv comme sender. C'est en aval du protocole : la négociation et la
+  réception des paquets fonctionnent, seul le décodage local du mock échoue. Conséquence
+  pratique : **la validation de ce jalon porte sur le protocole et le flux réseau, pas sur
+  une écoute**. Défaut du mock hérité du pin `av` relâché au jalon -1.

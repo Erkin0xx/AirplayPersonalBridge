@@ -278,3 +278,119 @@ sans passer par la GUI. La capture fonctionne **sans `sudo`** (utilisateur membr
 - **Bibliothèques C crypto** (csrp, curve25519-donna, ed25519 d'orlp, chachapoly) : à
   récupérer dans `Sources/CCrypto` au jalon 3, en vérifiant soi-même les dépôts corrects.
   Volontairement non automatisé (CDC section 14).
+
+## Sender AirPlay 2 — faits vérifiés au jalon 3
+
+### Le mode de pairing se lit dans les bits de fonctionnalité, pas dans la doc
+
+Le TXT Bonjour de `_airplay._tcp` porte `features=<mot bas>,<mot haut>`, **le second mot
+étant celui de poids fort** (`0x405f4200,0x1c300` → `0x1c300405f4200`). Les bits qui
+décident du chemin de pairing :
+
+- **bit 48** = pair-setup **transitoire** : M1–M4, aucune clé long terme échangée, aucun code
+  à saisir, **aucun credential à persister**.
+- **bit 43** = appairage système persistant (code + `pair-verify` à chaque session).
+- bit 46 = HomeKit, bit 27 = legacy AirPlay 1.
+
+Le mock arme **48 sans 43** : le jalon 3 implémente donc le transitoire. `./audiocap --browse2`
+affiche ces bits — c'est la commande à lancer en premier devant un récepteur inconnu.
+Un vrai Apple TV en maison HomeKit armera probablement 43 : voir l'ADR `003` du vault.
+
+**Corollaire à ne pas réapprendre** : `atvremote pair` échoue contre ce mock (il lève
+`invalid proof`), alors que `atvremote stream_file` fonctionne sans aucun pair-setup. Ce
+n'est pas un défaut de pyatv : ce récepteur ne sert pas le chemin avec code. pyatv le dit
+lui-même en rapportant `Pairing: NotNeeded`.
+
+### Le piège SRP : trois conventions de bourrage, pas deux
+
+AirPlay 2 emploie SRP-6a **SHA-512 sur le groupe 3072 bits**, utilisateur `Pair-Setup`,
+mot de passe fixe `3939` en transitoire. Le bourrage des opérandes est un **hybride** :
+
+| Valeur | Bourré à 384 o ? |
+|---|---|
+| `u = H(A, B)` | **oui** |
+| `k = H(N, g)` | **oui** |
+| `H(g)` dans la preuve `M1` | **NON** — condensat de l'octet `0x05` seul |
+
+Aucune des deux branches de `cocagne/csrp` n'exprime cet hybride : `master` ne bourre rien,
+`rfc5054_compat` bourre les trois. D'où la branche `rfc5054_compat` **plus une modification
+locale de six lignes** dans `calculate_M` (`padding` forcé à 0), commentée dans le fichier et
+dans `Sources/CCrypto/README.md`.
+
+**Symptôme si on se trompe** : le récepteur répond `invalid proof` alors que `A`, `B`, le sel
+et toutes les longueurs concordent octet pour octet. Se fier aux tailles ne sert à rien ici.
+La référence qui tranche est `ap2/pairing/srp.py` du mock, où `H(self.N) ^ H(self.g)` est
+appelé **sans** `pad=True` tandis que `u` et `k` le sont.
+
+### Canal de contrôle chiffré : trois détails qui font tout échouer
+
+Après le pair-setup, chaque message RTSP est encadré en
+`[longueur 2 o LE][cryptogramme][étiquette Poly1305 16 o]`, blocs de 1 024 o au plus.
+
+1. **Les deux octets de longueur sont les données associées** de l'AEAD.
+2. **Le nonce est un compteur de blocs 64 bits LE précédé de 4 octets nuls**, qui ne repart
+   jamais de zéro tant que la connexion vit.
+3. **Les deux sens ont clés et compteurs distincts** : `Control-Salt` avec
+   `Control-Write-Encryption-Key` (ce qu'on écrit) et `Control-Read-Encryption-Key` (ce
+   qu'on lit). Les intervertir donne un canal qui échoue au premier bloc.
+
+Sels et infos HKDF-SHA512 du pairing (relevés dans `hap.py`) : `Pair-Setup-Encrypt-Salt`/
+`-Info`, `Pair-Setup-Controller-Sign-Salt`/`-Info`, `Pair-Verify-Encrypt-Salt`/`-Info`.
+
+### Séquence RTSP : deux SETUP, pas un, et des plists binaires
+
+Pas d'`ANNOUNCE` ni de SDP : les paramètres passent en **plists binaires**.
+
+1. `SETUP` **sans** clé `streams` → ouvre la session, rend `eventPort`.
+2. `SETUP` **avec** `streams` → ouvre le flux, rend `dataPort`, `controlPort`, `streamID`.
+3. `SET_PARAMETER` (volume), 4. `RECORD`, 5. `TEARDOWN`.
+
+Comme en RAOP, **ce sont les ports de la réponse qui font foi**, jamais ceux demandés.
+Format audio `ALAC_44100_16_2` = `1 << 18` ; type de flux temps réel = `96` (`103` =
+bufferisé). `spf` = 352 trames, comme en RAOP.
+
+### `NWBrowser` écarte silencieusement un service au TXT douteux
+
+Avec `.bonjourWithTXTRecord`, le mock AirPlay 2 **n'apparaît pas du tout** dans les
+résultats — pas d'erreur, liste vide — alors que `dns-sd` et `.bonjour` (sans TXT) le voient,
+et que le même code rend bien le service RAOP de shairport-sync.
+
+**Parade retenue** : parcourir **sans** TXT, puis lire le TXT par une requête DNS dédiée
+(`BonjourTXTQuery`, API `dns_sd`). Sans TXT, pas de bits de fonctionnalité ni de clé
+publique — donc pas de choix de pairing possible.
+
+Piège associé : le nom pleinement qualifié se construit `instance._service._tcp.domaine.`.
+`NWEndpoint` rend le type **sans** point final et le domaine **avec** : les concaténer tels
+quels donne `_airplay._tcplocal.`, introuvable, et le TXT revient vide **sans erreur**.
+
+### Attente infinie sur `NWConnection.receive` (défaut corrigé, présent depuis le jalon 2)
+
+`receive` peut **ne jamais rappeler** quand le pair disparaît sans fermer proprement — ce que
+font les deux mocks après un `TEARDOWN`. Vérifier une échéance *entre* deux lectures ne suffit
+pas : le contrôle n'y revient jamais. Il faut une **échéance par lecture**, avec reprise
+unique garantie (deux reprises d'une `CheckedContinuation` sont fatales).
+
+Symptôme : le processus ne se termine jamais, **après** avoir affiché tous ses résultats et
+alors que la diffusion s'est parfaitement passée. Les `TEARDOWN` des deux senders utilisent
+désormais un délai court de 2 s.
+
+### Mock AirPlay 2 : deux comportements à connaître
+
+- **Son enregistrement mDNS devient périmé après quelques minutes** : `dns-sd` continue de
+  l'annoncer alors que `NWBrowser` ne le voit plus. Relancer `./run-mocks.sh start`. C'est la
+  **première** chose à vérifier devant un « récepteur introuvable », avant de suspecter le code.
+- **Son puits audio plante sur `av` 18** (`codecContext.channels` en lecture seule), y compris
+  avec pyatv comme sender. C'est **en aval du protocole** : la négociation et la réception des
+  paquets fonctionnent, seul le décodage local échoue. Conséquence : la validation du jalon 3
+  porte sur le protocole et le flux réseau, **pas sur une écoute**.
+
+### Capture réseau d'une session AirPlay 2
+
+Mock et sender sur la même machine : capturer sur **`lo0` et `en0` à la fois**, sans filtre
+BPF restrictif (le filtre appliqué à une capture multi-interfaces s'est révélé peu fiable),
+puis filtrer à la lecture (`-Y "tcp.port==7000"`). Trace de référence :
+`captures/jalon3-airplay2-session.pcapng`.
+
+Elle montre visuellement le chiffrement : les deux `POST /pair-setup` sont lisibles en clair,
+et plus rien ne l'est ensuite. Paquets audio uniformes à **1 447 o UDP**
+(8 + 12 RTP + 1 411 ALAC + 16 étiquette).

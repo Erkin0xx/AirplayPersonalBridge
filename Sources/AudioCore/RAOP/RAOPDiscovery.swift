@@ -70,6 +70,11 @@ public enum RAOPDiscoveryError: Error, CustomStringConvertible {
 /// Invariant section 12 : ce module ne connaît que le protocole RAOP. Il ne dépend ni de la
 /// capture, ni d'un autre sender.
 public actor RAOPDiscovery {
+    /// Type de service Bonjour des récepteurs AirPlay 1. Le sender AirPlay 2 parcourt
+    /// `_airplay._tcp` (voir `AirPlay2Discovery`) : ce sont deux annonces distinctes, et un
+    /// même appareil peut apparaître dans l'une, l'autre, ou les deux.
+    static let serviceType = "_raop._tcp"
+
     private let log = AudioLog.raop
 
     public init() {}
@@ -105,13 +110,34 @@ public actor RAOPDiscovery {
     // MARK: - Parcours
 
     private func browseRaw(timeout: Duration) async -> [NWBrowser.Result] {
+        await Self.browseRaw(serviceType: Self.serviceType, timeout: timeout, log: log)
+    }
+
+    /// Parcours Bonjour brut, paramétré par type de service.
+    ///
+    /// Sorti en `static` au jalon 3 : le sender AirPlay 2 parcourt `_airplay._tcp` avec
+    /// exactement la même mécanique (résolution incluse). Seul le type de service change,
+    /// il n'y avait donc aucune raison de dupliquer `NWBrowser` et sa gestion de reprise
+    /// unique. Le comportement du parcours `_raop._tcp` est inchangé.
+    static func browseRaw(
+        serviceType: String,
+        timeout: Duration,
+        includeTXTRecord: Bool = true,
+        log: Logger
+    ) async -> [NWBrowser.Result] {
         await withCheckedContinuation { continuation in
             let parameters = NWParameters()
             parameters.includePeerToPeer = false
-            let browser = NWBrowser(
-                for: .bonjourWithTXTRecord(type: "_raop._tcp", domain: nil),
-                using: parameters
-            )
+            // `bonjourWithTXTRecord` fait analyser l'enregistrement TXT par Network
+            // framework, qui **écarte silencieusement tout service dont le TXT lui déplaît**
+            // — le service n'apparaît alors pas du tout dans les résultats, sans erreur.
+            // C'est le cas du mock AirPlay 2 (voir `AirPlay2Discovery`), d'où le choix
+            // laissé à l'appelant. RAOP conserve le comportement du jalon 2.
+            let descriptor: NWBrowser.Descriptor =
+                includeTXTRecord
+                ? .bonjourWithTXTRecord(type: serviceType, domain: nil)
+                : .bonjour(type: serviceType, domain: nil)
+            let browser = NWBrowser(for: descriptor, using: parameters)
             // `finish` garde la reprise unique : `browseResultsChangedHandler` peut être
             // appelé plusieurs fois, et le timeout peut se déclencher en parallèle.
             let box = ResumeBox(continuation: continuation)
@@ -120,7 +146,9 @@ public actor RAOPDiscovery {
             }
             browser.stateUpdateHandler = { state in
                 if case let .failed(error) = state {
-                    self.log.error("Parcours _raop._tcp en échec : \(String(describing: error), privacy: .public)")
+                    log.error(
+                        "Parcours \(serviceType, privacy: .public) en échec : \(String(describing: error), privacy: .public)"
+                    )
                     box.finish(browser: browser)
                 }
             }
@@ -145,7 +173,7 @@ public actor RAOPDiscovery {
             }
         }
 
-        guard let resolved = await resolveEndpoint(
+        guard let resolved = await Self.resolveEndpoint(
             NWEndpoint.service(name: name, type: type, domain: domain, interface: nil)
         ) else {
             log.error("Résolution impossible pour \(name, privacy: .public)")
@@ -155,7 +183,11 @@ public actor RAOPDiscovery {
         return RAOPDevice(serviceName: name, host: resolved.host, port: resolved.port, txt: txt)
     }
 
-    private func resolveEndpoint(_ endpoint: NWEndpoint) async -> (host: String, port: UInt16)? {
+    /// Résolution d'un service Bonjour en couple hôte/port.
+    ///
+    /// `static` et partagée avec `AirPlay2Discovery` depuis le jalon 3 : la mécanique est
+    /// strictement la même quel que soit le type de service.
+    static func resolveEndpoint(_ endpoint: NWEndpoint) async -> (host: String, port: UInt16)? {
         await withCheckedContinuation { continuation in
             let box = EndpointResumeBox(continuation: continuation)
             let connection = NWConnection(to: endpoint, using: .tcp)
@@ -183,7 +215,7 @@ public actor RAOPDiscovery {
     }
 
     /// Forme littérale d'une adresse, sans le suffixe de zone (`%en0`) qu'ajoute IPv6.
-    private static func literal(from host: NWEndpoint.Host) -> String {
+    static func literal(from host: NWEndpoint.Host) -> String {
         switch host {
         case let .ipv4(address):
             return address.debugDescription.components(separatedBy: "%")[0]

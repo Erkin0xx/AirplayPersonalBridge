@@ -291,7 +291,11 @@ public actor RAOPSender {
 
     private func sendTeardown() async throws {
         guard let client = rtsp, let uri = sessionURI else { return }
-        try await client.send(RTSPRequest(method: "TEARDOWN", uri: uri))
+        // Délai court : beaucoup de récepteurs ferment la connexion dès le TEARDOWN reçu,
+        // sans jamais répondre — c'est le cas du mock shairport-sync, qui quitte. Attendre
+        // les 10 s par défaut retarderait l'arrêt sans rien apporter : à ce stade la
+        // diffusion est terminée et la réponse n'est plus exploitable.
+        try await client.send(RTSPRequest(method: "TEARDOWN", uri: uri), timeout: .seconds(2))
     }
 
     // MARK: - Diffusion
