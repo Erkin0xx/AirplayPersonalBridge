@@ -53,6 +53,8 @@ public enum AudioLog {
     public static let subsystem = "fr.baptiste.airplaymultioutput"
     public static let capture = Logger(subsystem: subsystem, category: "capture")
     public static let cli = Logger(subsystem: subsystem, category: "cli")
+    /// Sender AirPlay 1 / RAOP (CDC 4.3) : découverte, RTSP, RTP.
+    public static let raop = Logger(subsystem: subsystem, category: "raop")
 }
 
 /// Accès typé aux propriétés d'objets Core Audio (`AudioObjectGetPropertyData`).

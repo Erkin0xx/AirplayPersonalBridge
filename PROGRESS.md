@@ -12,24 +12,23 @@ Distinguer explicitement "validé contre mock" et "validé contre matériel rée
 
 | | |
 |---|---|
-| **Dernier jalon terminé** | Jalon 1 — capture Core Audio (validé le 2026-08-05) |
-| **Prochain jalon** | **Jalon 2 — sender RAOP vers la Geneva** (prompt : CDC section 14) |
+| **Dernier jalon terminé** | Jalon 2 — sender RAOP (validé **contre mock** le 2026-08-06) |
+| **Prochain jalon** | **Jalon 3 — sender AirPlay 2 (Apple TV/HomePod)** (prompt : CDC section 14) |
 | **Dépôt** | `github.com/Erkin0xx/AirplayPersonalBridge`, branche `main` |
 
-**Acquis réutilisables au jalon 2** : le CLI `./audiocap` produit un flux PCM (48 kHz,
-2 canaux, float32 entrelacé) déjà disponible en sortie d'un ring buffer lock-free
-(`AudioRingBuffer`). Le sender RAOP se branche **en lecture** sur ce ring buffer, sans jamais
-modifier le buffer partagé (invariant section 12).
+**Acquis réutilisables au jalon 3** : le sender RAOP (`Sources/AudioCore/RAOP/`) fournit des
+briques directement réemployables — client RTSP générique (`RTSPClient`, `RTSPMessage`),
+canaux UDP à port local fixé (`UDPChannel`), horloge NTP et fabrique de paquets RTP
+(`RTPTransport`), rééchantillonnage vers le format d'une sortie (`RAOPResampler`). Le
+jalon 3 remplace la crypto et la séquence de pairing, pas ce socle.
 
-**Prêt pour le jalon 2** : Wireshark 4.6.7 + `tshark` installés, capture sans `sudo` sur
-`en0`. Mock Geneva opérationnel (`./run-mocks.sh`), annoncé en `_raop._tcp`.
+**Le patron à reproduire** : `RAOPSender` est un acteur qui **lit** un ring buffer et ne
+l'écrit jamais, ne connaît pas la source de capture, et confine ses pannes (invariant
+section 12). Le sender AirPlay 2 doit être son jumeau sur son propre ring buffer.
 
-**Piège à ne pas réapprendre** : le mock s'annonce sous `65D15B6D3AC1@Geneva-Mock`, avec un
-préfixe d'adresse matérielle. Le sender doit **parcourir `_raop._tcp` et résoudre le
-service** — jamais supposer le nom ni le port en dur.
-
-**Avant de coder quoi que ce soit au jalon 2** : lire `CLAUDE.md` en entier (invariants
-section 12 recopiés littéralement + pièges vérifiés), puis le détail du jalon 1 ci-dessous.
+**Avant de coder quoi que ce soit au jalon 3** : lire `CLAUDE.md` en entier (invariants
+section 12 + pièges vérifiés, dont **les trois pièges RAOP** ajoutés à ce jalon), puis le
+détail du jalon 2 ci-dessous.
 
 ---
 
@@ -231,5 +230,183 @@ début. `analyse-wav.py` lit maintenant le bloc `fmt `.
 - Le CDC (section 11) suggérait de commencer par le mode entrée physique, le mieux
   documenté. J'ai suivi l'ordre imposé par le prompt du jalon 1, qui exige le test DRM en
   premier — donc le Process Tap d'abord. Sans conséquence, les trois modes sont faits.
+
+---
+
+## Jalon 2 : sender RAOP (Geneva) — TERMINÉ (validé CONTRE MOCK, pas contre la vraie Geneva)
+
+Date : 2026-08-06
+
+> **Portée de la validation.** Tout ce qui suit est mesuré contre `shairport-sync` 5.2.1
+> (mock « Geneva-Mock »), sur la machine locale. **La vraie enceinte Geneva n'a jamais été
+> sollicitée** : aucun accès au matériel réel à ce jour. Un handshake qui passe contre
+> shairport-sync ne garantit pas le comportement d'un récepteur matériel, qui peut être plus
+> strict sur les URI de session, les délais, ou le contenu exact du SDP.
+
+### Ce qui fonctionne
+
+Le CLI diffuse le flux capturé vers le mock, de bout en bout :
+
+```
+./audiocap --browse              # liste les récepteurs _raop._tcp
+./audiocap --airplay Geneva 25   # capture système -> RAOP pendant 25 s
+./audiocap --airplay Geneva --volume -15 30
+```
+
+Séquence RTSP observée en capture Wireshark, toutes réponses `200 OK` :
+
+| # | Requête | Réponse notable |
+|---|---|---|
+| 1 | `ANNOUNCE` (SDP : ALAC, `rsaaeskey`, `aesiv`) | 200 OK |
+| 2 | `SETUP` (ports locaux annoncés) | `server_port=6003;control_port=6001;timing_port=6002` |
+| 3 | `RECORD` (`RTP-Info: seq=…;rtptime=…`) | `Audio-Latency: 11025` |
+| 4 | `SET_PARAMETER` (volume) | 200 OK |
+| 5 | `TEARDOWN` | 200 OK |
+
+Qualité du flux RTP mesurée sur une session de 25 s (3 140 paquets audio) :
+
+| Mesure | Valeur | Attendu |
+|---|---|---|
+| Ruptures de numéro de séquence | **0** | 0 |
+| Intervalle moyen entre paquets | **7,983 ms** | 7,982 ms (352 trames à 44,1 kHz) |
+| Intervalle médian | 8,795 ms | ~7,98 ms |
+| Gigue p95 / max | 13,0 / 28,4 ms | << 2 s de tampon récepteur |
+| Taille des paquets audio | **uniforme**, 1 431 o UDP | 8 + 12 RTP + 1 411 ALAC |
+| Trames perdues **en diffusion** | **0** | 0 |
+| Paquets de synchro / réponses de timing | 25 / 2 | périodiques |
+
+Le récepteur interroge bien le canal de timing et le sender lui répond : c'est le point
+d'ancrage temporel dont le jalon 4 aura besoin (CDC 4.5).
+
+**41 tests unitaires, tous verts**, dont un aller-retour complet
+PCM → ALAC → AES → AES⁻¹ → ALAC⁻¹ → PCM qui vérifie que le signal ressort **bit pour bit
+identique**. Ce test a une propriété importante : son décodeur reproduit l'ordre de lecture
+de `alac.c` de shairport-sync, pas les hypothèses de mon encodeur — sans quoi il aurait
+validé n'importe quoi (voir le défaut n°2 ci-dessous, qu'il n'attrapait pas dans sa
+première version).
+
+### Respect de l'invariant section 12
+
+- `RAOPSender` reçoit un `AudioRingBuffer` et un format, **rien d'autre** : il ne connaît ni
+  le mode de capture, ni l'existence d'un autre sender.
+- Il **lit** le ring buffer et ne l'écrit jamais. Tout le traitement (conversion, encodage,
+  chiffrement) opère sur une copie extraite dans un tampon propre au sender. Deux tests
+  couvrent ce point, dont un qui vérifie que deux pipelines de sortie distincts n'interfèrent
+  pas.
+- Les erreurs de diffusion sont comptées et la boucle continue : une panne réseau côté
+  Geneva n'interrompt ni la capture ni une autre sortie.
+- Le rééchantillonnage tourne dans la tâche du sender, en aval du ring buffer, jamais dans
+  le callback temps réel — emplacement explicitement autorisé par le CDC 4.5.
+
+### Les trois défauts trouvés, et comment
+
+Chacun produisait un symptôme trompeur ; aucun n'aurait été trouvé sans mesure directe.
+
+**1. Perte silencieuse de 6,5 % du flux au rééchantillonnage.**
+`AVAudioConverter.convert` ne rend **jamais plus de 4 096 trames par appel**, quelle que soit
+la capacité du tampon de sortie, et signale alors `.inputRanDry` **tout en retenant encore
+des trames**. Ma boucle sortait sur ce statut. Sur 4 800 trames d'entrée, 4 096 sortaient au
+lieu de 4 410 — un défaut permanent, audible, que rien ne signalait à l'exécution. Trouvé en
+sondant le convertisseur hors du projet, après qu'un test de ratio ait échoué de 314 trames.
+→ Corrigé (on ne s'arrête que sur un appel réellement improductif) + **test de régression**
+sur 10 blocs consécutifs.
+
+**2. En-tête ALAC de 11 bits au lieu de 20.**
+Le décodeur lit 4 bits puis **12 bits** d'inutilisé avant `hasSize` ; j'écrivais
+`channels - 1` sur 3 bits puis 4 bits d'inutilisé, comme le décrivent plusieurs
+documentations informelles d'ALAC. Ces 3 bits appartiennent en réalité au *tag d'élément* du
+bitstream, que RAOP ne transporte pas. Avec 9 bits manquants, `isNotCompressed` était lu à 0
+et le récepteur partait décoder une trame compressée inexistante :
+`FIXME: unhandled prediction type`. Trouvé en lisant `alac.c` de shairport-sync, après avoir
+constaté que mon propre test d'aller-retour ne voyait rien — il rejouait mes hypothèses.
+→ Corrigé, et le décodeur de test réaligné sur `alac.c` pour qu'il soit capable d'attraper
+ce genre d'écart.
+
+**3. Flux émis en rafales au lieu d'être cadencé.**
+La boucle émettait *tous* les paquets disponibles avant de dormir. Mesuré : intervalle médian
+de **0,69 ms pour 7,98 ms théoriques**, avec des pauses allant jusqu'à **944 ms**. Un
+récepteur matériel avec un tampon plus petit que shairport aurait décroché.
+→ Corrigé (un paquet par tour, à l'échéance). Après correction : médian 8,795 ms, max
+28,4 ms.
+
+Un quatrième point, mineur : le `TEARDOWN` et le `SET_PARAMETER` construisaient une URI
+`/stream` au lieu de réutiliser l'URI de session. shairport-sync l'accepte, mais les
+récepteurs matériels rejettent couramment un `TEARDOWN` dont l'URI ne correspond à aucune
+session — et la session reste alors bloquée côté récepteur. Corrigé avant d'avoir pu le
+constater, précisément parce que le mock ne l'aurait pas signalé.
+
+### Décisions prises, hors CDC
+
+- **ALAC en trames non compressées.** Le codec est sans perte dans les deux cas : la qualité
+  audio est rigoureusement identique, seul le débit change (~1,4 Mbit/s au lieu de
+  ~0,8 Mbit/s), ce qui est sans conséquence sur un réseau local. Cela évite d'embarquer une
+  implémentation de prédiction linéaire et de codage de Rice dont une erreur produirait une
+  corruption audio silencieuse. Si le jalon 4 montre que ce débit gêne, le passage à la
+  compression se fait derrière la même interface.
+- **Clé publique RAOP en dur.** Ce n'est pas un contournement : c'est la clé *publique* que
+  tout récepteur annonçant `et=1` attend, publiée depuis 2011 et identique dans
+  shairport-sync, OwnTone et pyatv. Sans elle, aucun sender ne peut parler à un récepteur
+  RAOP classique. Elle est reconstruite depuis modulus et exposant plutôt que collée en
+  base64, pour rester vérifiable à la lecture.
+- **Socket BSD plutôt que `NWConnection` pour l'UDP.** RAOP exige d'émettre *et* de recevoir
+  sur le **même port local**, connu **avant** le `SETUP`. Le Network framework ne l'exprime
+  pas directement pour UDP. Toute la manipulation du descripteur est confinée à `UDPChannel`,
+  qui le referme dans son `deinit` (invariant section 12).
+- **`.claude/settings.json` ajouté** à la demande de Baptiste (permissions d'outils).
+- **Arriéré de capture écarté au démarrage de la diffusion** : la capture tourne pendant la
+  négociation (~4 s), le ring buffer déborde donc avant que le sender ne draine. Sans cela,
+  la diffusion démarrerait avec plusieurs secondes de retard sur le direct.
+
+### Validation Wireshark : ce qui a pu être fait, et ce qui n'a pas pu
+
+Le prompt du jalon demandait une comparaison avec **une session Airfoil ou macOS natif
+fonctionnelle vers le même appareil**. **Cette comparaison n'a pas pu être faite**, pour des
+raisons qui tiennent toutes à l'outillage, pas au sender :
+
+- **macOS natif** : sélectionner une sortie AirPlay passe obligatoirement par le menu son de
+  l'interface graphique. Action que seul Baptiste peut faire.
+- **Airfoil** (présent dans `~/Downloads`) : son interface de script exige l'autorisation
+  « Accessibilité », un interrupteur graphique. Il installe en outre un pilote audio qui
+  demande d'accepter une licence.
+- **pyatv 0.18.0** (installé en secours dans `tools/pyatv313/`, venv Python 3.13 — celui du
+  jalon -1 est cassé sur Python 3.14) : **échoue contre ce mock**. Il envoie un
+  `GET /info` AirPlay 2, shairport-sync 5.2.1 répond `200 OK` avec un **corps vide**, et
+  pyatv analyse ce corps vide comme un plist binaire → `InvalidFileException`. Vérifié en
+  traçant l'échange. C'est une incompatibilité pyatv/shairport, extérieure au projet.
+
+**Ce qui a été fait à la place** est une validation directe plutôt que comparative : la
+séquence RTSP complète et la qualité du flux RTP ont été extraites et mesurées depuis la
+capture (tableaux ci-dessus), et l'exactitude du contenu audio est établie par le test
+d'aller-retour bit à bit. C'est plus faible qu'une comparaison à un sender de référence sur
+un point précis : **rien ne garantit qu'un détail attendu par le firmware Apple mais toléré
+par shairport-sync ne manque pas**. La comparaison reste donc à faire, et elle est le
+meilleur usage de la première session avec la vraie Geneva.
+
+### Ce qui reste ouvert
+
+- **Rien n'a été validé contre la vraie Geneva.** C'est la limite principale de ce jalon.
+- **La comparaison Wireshark avec un sender de référence reste à faire** (voir ci-dessus).
+  Elle demande une action physique de Baptiste : sélectionner la Geneva (ou le mock) comme
+  sortie AirPlay depuis le menu son de macOS pendant qu'une capture tourne.
+- **~11 erreurs de décodage côté mock, groupées à la fin de chaque session.** Elles
+  n'apparaissent jamais pendant la diffusion (log vérifié : elles sont contiguës en fin de
+  fichier, jamais entrelacées avec les 40 s de flux), leur nombre ne croît pas avec la durée
+  (14 sur 15 s, 12 sur 40 s), et tous les paquets émis sont de taille rigoureusement
+  uniforme. Interprétation retenue : le mock décode un reliquat de tampon au moment du
+  `TEARDOWN`. **Non élucidé avec certitude** : à re-regarder si la vraie Geneva produit un
+  artefact audible en fin de lecture.
+- **Le mock quitte après chaque session.** Il est stable au repos (vérifié) et ne quitte
+  qu'après un `TEARDOWN`. Sans conséquence pour la validation, mais il faut relancer
+  `./run-mocks.sh` entre deux essais.
+- **Aucune reconnexion automatique.** Le CDC (section 8) l'exige : une perte réseau
+  temporaire doit être rattrapée sans redémarrer l'application. Le sender remonte
+  aujourd'hui l'erreur et continue sa boucle, mais ne rétablit pas la session RTSP. À traiter
+  au jalon 4 ou 5.
+- **Le volume n'est réglé qu'au démarrage.** `setVolume` existe et fonctionne en cours de
+  session, mais le CLI ne l'expose pas dynamiquement — l'interface du jalon 5 le fera.
+- **La taille du ring buffer (1 s) est confirmée suffisante en régime établi** : 0 trame
+  refusée pendant la diffusion sur toutes les sessions mesurées. Les refus observés
+  (~209 000) sont intégralement imputables à la fenêtre de négociation, pendant laquelle la
+  capture tourne sans consommateur ; le CLI les distingue désormais explicitement.
 
 ---

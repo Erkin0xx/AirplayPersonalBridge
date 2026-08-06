@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(swift build *)",
+      "Bash(swift run *)",
+      "Bash(swift test *)",
+      "Bash(git *)",
+      "Bash(brew install *)",
+      "Bash(pip install *)",
+      "Bash(pip3 install *)",
+      "Bash(python *)",
+      "Bash(shairport-sync*)",
+      "Bash(source *)",
+      "Edit",
+      "Write",
+      "Read"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(git push --force *)"
+    ]
+  }
+}

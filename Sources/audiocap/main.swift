@@ -40,6 +40,11 @@ var appHint: String?
 var duration: Double = 10
 var outputPath: String?
 var listOnly = false
+/// Nom (partiel) du récepteur RAOP visé. Non nul = jalon 2 : on diffuse au lieu d'écrire
+/// un .wav.
+var airplayTarget: String?
+var airplayVolume: Float = -20
+var browseOnly = false
 
 var arguments = Array(CommandLine.arguments.dropFirst())
 var index = 0
@@ -63,13 +68,33 @@ while index < arguments.count {
         mode = .app
     case "--list":
         listOnly = true
+    case "--airplay":
+        index += 1
+        guard index < arguments.count else {
+            FileHandle.standardError.write(Data("--airplay attend un nom de récepteur\n".utf8))
+            exit(2)
+        }
+        airplayTarget = arguments[index]
+    case "--volume":
+        index += 1
+        guard index < arguments.count, let value = Float(arguments[index]) else {
+            FileHandle.standardError.write(Data("--volume attend un nombre en dB\n".utf8))
+            exit(2)
+        }
+        airplayVolume = value
+    case "--browse":
+        browseOnly = true
     case "--help", "-h":
         note("""
-            audiocap — capture audio de validation (jalon 1)
+            audiocap — capture audio et diffusion RAOP (jalons 1 et 2)
 
               --mode global|app|input   mode de capture (défaut : global)
               --app <nom|pid>           application à capter (implique --mode app)
               --list                    liste les process audio et quitte
+              --browse                  liste les récepteurs _raop._tcp et quitte
+              --airplay <nom>           diffuse vers ce récepteur RAOP au lieu d'écrire
+                                        un .wav (correspondance partielle sur le nom)
+              --volume <dB>             volume RAOP, −144 ou −30…0 (défaut : −20)
               <durée_s> <sortie.wav>    durée et fichier de sortie
 
             Exemples :
@@ -77,6 +102,8 @@ while index < arguments.count {
               ./audiocap 10 systeme.wav
               ./audiocap --app Music 10 music.wav
               ./audiocap --mode input 10 entree.wav
+              ./audiocap --browse
+              ./audiocap --airplay Geneva 30
             """)
         exit(0)
     default:
@@ -111,6 +138,28 @@ if listOnly {
         note("ERREUR : \(error)")
         exit(1)
     }
+}
+
+// --- Parcours des récepteurs RAOP (jalon 2) ---
+if browseOnly {
+    let devices = await RAOPDiscovery().browse()
+    if devices.isEmpty {
+        note("Aucun récepteur _raop._tcp trouvé sur le réseau.")
+        exit(1)
+    }
+    note("Récepteurs RAOP découverts :\n")
+    for device in devices {
+        note("""
+              \(device.displayName)  (\(device.serviceName))
+                adresse      : \(device.host):\(device.port)
+                format       : \(device.sampleRate) Hz, \(device.bitDepth) bits, \
+            \(device.channelCount) canaux
+                chiffrement  : \(device.supportsRSAEncryption ? "RSA-AES (et=1)" : "aucun")
+                compression  : \(device.supportsALAC ? "ALAC (cn=1)" : "PCM seul")
+                mot de passe : \(device.requiresPassword ? "OUI" : "non")
+            """)
+    }
+    exit(0)
 }
 
 let outputURL = URL(fileURLWithPath: outputPath ?? "capture-\(mode.rawValue).wav")
@@ -217,6 +266,61 @@ func report(_ writer: WAVWriter, _ meter: LevelMeter, _ ring: AudioRingBuffer) {
         """)
 }
 
+/// Diffuse le contenu du ring buffer vers un récepteur RAOP pour la durée demandée.
+///
+/// Le sender **lit** le ring buffer et ne l'écrit jamais : c'est exactement la frontière
+/// posée par l'invariant section 12. La capture, elle, ignore tout de cette destination.
+func streamToRAOP(
+    target: String,
+    ring: AudioRingBuffer,
+    format: AVAudioFormat,
+    volume: Float,
+    duration: Double
+) async throws {
+    note("Recherche du récepteur RAOP « \(target) »…")
+    let device = try await RAOPDiscovery().find(named: target)
+    note("""
+        Récepteur : \(device.displayName) (\(device.serviceName))
+          adresse     : \(device.host):\(device.port)
+          format cible: \(device.sampleRate) Hz, \(device.bitDepth) bits, \
+        \(device.channelCount) canaux
+          chiffrement : \(device.supportsRSAEncryption ? "RSA-AES" : "aucun")
+        """)
+
+    let sender = RAOPSender(device: device, ring: ring, captureFormat: format)
+    try await sender.start(volume: volume)
+    note("Session RAOP établie, diffusion pendant \(duration) s "
+        + "(volume \(volume) dB)…")
+
+    let deadline = Date().addingTimeInterval(duration)
+    while Date() < deadline {
+        try await Task.sleep(for: .seconds(1))
+        let statistics = await sender.statistics
+        note(String(
+            format: "  %5d paquets  %4d sync  %3d timing  %8d trames lues  %d erreurs",
+            statistics.packetsSent, statistics.syncPacketsSent,
+            statistics.timingResponsesSent, statistics.framesRead, statistics.errors
+        ))
+    }
+
+    let final = await sender.statistics
+    await sender.stop()
+    note("""
+
+        Résultat de la diffusion RAOP
+          récepteur          : \(device.displayName) (\(device.host):\(device.port))
+          paquets audio      : \(final.packetsSent)
+          paquets de synchro : \(final.syncPacketsSent)
+          réponses de timing : \(final.timingResponsesSent)
+          trames lues        : \(final.framesRead)
+          erreurs            : \(final.errors)
+          recalages          : \(final.resyncs)
+          trames refusées    : \(ring.droppedFrames) au total, dont \
+        \(final.droppedBeforeStreaming) pendant la négociation
+          dont en diffusion  : \(ring.droppedFrames - final.droppedBeforeStreaming)
+        """)
+}
+
 // --- Capture ---
 do {
     note("Mode : \(mode.rawValue)   durée : \(duration) s   sortie : \(outputURL.path)")
@@ -269,6 +373,16 @@ do {
         let activeSink = CaptureSink(format: format)
         sink = activeSink
 
+        // --- Jalon 2 : diffusion RAOP au lieu du dump .wav ---
+        if let target = airplayTarget {
+            try await streamToRAOP(
+                target: target, ring: activeSink.ring, format: format,
+                volume: airplayVolume, duration: duration
+            )
+            capture.stop()
+            exit(0)
+        }
+
         let writer = try WAVWriter(url: outputURL, format: format)
         let deadline = Date().addingTimeInterval(duration)
         while Date() < deadline {
@@ -313,6 +427,15 @@ do {
             + "\(format.isInterleaved ? "entrelacé" : "planaire")")
         let activeSink = CaptureSink(format: format)
         sink = activeSink
+
+        if let target = airplayTarget {
+            try await streamToRAOP(
+                target: target, ring: activeSink.ring, format: format,
+                volume: airplayVolume, duration: duration
+            )
+            capture.stop()
+            exit(0)
+        }
 
         let writer = try WAVWriter(url: outputURL, format: format)
         let deadline = Date().addingTimeInterval(duration)

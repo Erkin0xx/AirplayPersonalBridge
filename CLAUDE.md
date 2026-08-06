@@ -159,6 +159,78 @@ Logs dans `.mock-logs/`.
 - Services et ports observés : Geneva-Mock → `_raop._tcp`, port 5000.
   ApTV-HomePod-Mock → `_airplay._tcp`, port 7000.
 
+## Sender RAOP — faits vérifiés au jalon 2
+
+Format négocié avec le mock Geneva (annonce TXT `_raop._tcp`) : `sr=44100`, `ss=16`, `ch=2`,
+`et=0,1` (RSA-AES disponible), `cn=0,1` (ALAC disponible). **La capture livrant du 48 kHz, un
+rééchantillonnage vers 44,1 kHz est obligatoire** — il tourne dans la tâche du sender, en
+aval du ring buffer (emplacement autorisé par le CDC 4.5).
+
+Ports du récepteur observés : audio 6003, control 6001, timing 6002. **Ce sont ceux de la
+réponse au `SETUP` qui font foi**, jamais ceux demandés — ces derniers ne sont qu'une
+suggestion.
+
+### Les trois pièges du sender RAOP (chacun a coûté du temps)
+
+1. **L'en-tête ALAC fait 20 bits, pas 11.** Le décodeur (`alac.c` de shairport-sync, cas
+   « 2 channels ») lit 4 bits puis **12 bits** d'inutilisé avant `hasSize`,
+   `uncompressedBytes` (2 bits) et `isNotCompressed`. Plusieurs documentations informelles
+   décrivent un en-tête commençant par `channels - 1` sur 3 bits : ces 3 bits appartiennent
+   au *tag d'élément* du bitstream ALAC, **que RAOP ne transporte pas**. Avec 9 bits
+   manquants, `isNotCompressed` est lu à 0, le récepteur décode une trame compressée
+   inexistante et journalise `FIXME: unhandled prediction type`. Trame correcte pour 352
+   trames stéréo non compressées : **1 411 octets**.
+2. **`AVAudioConverter.convert` ne rend jamais plus de 4 096 trames par appel**, quelle que
+   soit la capacité du tampon de sortie, et signale `.inputRanDry` **en retenant encore des
+   trames**. S'arrêter sur ce statut perd ~6,5 % du flux, en silence et définitivement. Ne
+   sortir de la boucle que sur un appel réellement improductif (0 trame produite).
+3. **Un flux RTP doit être cadencé, pas envoyé en rafales.** Émettre tous les paquets
+   disponibles avant de dormir donne un intervalle médian de 0,7 ms pour 7,98 ms théoriques,
+   avec des pauses de près d'une seconde. Un paquet par tour de boucle, à l'échéance
+   (`nextDeadline += packetDuration`), donne 7,98 ms de moyenne et 0 rupture de séquence.
+
+### Autres points à ne pas réapprendre
+
+- **`TEARDOWN` et `SET_PARAMETER` doivent porter l'URI de session** construite à
+  l'`ANNOUNCE`, pas une URI reconstruite. shairport-sync tolère l'écart ; les récepteurs
+  matériels rejettent couramment un `TEARDOWN` dont l'URI ne correspond à aucune session, et
+  la session reste alors bloquée côté récepteur.
+- **Le base64 du SDP (`rsaaeskey`, `aesiv`) doit être sans bourrage `=`.**
+- **Le chiffrement audio repart du même IV à chaque paquet** (CBC non chaîné entre paquets)
+  et **laisse le reliquat de moins de 16 octets en clair**, sans bourrage. Les deux sont
+  exigés par le protocole : c'est ce qui rend une retransmission isolée décodable.
+- **La clé publique RAOP en dur n'est pas un secret** : c'est la clé *publique* qu'attend
+  tout récepteur annonçant `et=1`, identique dans shairport-sync, OwnTone et pyatv.
+- **Le mock quitte après chaque session** (`TEARDOWN`). Il est stable au repos. Relancer
+  `./run-mocks.sh start` entre deux essais.
+- **Écarter l'arriéré du ring buffer avant de commencer à diffuser** : la capture tourne
+  pendant la découverte Bonjour et la négociation RTSP (~4 s), le tampon a déjà débordé.
+  Sans cela, la diffusion démarre avec plusieurs secondes de retard sur le direct.
+- **`droppedFrames` du ring buffer est ambigu sans point de repère** : la quasi-totalité des
+  refus vient de la fenêtre de négociation, pas du régime établi. Photographier le compteur
+  au premier paquet émis pour distinguer les deux (`RAOPStatistics.droppedBeforeStreaming`).
+
+### Outils de comparaison : ce qui ne marche pas sur cette machine
+
+- **pyatv échoue contre shairport-sync 5.2.1** : il envoie un `GET /info` AirPlay 2, le mock
+  répond `200 OK` avec un corps **vide**, et pyatv analyse ce corps vide comme un plist
+  binaire → `InvalidFileException`. Incompatibilité pyatv/shairport, sans rapport avec le
+  code du projet.
+- **Le pyatv du jalon -1 (`tools/pyatv-venv/`) est cassé sur Python 3.14** (`asyncio.get_event_loop`
+  supprimé). Un venv Python 3.13 fonctionnel a été créé : **`tools/pyatv313/`**.
+- **Airfoil** (dans `~/Downloads`) exige l'autorisation « Accessibilité » pour son interface
+  de script, et installe un pilote audio sous licence à accepter : deux actions graphiques.
+- **Sélectionner une sortie AirPlay dans macOS passe obligatoirement par le menu son**, il
+  n'existe pas d'équivalent en ligne de commande. Toute comparaison avec un sender de
+  référence demande donc une action physique de Baptiste.
+
+### Capture réseau : filtrer sur la bonne interface
+
+Mock et sender tournant sur la **même machine**, le trafic passe par **`lo0`**, pas par
+`en0`. Un filtre `host 192.168.1.21` ne capte rien. Utiliser :
+`tshark -i lo0 -i en0 -f "tcp port 5000 or udp portrange 6000-6100"`.
+Ne pas déduire la taille de la charge utile de `frame.len` : lire `udp.length` et `data.len`.
+
 ## Environnement Python (outils de dev uniquement)
 
 Le Python de Homebrew est "externally managed" (PEP 668) : **aucune installation pip
@@ -166,7 +238,8 @@ globale n'est possible**, tout passe par un venv.
 
 - Mock AirPlay 2 : venv `tools/airplay2-receiver/proto/`.
 - pyatv (pairing du jalon 3, CLI uniquement) : venv dédié `tools/pyatv-venv/`,
-  binaire `tools/pyatv-venv/bin/atvremote`.
+  binaire `tools/pyatv-venv/bin/atvremote`. **Cassé sur Python 3.14** (voir jalon 2) :
+  utiliser **`tools/pyatv313/bin/atvremote`** (pyatv 0.18.0 sur Python 3.13).
 - `tools/` est gitignoré. pyatv et les mocks sont des outils de développement, **jamais des
   dépendances runtime de l'application** (CDC section 5).
 
