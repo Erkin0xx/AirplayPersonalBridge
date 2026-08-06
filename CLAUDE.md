@@ -220,12 +220,26 @@ suggestion.
   supprimé). Un venv Python 3.13 fonctionnel a été créé : **`tools/pyatv313/`**.
 - **Airfoil** (dans `~/Downloads`) exige l'autorisation « Accessibilité » pour son interface
   de script, et installe un pilote audio sous licence à accepter : deux actions graphiques.
-- **macOS ne propose PAS le mock Geneva comme sortie audio** (vérifié le 2026-08-06). Le
-  menu son ne liste que `ApTV-HomePod-Mock` (`_airplay._tcp`) et ignore Geneva-Mock
-  (`_raop._tcp`) : macOS récent ne propose comme sortie que les récepteurs **AirPlay 2**.
-  Conséquence durable : **aucune comparaison avec macOS natif n'est possible contre le mock
-  RAOP**, quelle que soit la manipulation — elle demandera la vraie Geneva. Ne pas y
-  repasser de temps.
+- **Deux sélecteurs de sortie AirPlay distincts dans macOS, qui ne listent pas la même
+  chose** (vérifié le 2026-08-06) :
+  - le **menu son de la barre de menus** ne montre que les récepteurs **AirPlay 2**
+    (`ApTV-HomePod-Mock`) et **omet** Geneva-Mock (`_raop._tcp`) ;
+  - le **sélecteur AirPlay d'Apple Music** liste bien **les deux**, Geneva-Mock compris.
+
+  Conséquence pratique : pour capturer une session RAOP de référence, **passer par Apple
+  Music**, pas par le menu son. Ne pas conclure d'une absence dans le menu son que macOS ne
+  sait pas parler à un récepteur AirPlay 1 — c'est faux, et cette erreur a été commise puis
+  corrigée à ce jalon.
+- **macOS ne parvient pas à diffuser vers shairport-sync 5.2.1, même en ne cochant que
+  lui.** Capture de 33 s : seulement deux `OPTIONS *` et leurs `200 OK`, jamais d'`ANNOUNCE`
+  ni d'audio. Symptômes visibles : sortie affichée comme active, aucun son, lecture qui
+  repart au début. Cause **non élucidée** — ce n'est *pas* le défi `Apple-Challenge`
+  (absent des requêtes, et shairport sait y répondre). **Ne pas y repasser de temps : la
+  comparaison avec macOS natif demandera la vraie Geneva.**
+- **macOS envoie un `OPTIONS *` avant l'`ANNOUNCE`** (`User-Agent: Music/…`,
+  `Client-Instance`, `DACP-ID`, `Active-Remote`). **Le sender du projet ne l'envoie pas** et
+  attaque directement par `ANNOUNCE` ; shairport l'accepte. À vérifier contre la vraie
+  Geneva : si elle refuse, ajouter l'`OPTIONS` préalable est trivial.
 - **Sélectionner une sortie AirPlay dans macOS passe par le menu son**, sans équivalent en
   ligne de commande. Toute comparaison avec un sender de référence demande donc une action
   physique de Baptiste, sur du matériel réel.

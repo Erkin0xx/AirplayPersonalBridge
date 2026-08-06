@@ -363,14 +363,31 @@ Le prompt du jalon demandait une comparaison avec **une session Airfoil ou macOS
 fonctionnelle vers le même appareil**. **Cette comparaison n'a pas pu être faite**, pour des
 raisons qui tiennent toutes à l'outillage, pas au sender :
 
-- **macOS natif** : **vérifié par Baptiste le 2026-08-06, Wireshark ouvert — le mock Geneva
-  n'apparaît pas du tout dans le menu son.** macOS ne liste que `ApTV-HomePod-Mock`
-  (`_airplay._tcp`, AirPlay 2) et ignore Geneva-Mock (`_raop._tcp`, AirPlay 1) : macOS récent
-  ne propose comme sortie que les récepteurs AirPlay 2. Ce n'est donc pas une contrainte
-  d'outillage contournable, mais une **impossibilité de principe contre ce mock** : la
-  comparaison avec macOS natif ne pourra se faire **qu'avec la vraie Geneva**.
-  Le mock Apple TV n'est pas un substitut — il parle AirPlay 2, protocole différent, sans
-  rapport avec le sender RAOP de ce jalon (il servira au jalon 3).
+- **macOS natif** : **possible, contrairement à ce qui était d'abord conclu.** Le menu son
+  de la barre de menus n'affiche pas Geneva-Mock, ce qui m'avait fait écrire à tort que
+  macOS ne savait pas parler à un récepteur AirPlay 1. **Le sélecteur AirPlay d'Apple Music,
+  lui, le liste bien** (vérifié par Baptiste le 2026-08-06, capture d'écran à l'appui), et
+  une capture montre macOS lui envoyant un `OPTIONS * RTSP/1.0` auquel le mock répond
+  `200 OK`.
+  **Mais la comparaison reste impossible contre ce mock** : refaite en ne cochant que
+  Geneva-Mock, la capture (33 s, `captures/genavamock uniquement.pcapng`) ne contient que
+  **4 messages RTSP** — deux `OPTIONS *` de macOS, deux `200 OK` du mock — et **aucun
+  `ANNOUNCE`, aucun paquet audio**. macOS tente, s'arrête après l'`OPTIONS`, recommence, puis
+  abandonne. Côté utilisateur cela se voit : sortie affichée comme sélectionnée, aucun son
+  nulle part, lecture qui repart au début à chaque bascule.
+
+  **Cause non élucidée.** Une première explication — défi RSA `Apple-Challenge` resté sans
+  réponse — a été proposée puis **infirmée** : les `OPTIONS` capturés ne portent aucun
+  en-tête `Apple-Challenge`, et shairport sait de toute façon y répondre (`rtsp.c`). Le refus
+  vient de macOS, sans message. À ne pas confondre avec un défaut du sender du projet : mon
+  sender négocie, lui, une session complète avec ce même mock.
+
+  **Écart concret relevé au passage, et c'est le vrai apport de cette capture** : macOS
+  envoie un `OPTIONS *` (avec `User-Agent: Music/1.6.5`, `Client-Instance`, `DACP-ID`,
+  `Active-Remote`) **avant** l'`ANNOUNCE`. **Mon sender n'envoie pas d'`OPTIONS` du tout** et
+  attaque directement par `ANNOUNCE`. shairport-sync l'accepte, mais rien ne garantit que la
+  vraie Geneva soit aussi tolérante. À vérifier en priorité au premier essai matériel, et à
+  ajouter si besoin — c'est peu coûteux.
 - **Airfoil** (présent dans `~/Downloads`) : son interface de script exige l'autorisation
   « Accessibilité », un interrupteur graphique. Il installe en outre un pilote audio qui
   demande d'accepter une licence.
