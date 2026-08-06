@@ -20,6 +20,18 @@ Ces règles valent pour tout le projet, à chaque session et à chaque jalon.
   trancher soi-même, appliquer, et signaler le choix dans le compte rendu de fin d'étape.
 - **Push git automatique**, sans demander à chaque fois. Dépôt :
   `https://github.com/Erkin0xx/AirplayPersonalBridge.git` (branche `main`).
+- **Commit et push automatiques en fin de tour** (décidé le 2026-08-06) : un hook `Stop`
+  déclare `.claude/auto-commit.sh`, qui commite et pousse tout ce qui a changé, sans
+  confirmation. Conséquences à connaître :
+  - l'historique contient des commits `auto: …` intermédiaires, **qui ne sont pas des
+    commits de clôture de jalon** — `PROGRESS.md` reste la source de vérité sur l'état réel ;
+  - le script ne fait rien si l'arbre est propre (jamais de commit vide) ;
+  - `touch .claude/skip-auto-commit` suspend le mécanisme sans toucher au hook ;
+  - un push impossible (réseau, conflit distant) ne bloque pas la fin de tour : le commit
+    local est fait et repartira au tour suivant.
+
+  Cela ne remplace pas la procédure de clôture de jalon, qui reste un commit **délibéré**
+  avec un message rédigé, après mise à jour de la documentation.
 - **Solliciter Baptiste uniquement dans deux cas :**
   1. une étape ou un jalon est terminé, et il faut faire le point ;
   2. il y a une **action concrète que lui seul peut faire** : lancer une vidéo dans un
@@ -28,6 +40,21 @@ Ces règles valent pour tout le projet, à chaque session et à chaque jalon.
      travail réel de sa part — jamais une simple confirmation ni une autorisation.
 - Le point d'arrêt en fin de jalon reste obligatoire (CDC section 14) : ne jamais enchaîner
   sur le jalon suivant sans son accord explicite. C'est la seule exception à ce qui précède.
+
+### Procédure de clôture de jalon — ordre à suivre
+
+Le CDC section 14 en fixe le principe ; voici la liste effective, **`README.md` inclus**
+(ajouté le 2026-08-06 — il annonçait encore le jalon 2 comme non fait alors qu'il l'était) :
+
+1. **`PROGRESS.md`** — fait / problèmes / reste ouvert, en distinguant explicitement
+   « validé contre mock » de « validé contre matériel réel ».
+2. **`CLAUDE.md`** (ce fichier) — les faits durables et les pièges vérifiés.
+3. **`README.md`** — tableau des jalons, commandes disponibles, limites connues. C'est la
+   vitrine du dépôt : un README périmé est la première chose que voit quelqu'un qui arrive.
+4. **Vault** — un ADR dans `decisions/` pour toute décision d'architecture arbitrée, une
+   entrée dans `notes.md` pour toute correction de raisonnement.
+5. **Commit délibéré** référençant le jalon (pas un `auto:`), puis **push**.
+6. **Point d'arrêt** et compte rendu.
 
 ---
 

@@ -19,5 +19,19 @@
       "Bash(rm -rf *)",
       "Bash(git push --force *)"
     ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/auto-commit.sh\"",
+            "timeout": 120,
+            "statusMessage": "Commit et push automatiques…"
+          }
+        ]
+      }
+    ]
   }
 }
