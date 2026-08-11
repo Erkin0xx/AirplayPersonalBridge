@@ -68,6 +68,8 @@ public actor RAOPSender {
     private var rtsp: RTSPClient?
     private var crypto: RAOPCrypto?
     private var encoder: ALACEncoder?
+    /// Codec retenu à la négociation : PCM brut (`L16`) plutôt qu'ALAC. Voir `negotiate`.
+    private var usesPCM = false
     private var resampler: RAOPResampler?
 
     private var audioChannel: UDPChannel?
@@ -265,7 +267,19 @@ public actor RAOPSender {
     }
 
     private func negotiate(volume: Float) async throws {
-        guard device.supportsALAC else { throw RAOPSenderError.alacUnsupported(device.serviceName) }
+        // Choix du codec d'après `cn`. Le PCM est préféré quand le récepteur l'annonce, pour
+        // deux raisons : notre encodeur ALAC produit de toute façon des trames **non
+        // compressées** (aucun gain de débit, 3 octets de plus par paquet), et la Geneva
+        // AeroSphere décode nos trames ALAC de travers — elle restitue un ton continu, alors
+        // qu'elle joue proprement le même flux en PCM (comparaison au fil avec pyatv,
+        // 2026-08-11). L'ALAC reste le repli pour un récepteur qui n'annoncerait pas `cn=0`.
+        if device.supportsPCM {
+            usesPCM = true
+        } else if device.supportsALAC {
+            usesPCM = false
+        } else {
+            throw RAOPSenderError.alacUnsupported(device.serviceName)
+        }
         // Choix du mode de chiffrement d'après ce que le récepteur annonce en `et`.
         // RSA-AES est préféré quand il est proposé : c'est le chemin validé au jalon 2, et le
         // conserver par défaut évite de changer le comportement contre les récepteurs qui
@@ -281,9 +295,9 @@ public actor RAOPSender {
             throw RAOPSenderError.encryptionUnsupported(device.serviceName)
         }
         self.crypto = crypto
-        self.encoder = ALACEncoder(
-            framesPerPacket: Self.framesPerPacket, channelCount: device.channelCount
-        )
+        self.encoder = usesPCM
+            ? nil
+            : ALACEncoder(framesPerPacket: Self.framesPerPacket, channelCount: device.channelCount)
         self.resampler = try RAOPResampler(
             inputFormat: captureFormat,
             outputSampleRate: Double(device.sampleRate),
@@ -351,7 +365,9 @@ public actor RAOPSender {
             "c=IN IP4 \(device.host)",
             "t=0 0",
             "m=audio 0 RTP/AVP 96",
-            "a=rtpmap:96 AppleLossless",
+            usesPCM
+                ? "a=rtpmap:96 L16/\(device.sampleRate)/\(device.channelCount)"
+                : "a=rtpmap:96 AppleLossless",
             "a=fmtp:96 \(fmtp)",
         ]
         if let crypto {
@@ -599,7 +615,7 @@ public actor RAOPSender {
     /// La manipulation porte sur `pendingSamples`, copie propre au sender extraite en aval du
     /// ring buffer : le tampon partagé n'est jamais touché (invariant section 12).
     private func sendNextPacket() throws {
-        guard let encoder, let audio = audioChannel else { return }
+        guard let audio = audioChannel else { return }
         let channels = device.channelCount
         let sampleCount = Self.framesPerPacket * channels
 
@@ -630,7 +646,20 @@ public actor RAOPSender {
         pendingSamples.removeFirst(consumedFrames * channels)
         synchronizer.didConsume(outputFrames: consumedFrames)
 
-        var payload = encoder.encode(block, frameCount: Self.framesPerPacket)
+        // En PCM, la charge utile est la suite des échantillons en **big-endian** : c'est
+        // l'ordre réseau qu'impose L16, et l'inverser donne du bruit blanc à pleine échelle.
+        var payload: [UInt8]
+        if let encoder {
+            payload = encoder.encode(block, frameCount: Self.framesPerPacket)
+        } else {
+            payload = []
+            payload.reserveCapacity(block.count * 2)
+            for sample in block {
+                let bits = UInt16(bitPattern: sample)
+                payload.append(UInt8(truncatingIfNeeded: bits >> 8))
+                payload.append(UInt8(truncatingIfNeeded: bits))
+            }
+        }
         // `crypto` est nil en mode clair (`et=0`) : la charge utile ALAC part telle quelle.
         try crypto?.encryptAudioInPlace(&payload)
 

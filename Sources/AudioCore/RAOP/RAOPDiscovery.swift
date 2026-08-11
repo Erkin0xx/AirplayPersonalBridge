@@ -30,6 +30,11 @@ public struct RAOPDevice: Sendable {
     public var supportsUnencrypted: Bool { txtList("et").contains("0") }
     /// Compression supportée, tel qu'annoncé par `cn` (0 = PCM, 1 = ALAC).
     public var supportsALAC: Bool { txtList("cn").contains("1") }
+    /// Le récepteur accepte-t-il le PCM brut (`cn` contenant 0) ?
+    ///
+    /// Décrit en SDP par `a=rtpmap:96 L16/44100/2`, charge utile en entiers 16 bits
+    /// **big-endian** (ordre réseau, conforme à L16 — relevé sur le fil contre la Geneva).
+    public var supportsPCM: Bool { txtList("cn").contains("0") }
     /// Fréquence d'échantillonnage annoncée (`sr`), 44 100 Hz par défaut en RAOP.
     public var sampleRate: Int { txt["sr"].flatMap(Int.init) ?? 44_100 }
     /// Profondeur annoncée (`ss`), 16 bits par défaut.
