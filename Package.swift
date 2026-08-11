@@ -14,6 +14,13 @@ let package = Package(
         // 14.0, d'où l'attribut @available(macOS 14.2) sur ProcessTapCapture lui-même.
         .macOS(.v15)
     ],
+    products: [
+        // Le cœur exposé comme bibliothèque, pour que l'app SwiftUI du jalon 5 puisse le
+        // lier depuis Xcode (CDC section 11 : l'interface se branche sur le cœur existant
+        // sans en dupliquer la logique). La dépendance reste à sens unique — AudioCore
+        // ignore toujours qu'une interface existe.
+        .library(name: "AudioCore", targets: ["AudioCore"]),
+    ],
     dependencies: [
         // Primitives atomiques pour le ring buffer lock-free (invariant section 12).
         // Bibliothèque officielle Apple ; l'alternative serait d'appeler les atomiques C

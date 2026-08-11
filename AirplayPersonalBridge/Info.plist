@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	Base fusionnée avec les clés générées par Xcode (GENERATE_INFOPLIST_FILE = YES).
+	N'y figurent que les deux clés que le mécanisme INFOPLIST_KEY_* ne sait pas produire :
+	il n'accepte qu'une liste connue de clés, et les rejette silencieusement en dehors —
+	vérifié ici, elles étaient absentes du bundle construit. Les autres (micro, réseau
+	local, version système) restent des réglages de build.
+-->
+<plist version="1.0">
+<dict>
+	<!-- Autorisation « enregistrement des sons du système » (kTCCServiceAudioCapture),
+	     dont dépendent les modes Process Tap global et par application (CDC 4.2).
+	     Distincte du micro, qui couvre le seul mode entrée physique. -->
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Capture le son système pour le diffuser vers les enceintes AirPlay.</string>
+
+	<!-- Services Bonjour interrogés par RAOPDiscovery et AirPlay2Discovery. Sans cette
+	     déclaration, macOS refuse la découverte à une app livrée en bundle — la CLI y
+	     échappait parce que l'autorisation appartenait à Terminal, pas à elle. -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_raop._tcp</string>
+		<string>_airplay._tcp</string>
+	</array>
+</dict>
+</plist>
