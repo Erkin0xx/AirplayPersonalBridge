@@ -355,12 +355,19 @@ final class BridgeState {
 
     /// Traduit le gain de l'interface vers l'échelle de volume AirPlay.
     ///
-    /// Le protocole attend des décibels dans `-30…0`, avec `-144` pour le silence — ce n'est
-    /// pas la même échelle que celle affichée, qui descend à -60. Les valeurs intermédiaires
-    /// sont donc écrêtées, et seul le silence franc devient `-144`.
+    /// Deux échelles distinctes : l'interface court de `-60` à `0` dB, le protocole n'accepte
+    /// que `-30…0`, plus `-144` pour le silence. Écrêter revenait à rendre **toute la moitié
+    /// basse du bouton inopérante** — le volume ne bougeait plus en dessous de -30 dB, ce qui
+    /// donnait un réglage à moitié mort. La course est donc remise à l'échelle, pour que
+    /// chaque degré de rotation agisse.
+    ///
+    /// Conséquence assumée : un même nombre affiché ne correspond plus à la même atténuation
+    /// chez le récepteur. C'est le prix d'un bouton dont toute la course sert, et l'affichage
+    /// reste monotone — ce que l'oreille demande d'un volume.
     static func receiverVolume(forGainDB gain: Double) -> Float {
         guard gain > silenceDB else { return -144 }
-        return Float(min(max(gain, -30), 0))
+        let clamped = min(max(gain, silenceDB), 0)
+        return Float(clamped / silenceDB * -30)
     }
 }
 
