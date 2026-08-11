@@ -15,7 +15,7 @@ import OSLog
 public final class ProcessTapCapture {
     /// Les deux modes bâtis sur le Process Tap. Le choix se fait à la création du tap,
     /// sans changement d'architecture entre les deux (CDC 4.2).
-    public enum Mode {
+    public enum Mode: Sendable {
         /// Son système global. Les process listés sont exclus (liste vide = tout capter).
         case globalExcluding(pids: [pid_t])
         /// Mixdown d'une application précise.

@@ -135,6 +135,11 @@ final class BridgeState {
 
     private(set) var isStreaming = false
 
+    /// Le moteur, seul détenteur de la capture et des senders. `BridgeState` ne manipule
+    /// jamais un ring buffer ni un sender directement — il demande et il reflète.
+    private let engine = BridgeEngine()
+    private var pollTask: Task<Void, Never>?
+
     // MARK: - Plan de la pièce
 
     var roomLayout = RoomLayout.load()
@@ -226,13 +231,88 @@ final class BridgeState {
 
     // MARK: - Diffusion
 
-    /// TODO(moteur) : démarre réellement capture + senders via le futur `BridgeEngine`.
-    /// L'état visuel est déjà celui que le moteur produira, pour que les vues n'aient pas
-    /// à changer au branchement.
+    /// Démarre ou arrête la diffusion via `BridgeEngine`.
+    ///
+    /// Le moteur ne connaît ni les vues ni les réglages : on lui passe une capture et une
+    /// liste de sorties, il publie un état qu'on recopie ici. C'est ce sens unique qui
+    /// permet à une panne de sortie de rester confinée à sa ligne.
     func toggleStreaming() {
-        isStreaming.toggle()
-        for output in outputs where output.isEnabled {
-            output.connection = isStreaming ? .streaming : .idle
+        if isStreaming {
+            Task { await stopStreaming() }
+        } else {
+            Task { await startStreaming() }
+        }
+    }
+
+    private func startStreaming() async {
+        guard let mode = selectedSource.tapMode else {
+            // L'entrée physique ne passe pas par un Process Tap : le moteur ne la gère pas
+            // encore, et le dire vaut mieux qu'un bouton qui ne fait rien.
+            discoveryNotice = "L'entrée physique n'est pas encore diffusable depuis l'interface."
+            return
+        }
+        let selected = outputs.filter(\.isEnabled)
+        guard !selected.isEmpty else {
+            discoveryNotice = "Aucune sortie sélectionnée."
+            return
+        }
+
+        let requests = selected.map { output in
+            BridgeEngine.OutputRequest(
+                id: output.id,
+                proto: output.proto == .raop ? .raop : .airplay2,
+                deviceName: output.displayName,
+                volumeDB: Float(effectiveGainDB(for: output)),
+                manualDelaySeconds: output.delayMS / 1000
+            )
+        }
+
+        for output in selected { output.connection = .connecting }
+        do {
+            try await engine.start(mode: mode, outputs: requests)
+            isStreaming = true
+            discoveryNotice = nil
+            startPollingEngine()
+        } catch {
+            discoveryNotice = "Démarrage impossible : \(error)"
+            for output in selected { output.connection = .idle }
+        }
+    }
+
+    private func stopStreaming() async {
+        pollTask?.cancel()
+        pollTask = nil
+        await engine.stop()
+        isStreaming = false
+        for output in outputs { output.connection = .idle }
+    }
+
+    /// Recopie l'état du moteur dans les sorties, une fois par seconde.
+    ///
+    /// Le moteur est la source de vérité : la vue n'invente aucun état, elle reflète. Une
+    /// sortie que le moteur déclare en échec le reste ici, même si les autres diffusent.
+    private func startPollingEngine() {
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let snapshots = await engine.outputs
+                await MainActor.run {
+                    for snapshot in snapshots {
+                        guard let output = self.outputs.first(where: { $0.id == snapshot.id })
+                        else { continue }
+                        switch snapshot.phase {
+                        case .idle: output.connection = .idle
+                        case .connecting: output.connection = .connecting
+                        case .streaming: output.connection = .streaming
+                        case let .failed(message): output.connection = .failed(message)
+                        }
+                        output.diagnostics.packetsSent = snapshot.packetsSent
+                        output.diagnostics.errors = snapshot.errors
+                        output.diagnostics.framesInserted = snapshot.driftCorrections
+                    }
+                }
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            }
         }
     }
 }
