@@ -13,12 +13,17 @@ import SwiftUI
 /// afficher ne coûte rien de plus qu'une mise en page.
 struct DiagnosticsView: View {
     let state: BridgeState
+    /// Fermeture de la feuille. Une feuille modale sans échappatoire visible piège
+    /// l'utilisateur : le bouton est ici la seule sortie.
+    var onClose: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("Diagnostic").font(.title3.bold())
                 Spacer()
+                Button("Fermer", action: onClose)
+                    .keyboardShortcut(.cancelAction)
             }
             .padding()
 

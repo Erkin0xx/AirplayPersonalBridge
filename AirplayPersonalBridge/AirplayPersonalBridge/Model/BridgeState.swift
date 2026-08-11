@@ -276,7 +276,9 @@ extension BridgeState {
         state.outputs = [geneva, appleTV]
         state.isStreaming = true
         state.sources = [
-            .systemWide, .application(pid: 501, name: "Music"), .inputDevice,
+            .systemWide,
+            .application(pids: [501], name: "Music", bundleID: "com.apple.Music"),
+            .inputDevice,
         ]
         return state
     }
