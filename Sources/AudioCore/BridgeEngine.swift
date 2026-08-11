@@ -97,6 +97,20 @@ public actor BridgeEngine {
     private var capture: ProcessTapCapture?
     private var fanout: CaptureFanout?
     private var tasks: [Task<Void, Never>] = []
+    /// Senders en cours, pour pouvoir leur pousser un volume sans les redémarrer. Les deux
+    /// protocoles ont des types distincts mais la même API de volume, d'où cet enveloppement.
+    private enum Sender {
+        case raop(RAOPSender)
+        case airplay2(AirPlay2Sender)
+
+        func setVolume(_ volumeDB: Float) async throws {
+            switch self {
+            case let .raop(sender): try await sender.setVolume(volumeDB)
+            case let .airplay2(sender): try await sender.setVolume(volumeDB)
+            }
+        }
+    }
+    private var senders: [String: Sender] = [:]
     private var snapshots: [String: OutputSnapshot] = [:]
     private(set) public var isRunning = false
 
@@ -200,8 +214,10 @@ public actor BridgeEngine {
                 )
                 await sender.setManualDelay(seconds: request.manualDelaySeconds)
                 try await sender.start(volume: request.volumeDB)
+                register(.raop(sender), for: request.id)
                 await update(request.id) { $0.phase = .streaming }
                 await monitorRAOP(sender, id: request.id)
+                register(nil, for: request.id)
                 await sender.stop()
 
             case .airplay2:
@@ -211,8 +227,10 @@ public actor BridgeEngine {
                 )
                 await sender.setManualDelay(seconds: request.manualDelaySeconds)
                 try await sender.start(volume: request.volumeDB)
+                register(.airplay2(sender), for: request.id)
                 await update(request.id) { $0.phase = .streaming }
                 await monitorAirPlay2(sender, id: request.id)
+                register(nil, for: request.id)
                 await sender.stop()
             }
         } catch is CancellationError {
@@ -251,6 +269,25 @@ public actor BridgeEngine {
                 $0.residualErrorSeconds = sync.residualErrorSeconds
                 $0.driftCorrections = statistics.framesInserted + statistics.framesRemoved
             }
+        }
+    }
+
+    private func register(_ sender: Sender?, for id: String) {
+        senders[id] = sender
+    }
+
+    /// Pousse un volume à une sortie déjà en diffusion, sans interrompre le flux.
+    ///
+    /// Sans effet si la sortie n'est pas encore connectée : son volume de départ est celui de
+    /// la requête, et un réglage fait avant la connexion serait de toute façon écrasé.
+    /// Les erreurs ne sont pas propagées — un récepteur qui refuse un changement de volume ne
+    /// doit pas faire tomber la session.
+    public func setVolume(_ volumeDB: Float, for id: String) async {
+        guard let sender = senders[id] else { return }
+        do {
+            try await sender.setVolume(volumeDB)
+        } catch {
+            log.error("Volume refusé par la sortie \(id, privacy: .public) : \(error)")
         }
     }
 

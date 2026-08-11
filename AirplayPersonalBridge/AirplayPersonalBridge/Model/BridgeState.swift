@@ -98,11 +98,12 @@ final class OutputState: Identifiable {
 
 /// L'état complet de l'interface.
 ///
-/// Aujourd'hui : la découverte est réelle, la diffusion ne l'est pas. Tout ce qui touche au
-/// démarrage du flux est marqué `TODO(moteur)` et attend l'extraction de l'orchestration
-/// hors de `Sources/audiocap/main.swift` (780 lignes) vers `AudioCore`. Cette classe est
-/// dessinée pour que ce branchement se réduise à remplacer des corps de méthode, sans
-/// toucher aux vues.
+/// Découverte et diffusion sont réelles : `BridgeEngine` détient la capture et les senders,
+/// cette classe lui passe des intentions et recopie l'état qu'il publie. Elle n'invente aucun
+/// état et ne manipule jamais un ring buffer ni un sender directement.
+///
+/// Limite connue : l'entrée physique (ligne/micro) n'est pas encore diffusable — le moteur ne
+/// gère que les modes Process Tap, et le bouton le dit plutôt que de rester sans effet.
 @Observable
 final class BridgeState {
     // MARK: - Source
@@ -139,6 +140,8 @@ final class BridgeState {
     /// jamais un ring buffer ni un sender directement — il demande et il reflète.
     private let engine = BridgeEngine()
     private var pollTask: Task<Void, Never>?
+    /// Dernier volume réellement envoyé à chaque sortie, pour n'émettre que sur changement.
+    private var lastPushedVolume: [String: Float] = [:]
 
     // MARK: - Plan de la pièce
 
@@ -182,19 +185,31 @@ final class BridgeState {
         async let airplay2 = AirPlay2Discovery().browse()
         let (raopDevices, airplay2Devices) = await (raop, airplay2)
 
-        let discovered =
-            raopDevices.map {
-                OutputState(
-                    id: "raop/\($0.serviceName)", displayName: $0.displayName,
-                    host: $0.host, port: $0.port, proto: .raop
-                )
-            }
-            + airplay2Devices.map {
-                OutputState(
-                    id: "airplay2/\($0.serviceName)", displayName: $0.serviceName,
-                    host: $0.host, port: $0.port, proto: .airplay2
-                )
-            }
+        // Un même appareil s'annonce sur les DEUX services : les HomePod et l'Apple TV en
+        // `_raop._tcp` et `_airplay._tcp`, la Geneva également. Les lister tels quels donne
+        // deux lignes par enceinte, dont une injouable. On n'en garde qu'une par appareil,
+        // identifié par son adresse.
+        //
+        // Critère de choix : l'AirPlay 2 l'emporte **seulement si l'appareil annonce le
+        // pairing transitoire** (bit 48), qui est le chemin que ce projet sait emprunter. La
+        // Geneva s'annonce bien en `_airplay._tcp` mais avec `features=0x444c0a00`, sans
+        // aucun bit de pairing : c'est un récepteur AirPlay 1, il repasse en RAOP.
+        var byHost: [String: OutputState] = [:]
+        for device in raopDevices {
+            byHost[device.host] = OutputState(
+                id: "raop/\(device.serviceName)", displayName: device.displayName,
+                host: device.host, port: device.port, proto: .raop
+            )
+        }
+        for device in airplay2Devices where device.supportsTransientPairing {
+            byHost[device.host] = OutputState(
+                id: "airplay2/\(device.serviceName)", displayName: device.serviceName,
+                host: device.host, port: device.port, proto: .airplay2
+            )
+        }
+        let discovered = byHost.values.sorted {
+            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+        }
 
         // Les réglages déjà faits survivent à un rafraîchissement : une sortie qui
         // réapparaît sous la même identité Bonjour retrouve son trim, son délai et son
@@ -311,9 +326,41 @@ final class BridgeState {
                         output.diagnostics.framesInserted = snapshot.driftCorrections
                     }
                 }
-                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                // Les volumes sont calculés sur le fil principal, avec le reste de l'état,
+                // puis poussés hors de lui : le moteur est un acteur, il n'a pas à y être.
+                let pending = await MainActor.run { self.pendingVolumeChanges() }
+                for (id, volume) in pending {
+                    await self.engine.setVolume(volume, for: id)
+                }
+                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
             }
         }
+    }
+
+    /// Pousse aux senders les volumes qui ont changé depuis le dernier tour.
+    ///
+    /// Détecter le changement plutôt que réagir à chaque frappe du curseur évite d'envoyer un
+    /// `SET_PARAMETER` par pixel déplacé, tout en couvrant les trois chemins qui modifient le
+    /// gain — master, trim par sortie, et silence.
+    private func pendingVolumeChanges() -> [(String, Float)] {
+        var changes: [(String, Float)] = []
+        for output in outputs {
+            let target = Self.receiverVolume(forGainDB: effectiveGainDB(for: output))
+            guard lastPushedVolume[output.id] != target else { continue }
+            lastPushedVolume[output.id] = target
+            changes.append((output.id, target))
+        }
+        return changes
+    }
+
+    /// Traduit le gain de l'interface vers l'échelle de volume AirPlay.
+    ///
+    /// Le protocole attend des décibels dans `-30…0`, avec `-144` pour le silence — ce n'est
+    /// pas la même échelle que celle affichée, qui descend à -60. Les valeurs intermédiaires
+    /// sont donc écrêtées, et seul le silence franc devient `-144`.
+    static func receiverVolume(forGainDB gain: Double) -> Float {
+        guard gain > silenceDB else { return -144 }
+        return Float(min(max(gain, -30), 0))
     }
 }
 
