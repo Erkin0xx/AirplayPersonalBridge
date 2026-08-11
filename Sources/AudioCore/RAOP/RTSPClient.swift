@@ -173,10 +173,15 @@ public actor RTSPClient {
         timeout: Duration = .seconds(10)
     ) async throws -> RTSPResponse {
         guard let connection else { throw RTSPError.notConnected }
-        sequenceNumber += 1
 
         var outgoing = request
-        outgoing.headers.insert(("CSeq", String(sequenceNumber)), at: 0)
+        // Le compteur n'avance que pour les requêtes RTSP : celles du pairing AirPlay 2 sont
+        // des `POST` HTTP/1.1 sans `CSeq`, et elles ne doivent pas décaler la numérotation du
+        // `SETUP` qui suit.
+        if outgoing.usesRTSP {
+            sequenceNumber += 1
+            outgoing.headers.insert(("CSeq", String(sequenceNumber)), at: 0)
+        }
         // Ces deux en-têtes ne sont ajoutés que si l'appelant ne les a pas déjà posés. Sans
         // cette garde, une requête AirPlay 2 — qui fixe son propre `User-Agent` et son
         // `Client-Instance` — partait avec chacun **en double**. airplay2-receiver l'acceptait ;
@@ -191,6 +196,11 @@ public actor RTSPClient {
         appendIfAbsent("Client-Instance", clientInstance)
 
         var payload = outgoing.serialized()
+        // Fichier témoin plutôt que variable d'environnement : `open` ne transmet pas
+        // l'environnement au processus qu'il lance (voir le wrapper `./audiocap`).
+        if FileManager.default.fileExists(atPath: "/tmp/audiocap-dump-rtsp") {
+            try? payload.write(to: URL(fileURLWithPath: "/tmp/rtsp-\(outgoing.method)-\(sequenceNumber).bin"))
+        }
         if let controlChannel {
             payload = try controlChannel.outbound.seal(payload)
         }

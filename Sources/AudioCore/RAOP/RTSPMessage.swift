@@ -11,17 +11,34 @@ public struct RTSPRequest: Sendable {
     public var headers: [(name: String, value: String)]
     public var body: Data
 
-    public init(method: String, uri: String, headers: [(name: String, value: String)] = [], body: Data = Data()) {
+    /// Version de protocole portée par la ligne de requête.
+    ///
+    /// Le pairing AirPlay 2 sort du cadre RTSP : pyatv y poste en **`HTTP/1.1`, sans `CSeq`**,
+    /// de sorte que le `SETUP` qui suit est la première requête RTSP de la connexion et porte
+    /// `CSeq: 1`. Un `CSeq` déjà avancé par le pairing est le dernier écart relevé avec lui.
+    public var protocolVersion: String
+
+    /// Vrai pour une requête RTSP, qui doit porter un `CSeq`.
+    public var usesRTSP: Bool { protocolVersion.hasPrefix("RTSP") }
+
+    public init(
+        method: String,
+        uri: String,
+        headers: [(name: String, value: String)] = [],
+        body: Data = Data(),
+        protocolVersion: String = "RTSP/1.0"
+    ) {
         self.method = method
         self.uri = uri
         self.headers = headers
         self.body = body
+        self.protocolVersion = protocolVersion
     }
 
     /// Sérialise la requête. `Content-Length` est ajouté automatiquement si le corps n'est
     /// pas vide et que l'appelant ne l'a pas déjà posé.
     public func serialized() -> Data {
-        var text = "\(method) \(uri) RTSP/1.0\r\n"
+        var text = "\(method) \(uri) \(protocolVersion)\r\n"
         for header in headers {
             text += "\(header.name): \(header.value)\r\n"
         }

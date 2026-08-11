@@ -109,9 +109,10 @@ public actor AirPlay2PairingSession {
                     ("User-Agent", "AirPlay/320.20"),
                     ("Connection", "keep-alive"),
                     ("X-Apple-HKP", "4"),
-                    ("Content-Length", "0"),
+                    ("Content-Type", "application/octet-stream"),
                 ],
-                body: Data()
+                body: Data(),
+                protocolVersion: "HTTP/1.1"
             ))
         } catch {
             log.debug("/pair-pin-start refusé (\(error)) — poursuite du pair-setup")
@@ -186,12 +187,16 @@ public actor AirPlay2PairingSession {
             method: "POST",
             uri: "/pair-setup",
             headers: [
-                ("Content-Type", "application/pairing+tlv8"),
                 ("Content-Length", String(body.count)),
+                ("User-Agent", "AirPlay/320.20"),
+                ("Connection", "keep-alive"),
                 // Indique au récepteur le mode de pairing employé. 4 = transitoire.
                 ("X-Apple-HKP", "4"),
+                ("Content-Type", "application/octet-stream"),
             ],
-            body: body
+            body: body,
+            // Le pairing sort du cadre RTSP : pyatv y poste en HTTP/1.1, sans CSeq.
+            protocolVersion: "HTTP/1.1"
         )
         let response = try await client.send(request)
 
