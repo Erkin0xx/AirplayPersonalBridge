@@ -49,6 +49,8 @@ var browseOnly = false
 /// Combiné à `--airplay`, les deux sorties diffusent **en parallèle**, chacune sur son
 /// propre ring buffer (invariant section 12).
 var airplay2Target: String?
+/// Fichier de credentials d'appairage système, pour un récepteur qui refuse le transitoire.
+var airplay2CredentialsPath: String?
 var airplay2Volume: Float = -20
 var browse2Only = false
 /// Réglage manuel du délai par sortie, en millisecondes (CDC 4.5 : fine-tune et filet de
@@ -122,6 +124,13 @@ while index < arguments.count {
             exit(2)
         }
         airplay2DelayMs = value
+    case "--credentials2":
+        index += 1
+        guard index < arguments.count else {
+            FileHandle.standardError.write(Data("--credentials2 attend un chemin\n".utf8))
+            exit(1)
+        }
+        airplay2CredentialsPath = arguments[index]
     case "--browse2":
         browse2Only = true
     case "--help", "-h":
@@ -474,6 +483,7 @@ func streamToRAOP(
 /// Même frontière qu'en RAOP : le sender **lit** son ring buffer et ne l'écrit jamais, et
 /// la capture ignore tout de cette destination (invariant section 12).
 func streamToAirPlay2(
+    credentialsPath: String? = nil,
     target: String,
     ring: AudioRingBuffer,
     format: AVAudioFormat,
@@ -491,7 +501,17 @@ func streamToAirPlay2(
           pairing     : \(device.supportsTransientPairing ? "transitoire" : "transitoire NON proposé")
         """)
 
-    let sender = AirPlay2Sender(device: device, ring: ring, captureFormat: format, clock: clock)
+    // Un récepteur qui exige l'appairage système (un Apple TV) refuse le transitoire en 470.
+    // Ses credentials, obtenus une fois, se rejouent alors par pair-verify.
+    var credentials: HapCredentials?
+    if let path = credentialsPath {
+        credentials = try HapCredentials.load(contentsOf: URL(fileURLWithPath: path))
+        note("Credentials d'appairage système chargés depuis \(path)")
+    }
+    let sender = AirPlay2Sender(
+        device: device, ring: ring, captureFormat: format, clock: clock,
+        credentials: credentials
+    )
     await sender.setManualDelay(seconds: manualDelaySeconds)
     try await sender.start(volume: volume)
     note("Session AirPlay 2 établie, diffusion pendant \(duration) s "
@@ -549,6 +569,7 @@ func streamToAirPlay2(
 /// restituer la trame captée qu'il est en train d'envoyer, et l'annonce sur son propre canal
 /// de synchronisation. Aucun des deux ne sait que l'autre existe (invariant section 12).
 func streamToBothOutputs(
+    airplay2CredentialsPath: String?,
     raopTarget: String,
     airplay2Target: String,
     raopRing: AudioRingBuffer,
@@ -580,6 +601,7 @@ func streamToBothOutputs(
         group.addTask {
             do {
                 try await streamToAirPlay2(
+                    credentialsPath: airplay2CredentialsPath,
                     target: airplay2Target, ring: airplay2Ring, format: format,
                     volume: airplay2Volume, duration: duration,
                     clock: clock, manualDelaySeconds: airplay2DelaySeconds
@@ -614,6 +636,7 @@ func runRequestedOutputs(sink: CaptureSink, format: AVAudioFormat) async throws 
         let secondaryRing = sink.secondaryRing {
         // Deux sorties : chacune son ring buffer (invariant section 12), la même horloge.
         await streamToBothOutputs(
+            airplay2CredentialsPath: airplay2CredentialsPath,
             raopTarget: raopTarget, airplay2Target: ap2Target,
             raopRing: sink.ring, airplay2Ring: secondaryRing,
             format: format, raopVolume: airplayVolume,
@@ -633,6 +656,7 @@ func runRequestedOutputs(sink: CaptureSink, format: AVAudioFormat) async throws 
     }
     if let target = airplay2Target {
         try await streamToAirPlay2(
+            credentialsPath: airplay2CredentialsPath,
             target: target, ring: sink.ring, format: format,
             volume: airplay2Volume, duration: duration,
             clock: clock, manualDelaySeconds: airplay2Delay

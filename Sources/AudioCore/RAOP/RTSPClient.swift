@@ -196,11 +196,6 @@ public actor RTSPClient {
         appendIfAbsent("Client-Instance", clientInstance)
 
         var payload = outgoing.serialized()
-        // Fichier témoin plutôt que variable d'environnement : `open` ne transmet pas
-        // l'environnement au processus qu'il lance (voir le wrapper `./audiocap`).
-        if FileManager.default.fileExists(atPath: "/tmp/audiocap-dump-rtsp") {
-            try? payload.write(to: URL(fileURLWithPath: "/tmp/rtsp-\(outgoing.method)-\(sequenceNumber).bin"))
-        }
         if let controlChannel {
             payload = try controlChannel.outbound.seal(payload)
         }

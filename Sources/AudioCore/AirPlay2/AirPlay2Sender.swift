@@ -91,6 +91,9 @@ public actor AirPlay2Sender {
     private var streamTask: Task<Void, Never>?
     private var currentVolume: Float = -20
     private let reconnects: Bool
+    /// Credentials d'appairage système, quand ce récepteur en exige un. `nil` = pairing
+    /// transitoire, qui n'a rien à mémoriser.
+    private let credentials: HapCredentials?
     private var sessionLost = false
     private var consecutiveSendErrors = 0
 
@@ -117,12 +120,14 @@ public actor AirPlay2Sender {
         ring: AudioRingBuffer,
         captureFormat: AVAudioFormat,
         clock: PlaybackClockProtocol? = nil,
-        reconnects: Bool = true
+        reconnects: Bool = true,
+        credentials: HapCredentials? = nil
     ) {
         self.device = device
         self.ring = ring
         self.captureFormat = captureFormat
         self.reconnects = reconnects
+        self.credentials = credentials
         let effectiveClock =
             clock ?? SharedPlaybackClock(captureSampleRate: captureFormat.sampleRate)
         (effectiveClock as? SharedPlaybackClock)?.startIfNeeded()
@@ -261,10 +266,17 @@ public actor AirPlay2Sender {
         rtsp = client
         try await client.connect()
 
-        // 1. Pair-setup transitoire. Refuse d'emblée si le récepteur ne l'annonce pas,
-        //    plutôt que d'échouer plus loin sur un message cryptographique obscur.
+        // 1. Pairing. Deux chemins, et c'est la présence de credentials qui tranche :
+        //    un appairage système déjà acquis se rejoue par `pair-verify`, sans code à
+        //    saisir ; à défaut, on tente le transitoire, qui n'exige rien mais que certains
+        //    récepteurs — un Apple TV, typiquement — refusent en 470.
         let pairing = AirPlay2PairingSession(client: client, device: device)
-        let keys = try await pairing.performTransientPairSetup()
+        let keys: AirPlay2PairingSession.SessionKeys
+        if let credentials {
+            keys = try await pairing.performPairVerify(credentials: credentials)
+        } else {
+            keys = try await pairing.performTransientPairSetup()
+        }
 
         // 2. Tout ce qui suit passe en chiffré. À activer seulement une fois la réponse M4
         //    entièrement lue : le récepteur ne chiffre qu'à partir du message suivant.

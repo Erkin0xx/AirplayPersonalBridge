@@ -39,6 +39,10 @@ public actor AirPlay2PairingSession {
         case malformedResponse(step: String)
         /// Étape inattendue dans la réponse (M2 attendu, autre chose reçu).
         case unexpectedState(step: String)
+        /// Le récepteur ne s'est pas identifié comme celui avec qui l'appairage a été fait.
+        case receiverIdentityMismatch
+        /// La signature du récepteur ne vérifie pas avec sa clé publique long terme.
+        case receiverSignatureInvalid
 
         public var description: String {
             switch self {
@@ -54,6 +58,10 @@ public actor AirPlay2PairingSession {
                 return "réponse de pairing illisible à l'étape \(step)"
             case let .unexpectedState(step):
                 return "étape de pairing inattendue dans la réponse (\(step))"
+            case .receiverIdentityMismatch:
+                return "le récepteur renvoie un identifiant qui n'est pas celui appairé"
+            case .receiverSignatureInvalid:
+                return "signature du récepteur invalide — credentials périmés ou usurpation"
             }
         }
     }
@@ -168,11 +176,129 @@ public actor AirPlay2PairingSession {
         )
     }
 
+    /// Rejoue un appairage système déjà acquis et produit les clés de session.
+    ///
+    /// C'est le pendant du transitoire pour un récepteur qui exige l'appairage persistant —
+    /// un Apple TV, typiquement, qui refuse le transitoire en `470`. Aucun code n'est
+    /// demandé : les credentials remplacent la saisie.
+    ///
+    /// Déroulé (référence : `pyatv/auth/hap_srp.py`, `verify1`/`verify2`) :
+    ///
+    /// 1. M1 — on envoie une clé publique X25519 **éphémère**, tirée pour cette session.
+    /// 2. M2 — le récepteur renvoie la sienne et un sous-TLV chiffré.
+    /// 3. Le secret partagé X25519 donne, par HKDF, la clé qui déchiffre ce sous-TLV. On y
+    ///    trouve l'identifiant du récepteur et sa signature, qu'on vérifie avec sa clé
+    ///    publique long terme. **C'est cette étape qui authentifie le récepteur** : sans
+    ///    elle, n'importe quelle machine du réseau pourrait se faire passer pour lui.
+    /// 4. M3 — on signe à notre tour et on renvoie le tout chiffré.
+    ///
+    /// Les clés du canal de contrôle dérivent du **secret X25519**, pas d'une clé SRP :
+    /// c'est la différence de fond avec le transitoire.
+    public func performPairVerify(credentials: HapCredentials) async throws -> SessionKeys {
+        log.info("pair-verify vers \(self.device.serviceName, privacy: .public)")
+
+        let ephemeral = try Curve25519KeyPair()
+
+        let m1 = PairingTLV8.encode([
+            (.state, PairingTLV8.byte(PairingTLV8.State.m1.rawValue)),
+            (.publicKey, ephemeral.publicKey),
+        ])
+        let m2 = try await exchange(m1, step: "verify-M1", uri: "/pair-verify")
+
+        guard let receiverPublic = m2[.publicKey], let sealed = m2[.encryptedData] else {
+            throw Failure.malformedResponse(step: "verify-M2")
+        }
+
+        let shared = try ephemeral.sharedSecret(withPublicKey: receiverPublic)
+        let sessionKey = HKDF512.derive(
+            secret: shared,
+            salt: HKDF512.Label.verifyEncryptSalt,
+            info: HKDF512.Label.verifyEncryptInfo
+        )
+        let cipher = try ChaChaPoly1305(key: sessionKey)
+
+        let plain = try cipher.open(sealed, nonce: Self.nonce("PV-Msg02"))
+        guard let inner = PairingTLV8.decode(plain),
+            let identifier = inner[.identifier],
+            let signature = inner[.signature]
+        else {
+            throw Failure.malformedResponse(step: "verify-M2")
+        }
+        // L'identifiant renvoyé n'est **pas** comparé pour égalité stricte.
+        //
+        // Un Apple TV renvoie ici son identifiant de pairing (`pi` de l'annonce Bonjour,
+        // `7358e914-…`), alors que pyatv enregistre dans ses credentials l'identifiant sous
+        // lequel *lui* désigne l'appareil (`96A1F186-…`, dérivé de l'adresse matérielle). Les
+        // deux sont légitimes et ne coïncident pas : exiger l'égalité rejetait des
+        // credentials parfaitement valides.
+        //
+        // Ce n'est de toute façon pas ce contrôle qui authentifie le récepteur, mais la
+        // **signature** vérifiée juste après : seul le détenteur de la clé privée associée à
+        // `receiverPublicKey` peut la produire. L'identifiant n'est qu'un repère, et un écart
+        // se journalise sans faire échouer la session.
+        if identifier != credentials.receiverIdentifier {
+            log.debug("""
+                identifiant du récepteur différent de celui mémorisé \
+                (reçu \(String(data: identifier, encoding: .utf8) ?? identifier.hexEncoded, privacy: .public)) \
+                — sans conséquence, la signature fait foi
+                """)
+        }
+
+        // Le récepteur signe : sa clé publique de session ‖ son identifiant ‖ la nôtre.
+        let signedByReceiver = receiverPublic + identifier + ephemeral.publicKey
+        guard try Ed25519KeyPair.verify(
+            signature: signature, message: signedByReceiver,
+            publicKey: credentials.receiverPublicKey
+        ) else {
+            throw Failure.receiverSignatureInvalid
+        }
+
+        // Nous signons le miroir : notre clé publique ‖ notre identifiant ‖ la sienne.
+        let client = try Ed25519KeyPair(seed: credentials.clientSecretSeed)
+        let signedByClient = ephemeral.publicKey + credentials.clientIdentifier + receiverPublic
+        let proof = PairingTLV8.encode([
+            (.identifier, credentials.clientIdentifier),
+            (.signature, client.sign(signedByClient)),
+        ])
+
+        let m3 = PairingTLV8.encode([
+            (.state, PairingTLV8.byte(PairingTLV8.State.m3.rawValue)),
+            (.encryptedData, try cipher.seal(proof, nonce: Self.nonce("PV-Msg03"))),
+        ])
+        _ = try await exchange(m3, step: "verify-M3", uri: "/pair-verify")
+
+        log.info("pair-verify abouti (secret partagé \(shared.count) o)")
+        return SessionKeys(
+            outgoing: HKDF512.derive(
+                secret: shared,
+                salt: AirPlay2ControlChannel.cipherSalt,
+                info: AirPlay2ControlChannel.writeKeyInfo
+            ),
+            incoming: HKDF512.derive(
+                secret: shared,
+                salt: AirPlay2ControlChannel.cipherSalt,
+                info: AirPlay2ControlChannel.readKeyInfo
+            ),
+            sharedSecret: shared
+        )
+    }
+
+    /// Nonce ChaCha20-Poly1305 d'un message de pairing.
+    ///
+    /// HAP nomme ses nonces par une chaîne de 8 octets (`PV-Msg02`) ; le chiffre en attend
+    /// 12. Les quatre octets manquants sont des zéros **en tête**, comme pour le compteur du
+    /// canal de contrôle.
+    private static func nonce(_ label: String) -> Data {
+        Data(repeating: 0, count: 4) + Data(label.utf8)
+    }
+
     /// Poste un message TLV8 sur `/pair-setup` et décode la réponse.
-    private func exchange(_ body: Data, step: String) async throws -> [PairingTLV8.Tag: Data] {
+    private func exchange(
+        _ body: Data, step: String, uri: String = "/pair-setup"
+    ) async throws -> [PairingTLV8.Tag: Data] {
         let request = RTSPRequest(
             method: "POST",
-            uri: "/pair-setup",
+            uri: uri,
             headers: [
                 ("Content-Length", String(body.count)),
                 ("User-Agent", "AirPlay/320.20"),
