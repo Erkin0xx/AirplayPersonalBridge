@@ -109,6 +109,13 @@ public actor BridgeEngine {
             case let .airplay2(sender): try await sender.setVolume(volumeDB)
             }
         }
+
+        func setManualDelay(seconds: TimeInterval) async {
+            switch self {
+            case let .raop(sender): await sender.setManualDelay(seconds: seconds)
+            case let .airplay2(sender): await sender.setManualDelay(seconds: seconds)
+            }
+        }
     }
     private var senders: [String: Sender] = [:]
     private var snapshots: [String: OutputSnapshot] = [:]
@@ -289,6 +296,17 @@ public actor BridgeEngine {
         } catch {
             log.error("Volume refusé par la sortie \(id, privacy: .public) : \(error)")
         }
+    }
+
+    /// Pousse un décalage manuel à une sortie en cours de diffusion.
+    ///
+    /// Sans rupture de flux : le réglage agit sur l'ancrage annoncé dans les paquets de
+    /// synchronisation, pas sur les échantillons (CDC 4.5). C'est ce qui permet d'aligner
+    /// deux enceintes à l'oreille pendant qu'elles jouent, seule méthode praticable — aucune
+    /// mesure réseau ne capture le tampon interne d'un récepteur.
+    public func setManualDelay(_ seconds: TimeInterval, for id: String) async {
+        guard let sender = senders[id] else { return }
+        await sender.setManualDelay(seconds: seconds)
     }
 
     private func update(_ id: String, _ change: (inout OutputSnapshot) -> Void) {

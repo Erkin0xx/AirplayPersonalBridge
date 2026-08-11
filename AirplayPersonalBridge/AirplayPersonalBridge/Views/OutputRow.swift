@@ -66,7 +66,7 @@ struct OutputRow: View {
                 format: { String(format: "%+.1f dB", $0) }
             )
             settingRow(
-                "Délai", value: $output.delayMS, in: 0...200,
+                "Délai", value: $output.delayMS, in: -200...200,
                 format: { String(format: "%.0f ms", $0) }
             )
             if let suggestedDelayMS {

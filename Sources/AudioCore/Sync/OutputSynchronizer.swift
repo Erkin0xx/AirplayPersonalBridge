@@ -270,13 +270,24 @@ public final class OutputSynchronizer: @unchecked Sendable {
         let start = startCaptureFrame
         let consumed = consumedOutputFrames
         let offset = manualOffset
+        let internalLatency = receiverLatencyFrames
         lock.unlock()
         guard let start else { return nil }
         let captureFrame = start + consumed * (clock.captureSampleRate / outputSampleRate)
         guard let presentation = clock.presentationUnixTime(forCaptureFrame: captureFrame) else {
             return nil
         }
-        return presentation + offset - Double(latencyFrames) / outputSampleRate
+        // La latence **interne** du récepteur est retranchée, au même titre que celle qu'on
+        // annonce : elle s'ajoute à la restitution sans que rien ne la compense autrement.
+        //
+        // C'est ce qui manquait pour aligner des récepteurs inégaux. La Geneva annonce
+        // `Audio-Latency: 4096` trames, soit 92,88 ms ; les HomePod n'annoncent rien. Sans
+        // cette soustraction la Geneva jouait 93 ms après eux — très au-dessus du seuil
+        // d'audibilité de 20 à 30 ms, et parfaitement audible en écho (relevé le 2026-08-12).
+        // La valeur était mesurée et affichée, mais n'entrait dans aucun calcul.
+        return presentation + offset
+            - Double(latencyFrames) / outputSampleRate
+            - Double(internalLatency) / outputSampleRate
     }
 
     // MARK: - Compte rendu

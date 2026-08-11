@@ -142,6 +142,8 @@ final class BridgeState {
     private var pollTask: Task<Void, Never>?
     /// Dernier volume réellement envoyé à chaque sortie, pour n'émettre que sur changement.
     private var lastPushedVolume: [String: Float] = [:]
+    /// Idem pour le décalage manuel, réglé à l'oreille pendant que les enceintes jouent.
+    private var lastPushedDelay: [String: TimeInterval] = [:]
 
     // MARK: - Plan de la pièce
 
@@ -332,6 +334,10 @@ final class BridgeState {
                 for (id, volume) in pending {
                     await self.engine.setVolume(volume, for: id)
                 }
+                let delays = await MainActor.run { self.pendingDelayChanges() }
+                for (id, seconds) in delays {
+                    await self.engine.setManualDelay(seconds, for: id)
+                }
                 do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
             }
         }
@@ -342,6 +348,17 @@ final class BridgeState {
     /// Détecter le changement plutôt que réagir à chaque frappe du curseur évite d'envoyer un
     /// `SET_PARAMETER` par pixel déplacé, tout en couvrant les trois chemins qui modifient le
     /// gain — master, trim par sortie, et silence.
+    private func pendingDelayChanges() -> [(String, TimeInterval)] {
+        var changes: [(String, TimeInterval)] = []
+        for output in outputs {
+            let target = output.delayMS / 1000
+            guard lastPushedDelay[output.id] != target else { continue }
+            lastPushedDelay[output.id] = target
+            changes.append((output.id, target))
+        }
+        return changes
+    }
+
     private func pendingVolumeChanges() -> [(String, Float)] {
         var changes: [(String, Float)] = []
         for output in outputs {
