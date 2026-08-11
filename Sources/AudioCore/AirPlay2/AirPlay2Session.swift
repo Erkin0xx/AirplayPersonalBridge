@@ -98,7 +98,13 @@ public actor AirPlay2Session {
     /// requêtes suivantes. Le jalon 2 a montré qu'un `TEARDOWN` portant une URI reconstruite
     /// est couramment rejeté par le matériel réel, laissant la session bloquée côté
     /// récepteur — shairport-sync le tolérait, rien ne dit qu'un Apple TV le fera.
-    private let sessionURI: String
+    ///
+    /// Défaut corrigé le 2026-08-11 : elle était bâtie sur l'adresse **du récepteur**, alors
+    /// que la convention — suivie par notre propre sender RAOP comme par pyatv — veut celle du
+    /// **client**. Sur un récepteur joint en IPv6 lien-local, cela produisait de surcroît un
+    /// littéral sans crochets, donc une URI malformée. Elle est donc fixée à la connexion,
+    /// pas à l'initialisation, puisque l'adresse locale n'est connue qu'à ce moment.
+    private var sessionURI: String
 
     /// Clé et IV du flux audio, tirés au sort par session.
     ///
@@ -113,15 +119,20 @@ public actor AirPlay2Session {
     private let streamConnectionID: Int
     /// Identifiant porté par `X-Apple-Session-ID`, constant pour toute la session.
     private let appleSessionID = UUID().uuidString.lowercased()
+    /// Identifiant de contrôleur distant (`DACP-ID`/`Client-Instance`), en hexadécimal 64 bits.
+    private let dacpIdentifier = String(UInt64.random(in: .min ... .max), radix: 16).uppercased()
+    /// Jeton `Active-Remote`, entier 32 bits.
+    private let activeRemote = String(UInt32.random(in: .min ... .max))
 
     public init(client: RTSPClient, device: AirPlay2Device) {
         self.client = client
         self.device = device
-        // Borné à `Int64.max` : le plist binaire n'encode que des entiers signés, et un
-        // `UInt64` au-delà repartirait négatif chez le récepteur.
-        let sessionIdentifier = Int.random(in: 1...Int(Int64.max))
+        // Sur **32 bits**, comme pyatv (`randrange(2**32)`) : un identifiant plus large est
+        // accepté par le mock mais rien ne dit qu'un récepteur réel le tolère.
+        let sessionIdentifier = Int.random(in: 1...Int(UInt32.max))
         self.streamConnectionID = sessionIdentifier
-        self.sessionURI = "rtsp://\(device.host)/\(sessionIdentifier)"
+        // Valeur d'attente : `setup` la remplace par l'adresse locale réelle.
+        self.sessionURI = "rtsp://0.0.0.0/\(sessionIdentifier)"
 
         var key = Data(count: 32)
         var iv = Data(count: 16)
@@ -144,6 +155,12 @@ public actor AirPlay2Session {
         timingPort: UInt16,
         controlPort: UInt16
     ) async throws -> Endpoints {
+        // L'URI de session porte l'adresse **locale**, connue seulement une fois connecté. Un
+        // littéral IPv6 doit être encadré de crochets, sans quoi l'URI est malformée.
+        let localAddress = await client.localAddress
+        let host = localAddress.contains(":") ? "[\(localAddress)]" : localAddress
+        sessionURI = "rtsp://\(host)/\(streamConnectionID)"
+
         // --- SETUP 1 : session. Pas de clé `streams` : c'est ce qui le distingue. ---
         //
         // Le jeu de clés suit celui de pyatv (`protocols/raop/protocols/airplayv2.py`), qui
@@ -321,6 +338,11 @@ public actor AirPlay2Session {
                 ("X-Apple-ProtocolVersion", "1"),
                 ("X-Apple-Session-ID", appleSessionID),
                 ("X-Apple-Stream-ID", "1"),
+                // pyatv joint ces trois en-têtes à **toutes** ses requêtes RTSP, AirPlay 2
+                // compris. Ils identifient le contrôleur distant côté récepteur.
+                ("DACP-ID", dacpIdentifier),
+                ("Active-Remote", activeRemote),
+                ("Client-Instance", dacpIdentifier),
             ],
             body: payload
         )
