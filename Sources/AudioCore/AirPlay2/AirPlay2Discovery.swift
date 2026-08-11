@@ -138,7 +138,7 @@ public actor AirPlay2Discovery {
 
         for attempt in 1...max(1, attempts) {
             let devices = await browse(timeout: timeout)
-            if let match = devices.first(where: { $0.serviceName.lowercased().contains(needle) }) {
+            if let match = Self.bestMatch(for: needle, among: devices, name: \.serviceName) {
                 log.info(
                     "Récepteur AirPlay 2 résolu : \(match.serviceName, privacy: .public) → \(match.host, privacy: .public):\(match.port)"
                 )
@@ -150,6 +150,19 @@ public actor AirPlay2Discovery {
             }
         }
         throw AirPlay2DiscoveryError.notFound(name: name, seen: seen)
+    }
+
+    /// Choisit le récepteur désigné par un nom, **exactitude d'abord**.
+    ///
+    /// La correspondance partielle seule est un piège dès que deux appareils partagent un
+    /// préfixe : « Salon » est contenu dans « Salon (2) », et l'ordre de parcours Bonjour
+    /// n'est pas garanti. Deux sorties visaient alors le même récepteur — la première
+    /// diffusait, la seconde échouait. Constaté le 2026-08-11 avec deux HomePod.
+    static func bestMatch<T>(
+        for needle: String, among devices: [T], name: (T) -> String
+    ) -> T? {
+        devices.first { name($0).lowercased() == needle }
+            ?? devices.first { name($0).lowercased().contains(needle) }
     }
 
     private func resolve(_ result: NWBrowser.Result) async -> AirPlay2Device? {

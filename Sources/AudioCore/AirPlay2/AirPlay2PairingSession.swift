@@ -96,27 +96,14 @@ public actor AirPlay2PairingSession {
 
         log.info("pair-setup transitoire vers \(self.device.serviceName, privacy: .public)")
 
-        // --- M0 : `/pair-pin-start` ---
-        // pyatv l'envoie avant tout `/pair-setup`, y compris en transitoire où aucun code
-        // n'est saisi. airplay2-receiver n'en a pas besoin ; un récepteur Apple réel peut
-        // refuser la suite sans lui. L'échec n'est pas fatal : certains le refusent en
-        // transitoire, et la session se poursuit alors normalement.
-        do {
-            _ = try await client.send(RTSPRequest(
-                method: "POST",
-                uri: "/pair-pin-start",
-                headers: [
-                    ("User-Agent", "AirPlay/320.20"),
-                    ("Connection", "keep-alive"),
-                    ("X-Apple-HKP", "4"),
-                    ("Content-Type", "application/octet-stream"),
-                ],
-                body: Data(),
-                protocolVersion: "HTTP/1.1"
-            ))
-        } catch {
-            log.debug("/pair-pin-start refusé (\(error)) — poursuite du pair-setup")
-        }
+        // Pas de `/pair-pin-start` ici, contrairement à pyatv qui l'envoie toujours.
+        //
+        // Cette requête demande au récepteur d'**afficher un code d'appairage**. En
+        // transitoire, aucun code n'est saisi : elle est donc inutile, et les HomePod
+        // acceptent le pair-setup sans elle (vérifié le 2026-08-11). Sur un Apple TV, en
+        // revanche, elle fait apparaître un code à l'écran à chaque tentative — un code que
+        // rien ne consomme, puisque le transitoire y est de toute façon refusé en 470.
+        // L'envoyer revenait à polluer l'écran de l'utilisateur pour rien.
 
         // --- M1 : demande de démarrage SRP ---
         // L'ordre des éléments (state, method, flags) est celui qu'emploient les senders

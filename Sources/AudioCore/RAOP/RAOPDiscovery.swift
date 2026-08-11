@@ -113,7 +113,13 @@ public actor RAOPDiscovery {
     public func find(named name: String, timeout: Duration = .seconds(5)) async throws -> RAOPDevice {
         let devices = await browse(timeout: timeout)
         let needle = name.lowercased()
-        if let match = devices.first(where: { $0.serviceName.lowercased().contains(needle) }) {
+        // Exactitude d'abord, puis correspondance partielle : voir `AirPlay2Discovery.bestMatch`.
+        // Le nom affiché (sans le préfixe matériel) est essayé aussi, car c'est lui que
+        // l'interface propose à l'utilisateur.
+        let match = devices.first { $0.serviceName.lowercased() == needle }
+            ?? devices.first { $0.displayName.lowercased() == needle }
+            ?? devices.first { $0.serviceName.lowercased().contains(needle) }
+        if let match {
             log.info("Récepteur RAOP résolu : \(match.serviceName, privacy: .public) → \(match.host, privacy: .public):\(match.port)")
             return match
         }
