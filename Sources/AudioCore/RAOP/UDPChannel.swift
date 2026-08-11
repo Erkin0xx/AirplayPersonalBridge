@@ -137,6 +137,30 @@ public final class UDPChannel: @unchecked Sendable {
         }
     }
 
+    /// Émet un datagramme vers une adresse précise, sans toucher à la destination courante.
+    ///
+    /// Nécessaire pour répondre à une requête d'horloge sur un canal qui n'a pas de
+    /// destination fixée : en AirPlay 2, le récepteur interroge notre port de timing avant que
+    /// le `SETUP` n'ait rendu la moindre adresse. On répond donc à l'expéditeur.
+    public func send(_ data: Data, to address: sockaddr_storage) throws {
+        var target = address
+        let length = socklen_t(
+            target.ss_family == sa_family_t(AF_INET6)
+                ? MemoryLayout<sockaddr_in6>.size
+                : MemoryLayout<sockaddr_in>.size
+        )
+        let sent = data.withUnsafeBytes { payload -> Int in
+            withUnsafePointer(to: &target) { storagePointer in
+                storagePointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { addressPointer in
+                    sendto(descriptor, payload.baseAddress, payload.count, 0, addressPointer, length)
+                }
+            }
+        }
+        guard sent >= 0 else {
+            throw UDPChannelError.sendFailed(label: label, errno: errno)
+        }
+    }
+
     /// Démarre la réception. Chaque datagramme est passé à `onReceive`.
     public func startReceiving() {
         guard receiveSource == nil else { return }

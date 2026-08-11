@@ -281,6 +281,13 @@ public actor AirPlay2Sender {
         let control = try UDPChannel(label: "airplay2-control")
         let timing = try UDPChannel(label: "airplay2-timing")
         self.timingChannel = timing
+        // Le répondeur d'horloge doit écouter **avant** le `SETUP`, pas après : le HomePod
+        // interroge notre horloge dès qu'il a lu `timingPort`, et **ne répond au `SETUP`
+        // qu'une fois cette mesure aboutie**. Sans répondeur, il émet ses requêtes dans le
+        // vide et la session reste en suspens, sans le moindre message d'erreur — 22 requêtes
+        // de 32 octets restées sans réponse, relevées à la capture le 2026-08-11.
+        installTimingResponder(on: timing)
+        timing.startReceiving()
 
         let endpoints = try await session.setup(
             timingPort: timing.localPort, controlPort: control.localPort
@@ -416,6 +423,38 @@ public actor AirPlay2Sender {
     /// La retransmission elle-même n'est pas implémentée (hors périmètre du jalon) ; les
     /// demandes sont comptées, car leur apparition est le premier signe d'un flux qui perd
     /// des paquets — donc d'un problème de cadencement ou de réseau.
+    /// Répond aux requêtes d'horloge du récepteur.
+    ///
+    /// Format identique à RAOP — RTCP type 0x52, 32 octets, estampille d'origine aux octets
+    /// 24 à 31 — puisque le `SETUP` négocie `timingProtocol=NTP`. Deux différences avec RAOP :
+    /// la réponse part vers **l'expéditeur** (le canal n'a pas de destination fixée à ce
+    /// stade), et l'écoute commence avant le `SETUP`, dont la réponse en dépend.
+    ///
+    /// Contrairement à shairport-sync, qui envoie ses requêtes intégralement à zéro, le
+    /// HomePod **horodate** les siennes : la mesure passive du décalage d'horloge y fonctionne.
+    private nonisolated func installTimingResponder(on timing: UDPChannel) {
+        timing.onReceive = { [weak self] data, source in
+            let receiveTime = NTPTime.now()
+            guard data.count >= 32,
+                data[data.startIndex + 1] & 0x7F == RTPPayloadType.timingRequest.rawValue
+            else { return }
+            let originStart = data.index(data.startIndex, offsetBy: 24)
+            let origin = Array(data[originStart..<data.index(originStart, offsetBy: 8)])
+            let response = RTPPacketBuilder.timingResponse(
+                originTimestamp: origin,
+                receiveTime: receiveTime,
+                transmitTime: NTPTime.now()
+            )
+            try? timing.send(response, to: source)
+            if let sender = self, let remote = NTPTime(bigEndianBytes: origin) {
+                sender.synchronizer.timing.record(
+                    remoteTransmitUnix: remote.unixTime,
+                    localReceiveUnix: receiveTime.unixTime
+                )
+            }
+        }
+    }
+
     private nonisolated func installControlObserver(on control: UDPChannel) {
         control.onReceive = { [weak self] data, _ in
             guard data.count >= 2,
