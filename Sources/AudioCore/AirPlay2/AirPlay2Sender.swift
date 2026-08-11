@@ -530,8 +530,9 @@ public actor AirPlay2Sender {
     ///
     /// 1. **La charge utile est du PCM brut little-endian**, pas de l'ALAC. C'est ce que
     ///    déclare le `SETUP` (`ct: 1`, `audioFormat` = PCM 44100/16/2), et déclarer un format
-    ///    puis en envoyer un autre ne produit aucun message d'erreur. À ne pas confondre avec
-    ///    le L16 de RAOP, qui est **big-endian**.
+    ///    puis en envoyer un autre ne produit aucun message d'erreur. L'ordre est
+    ///    **big-endian**, comme le L16 de RAOP : en little-endian le HomePod restitue un
+    ///    bruit blanc à pleine échelle — signe que le déchiffrement, lui, réussit.
     /// 2. **Les données associées sont les octets 4 à 12 de l'en-tête RTP** (horodatage et
     ///    SSRC), pas l'en-tête entier.
     /// 3. **Le nonce de 8 octets est ajouté à la fin du paquet**, après l'étiquette : c'est
@@ -574,8 +575,8 @@ public actor AirPlay2Sender {
         var payload = Data(capacity: block.count * 2)
         for sample in block {
             let bits = UInt16(bitPattern: sample)
-            payload.append(UInt8(truncatingIfNeeded: bits))
             payload.append(UInt8(truncatingIfNeeded: bits >> 8))
+            payload.append(UInt8(truncatingIfNeeded: bits))
         }
 
         // Le bit marker signale le premier paquet du flux : le récepteur y réinitialise
