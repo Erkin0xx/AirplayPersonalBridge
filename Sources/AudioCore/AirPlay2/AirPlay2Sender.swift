@@ -66,7 +66,6 @@ public actor AirPlay2Sender {
 
     private var rtsp: RTSPClient?
     private var session: AirPlay2Session?
-    private var encoder: ALACEncoder?
     private var resampler: RAOPResampler?
     private var streamCipher: ChaChaPoly1305?
 
@@ -342,7 +341,6 @@ public actor AirPlay2Sender {
             statistics.eventChannelConnected = connected
         }
 
-        encoder = ALACEncoder()
         // Même rééchantillonneur qu'au jalon 2 : la capture livre du 48 kHz, le flux exige
         // 44,1 kHz. Il tourne dans la tâche du sender, en aval du ring buffer — emplacement
         // explicitement autorisé par le CDC 4.5, jamais dans le callback temps réel.
@@ -523,10 +521,23 @@ public actor AirPlay2Sender {
     /// Encode, chiffre et émet un paquet audio.
     ///
     /// Le chiffrement diffère de RAOP : ChaCha20-Poly1305 avec un nonce dérivé du numéro de
-    /// paquet, et non AES-CBC. L'en-tête RTP sert de données associées, ce qui empêche de le
-    /// modifier en transit.
+    /// paquet, et non AES-CBC.
+    ///
+    /// Trois détails de format, chacun suffisant à rendre le flux inaudible sans provoquer la
+    /// moindre erreur — le récepteur accepte la session, reçoit les paquets, et ne joue rien
+    /// (constaté contre un HomePod le 2026-08-11, corrigé d'après `pyatv/protocols/raop/
+    /// protocols/airplayv2.py`) :
+    ///
+    /// 1. **La charge utile est du PCM brut little-endian**, pas de l'ALAC. C'est ce que
+    ///    déclare le `SETUP` (`ct: 1`, `audioFormat` = PCM 44100/16/2), et déclarer un format
+    ///    puis en envoyer un autre ne produit aucun message d'erreur. À ne pas confondre avec
+    ///    le L16 de RAOP, qui est **big-endian**.
+    /// 2. **Les données associées sont les octets 4 à 12 de l'en-tête RTP** (horodatage et
+    ///    SSRC), pas l'en-tête entier.
+    /// 3. **Le nonce de 8 octets est ajouté à la fin du paquet**, après l'étiquette : c'est
+    ///    lui qui permet au récepteur de déchiffrer malgré un paquet perdu.
     private func sendNextPacket() throws {
-        guard let encoder, let cipher = streamCipher, let audio = audioChannel else { return }
+        guard let cipher = streamCipher, let audio = audioChannel else { return }
         let channels = Self.streamChannelCount
         let sampleCount = Self.framesPerPacket * channels
 
@@ -560,7 +571,12 @@ public actor AirPlay2Sender {
         pendingSamples.removeFirst(consumedFrames * channels)
         synchronizer.didConsume(outputFrames: consumedFrames)
 
-        let payload = Data(encoder.encode(block, frameCount: Self.framesPerPacket))
+        var payload = Data(capacity: block.count * 2)
+        for sample in block {
+            let bits = UInt16(bitPattern: sample)
+            payload.append(UInt8(truncatingIfNeeded: bits))
+            payload.append(UInt8(truncatingIfNeeded: bits >> 8))
+        }
 
         // Le bit marker signale le premier paquet du flux : le récepteur y réinitialise
         // ses tampons. Compteur de session, pas compteur global : après une reconnexion le
@@ -576,8 +592,9 @@ public actor AirPlay2Sender {
         var nonce = Data(repeating: 0, count: 4)
         withUnsafeBytes(of: UInt64(packetsSent).littleEndian) { nonce.append(contentsOf: $0) }
 
-        let sealed = try cipher.seal(payload, nonce: nonce, additionalData: header)
-        try audio.send(header + sealed)
+        let associated = header.subdata(in: 4..<12)
+        let sealed = try cipher.seal(payload, nonce: nonce, additionalData: associated)
+        try audio.send(header + sealed + nonce.suffix(8))
 
         if packetsInSession % Self.syncInterval == 0 {
             sendSync(isFirst: packetsInSession == 0, anchorUnixTime: anchor)
@@ -640,7 +657,6 @@ public actor AirPlay2Sender {
         await rtsp?.disconnect()
         rtsp = nil
         session = nil
-        encoder = nil
         resampler = nil
         streamCipher = nil
     }
