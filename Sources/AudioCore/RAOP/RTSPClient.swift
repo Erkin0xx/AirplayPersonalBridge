@@ -177,8 +177,18 @@ public actor RTSPClient {
 
         var outgoing = request
         outgoing.headers.insert(("CSeq", String(sequenceNumber)), at: 0)
-        outgoing.headers.append(("User-Agent", "AirPlayMultiOutput/1.0"))
-        outgoing.headers.append(("Client-Instance", clientInstance))
+        // Ces deux en-têtes ne sont ajoutés que si l'appelant ne les a pas déjà posés. Sans
+        // cette garde, une requête AirPlay 2 — qui fixe son propre `User-Agent` et son
+        // `Client-Instance` — partait avec chacun **en double**. airplay2-receiver l'acceptait ;
+        // un HomePod réel ne répond alors tout simplement pas au `SETUP` (constaté le
+        // 2026-08-11 : 810 octets émis, aucun octet en retour, connexion laissée ouverte).
+        func appendIfAbsent(_ name: String, _ value: String) {
+            guard !outgoing.headers.contains(where: { $0.name.lowercased() == name.lowercased() })
+            else { return }
+            outgoing.headers.append((name, value))
+        }
+        appendIfAbsent("User-Agent", "AirPlayMultiOutput/1.0")
+        appendIfAbsent("Client-Instance", clientInstance)
 
         var payload = outgoing.serialized()
         if let controlChannel {
