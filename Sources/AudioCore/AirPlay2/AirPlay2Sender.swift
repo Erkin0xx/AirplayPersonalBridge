@@ -74,6 +74,9 @@ public actor AirPlay2Sender {
     /// Canal de contrôle : c'est par lui que passent les annonces de synchronisation NTP,
     /// que le récepteur attend au même format qu'en RAOP (`TIME_ANNOUNCE_NTP`).
     private var controlChannel: UDPChannel?
+    /// Canal d'horloge. Son port local est annoncé au `SETUP` (`timingPort`) : il doit donc
+    /// être ouvert avant, et rester ouvert tant que la session vit.
+    private var timingChannel: UDPChannel?
     /// Canal d'événements, ouvert depuis l'`eventPort` du premier `SETUP` (jalon 4).
     private var eventChannel: AirPlay2EventChannel?
 
@@ -270,7 +273,18 @@ public actor AirPlay2Sender {
         // 3. Les deux SETUP, puis le volume et le RECORD.
         let session = AirPlay2Session(client: client, device: device)
         self.session = session
-        let endpoints = try await session.setup()
+
+        // Les canaux de contrôle et de timing sont ouverts **avant** le `SETUP` : leurs ports
+        // locaux y sont annoncés. Le mock s'en passait, un récepteur Apple réel refuse en
+        // `400` un `SETUP` sans `timingPort` — il n'aurait aucune adresse où interroger notre
+        // horloge (comparaison avec pyatv, 2026-08-11).
+        let control = try UDPChannel(label: "airplay2-control")
+        let timing = try UDPChannel(label: "airplay2-timing")
+        self.timingChannel = timing
+
+        let endpoints = try await session.setup(
+            timingPort: timing.localPort, controlPort: control.localPort
+        )
 
         // Le canal audio est un socket UDP dont le port local est choisi par le système :
         // contrairement à RAOP, le récepteur n'exige pas ici un port annoncé à l'avance.
@@ -283,7 +297,6 @@ public actor AirPlay2Sender {
         // `TIME_ANNOUNCE_NTP`, type 0x54 — puisque le `SETUP` a négocié `timingProtocol=NTP`.
         // Il y renvoie ses demandes de retransmission, d'où l'écoute.
         if endpoints.controlPort != 0 {
-            let control = try UDPChannel(label: "airplay2-control")
             try control.setDestination(host: device.host, port: endpoints.controlPort)
             installControlObserver(on: control)
             control.startReceiving()

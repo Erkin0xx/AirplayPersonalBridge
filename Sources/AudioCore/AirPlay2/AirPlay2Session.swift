@@ -108,10 +108,20 @@ public actor AirPlay2Session {
     public let streamKey: Data
     public let streamIV: Data
 
+    /// Identifiant du flux, repris de l'identifiant de session comme le fait pyatv. Un
+    /// récepteur réel s'en sert pour rattacher le flux audio à la session ouverte.
+    private let streamConnectionID: Int
+    /// Identifiant porté par `X-Apple-Session-ID`, constant pour toute la session.
+    private let appleSessionID = UUID().uuidString.lowercased()
+
     public init(client: RTSPClient, device: AirPlay2Device) {
         self.client = client
         self.device = device
-        self.sessionURI = "rtsp://\(device.host)/\(UInt64.random(in: 1...UInt64.max))"
+        // Borné à `Int64.max` : le plist binaire n'encode que des entiers signés, et un
+        // `UInt64` au-delà repartirait négatif chez le récepteur.
+        let sessionIdentifier = Int.random(in: 1...Int(Int64.max))
+        self.streamConnectionID = sessionIdentifier
+        self.sessionURI = "rtsp://\(device.host)/\(sessionIdentifier)"
 
         var key = Data(count: 32)
         var iv = Data(count: 16)
@@ -123,21 +133,40 @@ public actor AirPlay2Session {
     }
 
     /// Ouvre la session et le flux audio (les deux `SETUP`), puis renvoie les ports obtenus.
+    /// - Parameters:
+    ///   - timingPort: port UDP **local** d'où partiront les échanges d'horloge. Le mock s'en
+    ///     passait ; le firmware Apple réel refuse le `SETUP` en `400` sans lui, puisqu'il n'a
+    ///     alors aucune adresse où interroger notre horloge.
+    ///   - controlPort: port UDP **local** du canal de contrôle, annoncé dans le flux.
     public func setup(
-        format: AudioFormat = .alac44100_16_2,
-        streamType: StreamType = .realtime
+        format: AudioFormat = .pcm44100_16_2,
+        streamType: StreamType = .realtime,
+        timingPort: UInt16,
+        controlPort: UInt16
     ) async throws -> Endpoints {
         // --- SETUP 1 : session. Pas de clé `streams` : c'est ce qui le distingue. ---
+        //
+        // Le jeu de clés suit celui de pyatv (`protocols/raop/protocols/airplayv2.py`), qui
+        // est validé contre du matériel Apple. Les champs d'identité (`osName`, `model`…) ne
+        // sont pas décoratifs : un récepteur réel refuse un `SETUP` incomplet en `400`, là où
+        // airplay2-receiver acceptait un plist minimal.
         let sessionBody: [String: Any] = [
             "deviceID": deviceIdentifier,
-            "sessionUUID": UUID().uuidString,
+            "sessionUUID": UUID().uuidString.uppercased(),
             "name": "AirPlayMultiOutput",
-            "model": "AirPlayMultiOutput",
-            "sourceVersion": "366.0",
-            // Horloge : `NTP` correspond au mode temps réel. Le jalon 4 exploitera ce
-            // canal pour l'alignement automatique (CDC 4.5).
+            "model": "iPhone14,3",
+            "macAddress": deviceIdentifier,
+            "sourceVersion": "690.7.1",
+            "osName": "iPhone OS",
+            "osVersion": "16.5",
+            "osBuildVersion": "20F66",
+            "timingPort": Int(timingPort),
+            // Horloge : `NTP` correspond au mode temps réel (CDC 4.5).
             "timingProtocol": "NTP",
             "isMultiSelectAirPlay": true,
+            "groupContainsGroupLeader": false,
+            "senderSupportsRelay": false,
+            "statsCollectionEnabled": false,
         ]
         let sessionResponse = try await sendPlist(sessionBody, method: "SETUP", step: "SETUP session")
         guard let eventPort = sessionResponse["eventPort"] as? Int else {
@@ -146,19 +175,25 @@ public actor AirPlay2Session {
         log.debug("SETUP session : eventPort=\(eventPort)")
 
         // --- SETUP 2 : flux audio. ---
+        // Même remarque que pour le `SETUP` de session : jeu de clés calqué sur pyatv.
+        // `ct: 1` désigne le PCM brut ; `shiv` n'y figure pas — le chiffrement du flux dérive
+        // tout de `shk`, et envoyer un IV séparé n'apporte rien au récepteur.
         let streamBody: [String: Any] = [
             "streams": [
                 [
                     "type": streamType.rawValue,
                     "audioFormat": format.rawValue,
-                    // `ct` : type de compression. 0 laisse le récepteur déduire du format.
-                    "ct": 0,
+                    "audioMode": "default",
+                    "ct": 1,
+                    "isMedia": true,
+                    "sr": 44_100,
                     "spf": Self.framesPerPacket,
                     "shk": streamKey,
-                    "shiv": streamIV,
-                    "controlPort": 0,
+                    "controlPort": Int(controlPort),
                     "latencyMin": 11_025,
                     "latencyMax": 88_200,
+                    "supportsDynamicStreamID": false,
+                    "streamConnectionID": streamConnectionID,
                 ]
             ]
         ]
@@ -250,14 +285,19 @@ public actor AirPlay2Session {
 
     // MARK: - Plists
 
-    /// Identifiant matériel annoncé au récepteur.
+    /// Identifiant matériel **de l'émetteur**, au format d'une adresse MAC.
     ///
-    /// Repris de l'annonce Bonjour du récepteur quand elle est exploitable, à défaut dérivé
-    /// de l'identifiant de client RTSP — le format attendu est celui d'une adresse MAC.
-    private var deviceIdentifier: String {
-        if !device.deviceIdentifier.isEmpty { return device.deviceIdentifier }
-        return "02:00:00:00:00:01"
-    }
+    /// Défaut corrigé le 2026-08-11 : cette propriété renvoyait le `deviceid` lu dans
+    /// l'annonce Bonjour du **récepteur**, si bien que le `SETUP` lui annonçait sa propre
+    /// adresse comme étant la nôtre. airplay2-receiver l'acceptait ; un HomePod réel refuse
+    /// la session en `400`. La valeur est tirée au sort par session, avec le bit « administré
+    /// localement » posé (0x02) et le bit multicast à zéro, comme le veut IEEE 802.
+    private let deviceIdentifier: String = {
+        var generator = SystemRandomNumberGenerator()
+        var bytes = (0..<6).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
+        bytes[0] = (bytes[0] | 0x02) & 0xFE
+        return bytes.map { String(format: "%02X", $0) }.joined(separator: ":")
+    }()
 
     /// Sérialise un plist binaire, l'envoie, et analyse la réponse.
     private func sendPlist(
@@ -268,15 +308,23 @@ public actor AirPlay2Session {
         let payload = try PropertyListSerialization.data(
             fromPropertyList: body, format: .binary, options: 0
         )
+        // Les en-têtes `X-Apple-*` accompagnent toute requête AirPlay 2 chez pyatv comme dans
+        // le trafic d'un iPhone. airplay2-receiver les ignore ; rien ne dit qu'un récepteur
+        // réel en fasse autant, et ils ne coûtent rien.
         let request = RTSPRequest(
             method: method,
             uri: sessionURI,
             headers: [
                 ("Content-Type", "application/x-apple-binary-plist"),
                 ("Content-Length", String(payload.count)),
+                ("User-Agent", "AirPlay/550.10"),
+                ("X-Apple-ProtocolVersion", "1"),
+                ("X-Apple-Session-ID", appleSessionID),
+                ("X-Apple-Stream-ID", "1"),
             ],
             body: payload
         )
+        log.info("→ \(step, privacy: .public) (\(payload.count) octets de plist)")
         let response = try await client.send(request)
 
         guard !response.body.isEmpty else { return [:] }
