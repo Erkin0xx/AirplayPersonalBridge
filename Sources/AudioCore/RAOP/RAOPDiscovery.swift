@@ -18,8 +18,16 @@ public struct RAOPDevice: Sendable {
     /// Enregistrement TXT, clés en minuscules.
     public let txt: [String: String]
 
-    /// Chiffrement supporté, tel qu'annoncé par `et` (0 = aucun, 1 = RSA-AES).
+    /// Chiffrement supporté, tel qu'annoncé par `et` (0 = aucun, 1 = RSA-AES,
+    /// 3 = FairPlay SAPv2, 4 = FairPlay SAPv2.5).
     public var supportsRSAEncryption: Bool { txtList("et").contains("1") }
+    /// Le récepteur accepte-t-il le flux **en clair** (`et` contenant 0) ?
+    ///
+    /// Relevé sur la Geneva AeroSphere Large (2026-08-11) : `et=0,4`. Elle ne propose donc
+    /// jamais RSA-AES, seulement le clair ou FairPlay — ce dernier étant hors de portée du
+    /// projet. Un récepteur qui n'annonce ni 0 ni 1 est inutilisable ici, et le sender le
+    /// signale plutôt que de tenter une session vouée à l'échec.
+    public var supportsUnencrypted: Bool { txtList("et").contains("0") }
     /// Compression supportée, tel qu'annoncé par `cn` (0 = PCM, 1 = ALAC).
     public var supportsALAC: Bool { txtList("cn").contains("1") }
     /// Fréquence d'échantillonnage annoncée (`sr`), 44 100 Hz par défaut en RAOP.

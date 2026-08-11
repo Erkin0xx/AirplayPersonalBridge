@@ -266,11 +266,20 @@ public actor RAOPSender {
 
     private func negotiate(volume: Float) async throws {
         guard device.supportsALAC else { throw RAOPSenderError.alacUnsupported(device.serviceName) }
-        guard device.supportsRSAEncryption else {
+        // Choix du mode de chiffrement d'après ce que le récepteur annonce en `et`.
+        // RSA-AES est préféré quand il est proposé : c'est le chemin validé au jalon 2, et le
+        // conserver par défaut évite de changer le comportement contre les récepteurs qui
+        // l'acceptent. Le clair n'est retenu que faute de mieux — la vraie Geneva annonce
+        // `et=0,4` et ne laisse pas d'autre choix, FairPlay (3, 4) n'étant pas implémenté.
+        let crypto: RAOPCrypto?
+        if device.supportsRSAEncryption {
+            crypto = try RAOPCrypto()
+        } else if device.supportsUnencrypted {
+            crypto = nil
+            log.info("\(self.device.serviceName) n'annonce pas RSA-AES : flux émis en clair (et=0)")
+        } else {
             throw RAOPSenderError.encryptionUnsupported(device.serviceName)
         }
-
-        let crypto = try RAOPCrypto()
         self.crypto = crypto
         self.encoder = ALACEncoder(
             framesPerPacket: Self.framesPerPacket, channelCount: device.channelCount
@@ -320,10 +329,8 @@ public actor RAOPSender {
 
     /// `ANNOUNCE` : décrit le flux en SDP, clé AES chiffrée comprise.
     private func announce(
-        client: RTSPClient, uri: String, crypto: RAOPCrypto, sessionID: UInt32
+        client: RTSPClient, uri: String, crypto: RAOPCrypto?, sessionID: UInt32
     ) async throws {
-        let encryptedKey = RAOPCrypto.base64Unpadded(try crypto.encryptedSessionKey())
-        let iv = RAOPCrypto.base64Unpadded(crypto.aesIV)
         let localAddress = await client.localAddress
 
         // Les paramètres `fmtp` sont ceux du décodeur ALAC, dans l'ordre imposé par le
@@ -334,19 +341,24 @@ public actor RAOPSender {
             "\(device.channelCount)", "255", "0", "0", "\(device.sampleRate)",
         ].joined(separator: " ")
 
-        let sdp = """
-            v=0\r
-            o=iTunes \(sessionID) 0 IN IP4 \(localAddress)\r
-            s=iTunes\r
-            c=IN IP4 \(device.host)\r
-            t=0 0\r
-            m=audio 0 RTP/AVP 96\r
-            a=rtpmap:96 AppleLossless\r
-            a=fmtp:96 \(fmtp)\r
-            a=rsaaeskey:\(encryptedKey)\r
-            a=aesiv:\(iv)\r
-
-            """
+        // Les lignes sont assemblées plutôt qu'écrites dans un littéral multiligne : les deux
+        // dernières n'existent qu'en mode chiffré. Un `a=rsaaeskey` présent alors que le
+        // récepteur ne sait pas déchiffrer le laisse partir sur des paramètres par défaut.
+        var lines = [
+            "v=0",
+            "o=iTunes \(sessionID) 0 IN IP4 \(localAddress)",
+            "s=iTunes",
+            "c=IN IP4 \(device.host)",
+            "t=0 0",
+            "m=audio 0 RTP/AVP 96",
+            "a=rtpmap:96 AppleLossless",
+            "a=fmtp:96 \(fmtp)",
+        ]
+        if let crypto {
+            lines.append("a=rsaaeskey:\(RAOPCrypto.base64Unpadded(try crypto.encryptedSessionKey()))")
+            lines.append("a=aesiv:\(RAOPCrypto.base64Unpadded(crypto.aesIV))")
+        }
+        let sdp = lines.joined(separator: "\r\n") + "\r\n"
 
         try await client.send(RTSPRequest(
             method: "ANNOUNCE",
@@ -587,7 +599,7 @@ public actor RAOPSender {
     /// La manipulation porte sur `pendingSamples`, copie propre au sender extraite en aval du
     /// ring buffer : le tampon partagé n'est jamais touché (invariant section 12).
     private func sendNextPacket() throws {
-        guard let encoder, let crypto, let audio = audioChannel else { return }
+        guard let encoder, let audio = audioChannel else { return }
         let channels = device.channelCount
         let sampleCount = Self.framesPerPacket * channels
 
@@ -619,7 +631,8 @@ public actor RAOPSender {
         synchronizer.didConsume(outputFrames: consumedFrames)
 
         var payload = encoder.encode(block, frameCount: Self.framesPerPacket)
-        try crypto.encryptAudioInPlace(&payload)
+        // `crypto` est nil en mode clair (`et=0`) : la charge utile ALAC part telle quelle.
+        try crypto?.encryptAudioInPlace(&payload)
 
         // Le bit marker signale le premier paquet du flux : le récepteur y réinitialise
         // ses tampons. Compteur de session, pas compteur global : après une reconnexion, le
