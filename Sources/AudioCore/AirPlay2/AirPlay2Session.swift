@@ -117,8 +117,6 @@ public actor AirPlay2Session {
     /// Identifiant du flux, repris de l'identifiant de session comme le fait pyatv. Un
     /// récepteur réel s'en sert pour rattacher le flux audio à la session ouverte.
     private let streamConnectionID: Int
-    /// Identifiant porté par `X-Apple-Session-ID`, constant pour toute la session.
-    private let appleSessionID = UUID().uuidString.lowercased()
     /// Identifiant de contrôleur distant (`DACP-ID`/`Client-Instance`), en hexadécimal 64 bits.
     private let dacpIdentifier = String(UInt64.random(in: .min ... .max), radix: 16).uppercased()
     /// Jeton `Active-Remote`, entier 32 bits.
@@ -335,11 +333,11 @@ public actor AirPlay2Session {
                 ("Content-Type", "application/x-apple-binary-plist"),
                 ("Content-Length", String(payload.count)),
                 ("User-Agent", "AirPlay/550.10"),
-                ("X-Apple-ProtocolVersion", "1"),
-                ("X-Apple-Session-ID", appleSessionID),
-                ("X-Apple-Stream-ID", "1"),
-                // pyatv joint ces trois en-têtes à **toutes** ses requêtes RTSP, AirPlay 2
-                // compris. Ils identifient le contrôleur distant côté récepteur.
+                // Pas d'en-tête `X-Apple-*` ici : pyatv les réserve à `/play` et consorts, et
+                // n'en met aucun sur ses `SETUP` — vérifié dans sa trace de debug contre ce
+                // HomePod, où le `SETUP` ne porte que les sept en-têtes ci-dessous.
+                //
+                // Ces trois-là identifient le contrôleur distant côté récepteur.
                 ("DACP-ID", dacpIdentifier),
                 ("Active-Remote", activeRemote),
                 ("Client-Instance", dacpIdentifier),

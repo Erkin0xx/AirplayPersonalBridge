@@ -200,10 +200,31 @@ public actor RAOPDiscovery {
     ///
     /// `static` et partagée avec `AirPlay2Discovery` depuis le jalon 3 : la mécanique est
     /// strictement la même quel que soit le type de service.
+    /// **L'IPv4 est essayée d'abord**, avec repli sur une résolution sans contrainte.
+    ///
+    /// Motif (constaté le 2026-08-11 contre un HomePod gen 2) : sans contrainte, la résolution
+    /// rendait une adresse IPv6 **lien-local**. La session s'établissait, le pairing aboutissait,
+    /// mais le récepteur refusait le `SETUP` en `400`, là où pyatv — qui passe en IPv4 — était
+    /// accepté avec un plist identique. Le repli garde le chemin ouvert vers un récepteur qui
+    /// n'aurait pas d'adresse IPv4.
     static func resolveEndpoint(_ endpoint: NWEndpoint) async -> (host: String, port: UInt16)? {
+        if let v4 = await resolveEndpoint(endpoint, ipVersion: .v4) { return v4 }
+        return await resolveEndpoint(endpoint, ipVersion: nil)
+    }
+
+    private static func resolveEndpoint(
+        _ endpoint: NWEndpoint, ipVersion: NWProtocolIP.Options.Version?
+    ) async -> (host: String, port: UInt16)? {
         await withCheckedContinuation { continuation in
             let box = EndpointResumeBox(continuation: continuation)
-            let connection = NWConnection(to: endpoint, using: .tcp)
+            let parameters = NWParameters.tcp
+            if let ipVersion,
+                let options = parameters.defaultProtocolStack.internetProtocol
+                    as? NWProtocolIP.Options
+            {
+                options.version = ipVersion
+            }
+            let connection = NWConnection(to: endpoint, using: parameters)
             connection.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
