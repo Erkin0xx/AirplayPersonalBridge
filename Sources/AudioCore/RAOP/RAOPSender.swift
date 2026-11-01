@@ -14,7 +14,7 @@ public enum RAOPSenderState: String, Sendable {
 }
 
 /// Sender AirPlay 1 / RAOP (CDC 4.3) : RTSP pour la négociation, RTP pour le transport,
-/// ALAC pour l'encodage.
+/// PCM L16 pour la charge utile (ALAC en repli, pour un récepteur qui n'accepterait que lui).
 ///
 /// ## Position dans l'architecture (invariants section 12)
 ///
@@ -29,8 +29,14 @@ public enum RAOPSenderState: String, Sendable {
 ///
 /// ## Séquence protocolaire
 ///
-/// `ANNOUNCE` (SDP : format ALAC, clé AES chiffrée, IV) → `SETUP` (ports UDP) →
-/// `RECORD` (départ du flux) → `SET_PARAMETER` (volume) → paquets RTP → `TEARDOWN`.
+/// `ANNOUNCE` (SDP : format, clé AES chiffrée et IV si chiffrement) → `SETUP` (ports UDP) →
+/// `POST /feedback` (sonde de maintien de session) → `RECORD` (départ du flux) →
+/// `SET_PARAMETER` (volume) → paquets RTP → `TEARDOWN`.
+///
+/// C'est celle de pyatv, à deux écarts près, tous deux acceptés par la vraie Geneva : pyatv
+/// fait précéder l'`ANNOUNCE` d'un `GET /info` et suivre le `RECORD` d'un `FLUSH`. Ni lui ni ce
+/// sender n'envoient d'`OPTIONS` : macOS le fait pour passer un défi `Apple-Challenge`, qu'un
+/// flux en clair n'a pas à relever.
 public actor RAOPSender {
     /// Trames par paquet, valeur canonique du protocole.
     private static let framesPerPacket = ALACEncoder.framesPerPacket
@@ -42,8 +48,18 @@ public actor RAOPSender {
     private static let syncInterval = 126
     /// Erreurs d'émission consécutives au-delà desquelles la session est réputée perdue.
     /// 50 paquets ≈ 0,4 s : assez pour ne pas réagir à un à-coup, assez peu pour rétablir
-    /// avant que le tampon du récepteur ne se vide.
-    private static let lostSessionErrorThreshold = 20
+    /// avant que le tampon du récepteur ne se vide. Le Wi-Fi rend couramment `ENOBUFS` sur
+    /// quelques dizaines de paquets en cas de congestion : à 20 paquets (0,16 s), ce sursaut
+    /// coûtait une renégociation complète, bien plus audible que la perte elle-même.
+    private static let lostSessionErrorThreshold = 50
+    /// Toute notre profondeur d'échantillon : le rééchantillonneur et les deux formats de charge
+    /// utile sont en 16 bits, quoi que le récepteur annonce savoir faire en `ss`.
+    private static let bitsPerSample = 16
+    /// Délai accordé à une requête de maintien de session (valeur de pyatv).
+    private static let keepAliveTimeout: Duration = .seconds(4)
+    /// Délai accordé à la sonde : au-delà, le récepteur est réputé ne pas gérer `/feedback`.
+    /// Plus court que pour le maintien, car il retarde le départ du son.
+    private static let keepAliveProbeTimeout: Duration = .seconds(2)
     /// Silence du canal de timing au-delà duquel un avertissement est journalisé.
     ///
     /// **Volontairement pas un critère de perte de session.** shairport-sync 5.2.1 interroge
@@ -85,6 +101,28 @@ public actor RAOPSender {
     /// première annonce de synchro, deux choses qui doivent repartir à zéro à chaque session.
     private var packetsInSession = 0
     private var streamTask: Task<Void, Never>?
+    /// Tâche de maintien de session, propre à la session en cours.
+    private var keepAliveTask: Task<Void, Never>?
+    /// Période du maintien de session. 25 s comme pyatv ; injectable pour les tests.
+    private let keepAliveInterval: Duration
+    /// Le récepteur a-t-il accepté la sonde `/feedback` de cette session ?
+    private var keepAliveAccepted = false
+    /// Répond aux demandes de retransmission, hors de l'acteur : voir sa documentation.
+    private let retransmitter = RAOPRetransmitResponder()
+    /// Renfort de basses (ADR-002), appliqué à la copie propre à ce sender. Transparent à 0 dB.
+    private var bassBoost: LowShelfFilter
+    /// Avance à chaque `stop()`. Une négociation qui se termine sous une autre valeur que celle
+    /// de son départ a été rendue caduque, et ne doit surtout pas démarrer le flux.
+    private var sessionGeneration = 0
+    /// Avance à chaque négociation. Une perte signalée par la connexion d'une session précédente
+    /// ne doit pas faire tomber la suivante.
+    private var connectionEpoch = 0
+    /// Valeur de l'en-tête `Session` rendu par le `SETUP`, reprise au `TEARDOWN`.
+    private var receiverSession: String?
+    /// Réservé aux tests : un paquet sur N n'est pas émis, mais reste dans l'historique. Une perte
+    /// réelle ne se provoque pas à la demande sur la boucle locale, et c'est le seul moyen de
+    /// vérifier qu'un vrai récepteur accepte nos retransmissions.
+    private var simulatedLossInterval = 0
     /// Volume courant, à réappliquer après une reconnexion.
     private var currentVolume: Float = -20
     /// Rétablissement automatique après perte réseau (CDC section 8). Désactivable pour les
@@ -115,8 +153,24 @@ public actor RAOPSender {
     /// Tampon de lecture du ring buffer, alloué une fois.
     private var readScratch: [Float]
 
+    private var counters = RAOPStatistics()
+
     /// Statistiques exposées pour la validation du jalon.
-    public private(set) var statistics = RAOPStatistics()
+    public var statistics: RAOPStatistics {
+        var snapshot = counters
+        let retransmissions = retransmitter.snapshot
+        snapshot.retransmitRequests = retransmissions.requests
+        snapshot.packetsRetransmitted = retransmissions.packetsResent
+        snapshot.retransmitMisses = retransmissions.packetsMissing
+        snapshot.retransmitsThrottled = retransmissions.packetsThrottled
+        return snapshot
+    }
+
+    /// Dernière erreur de session, rédigée pour l'affichage. `nil` tant que tout va bien, y
+    /// compris après une reconnexion réussie. Lue avec ``state`` : en `.reconnecting`, elle dit
+    /// ce qui retarde le rétablissement (« récepteur occupé… ») ; en `.failed`, pourquoi le
+    /// sender a renoncé.
+    public private(set) var lastErrorMessage: String?
 
     /// - Parameters:
     ///   - device: le récepteur, tel que la découverte Bonjour l'a résolu.
@@ -126,17 +180,24 @@ public actor RAOPSender {
     ///     ce sender, ce qui laisse le comportement du jalon 2 inchangé quand une seule
     ///     sortie diffuse ; l'alignement inter-sorties suppose de passer **la même** aux deux.
     ///   - reconnects: rétablissement automatique de la session après perte réseau.
+    ///   - keepAliveInterval: période du maintien de session.
     public init(
         device: RAOPDevice,
         ring: AudioRingBuffer,
         captureFormat: AVAudioFormat,
         clock: PlaybackClockProtocol? = nil,
-        reconnects: Bool = true
+        reconnects: Bool = true,
+        keepAliveInterval: Duration = .seconds(25)
     ) {
         self.device = device
         self.ring = ring
         self.captureFormat = captureFormat
         self.reconnects = reconnects
+        self.keepAliveInterval = keepAliveInterval
+        self.bassBoost = LowShelfFilter(
+            sampleRate: captureFormat.sampleRate,
+            channelCount: Int(captureFormat.channelCount)
+        )
         let effectiveClock =
             clock ?? SharedPlaybackClock(captureSampleRate: captureFormat.sampleRate)
         (effectiveClock as? SharedPlaybackClock)?.startIfNeeded()
@@ -156,19 +217,52 @@ public actor RAOPSender {
         synchronizer.manualOffsetSeconds = seconds
     }
 
+    /// Renfort de basses de cette sortie, en dB (ADR-002 : plateau grave à 80 Hz, 0 à +12 dB).
+    ///
+    /// Applicable à tout moment, avant comme pendant la diffusion, et conservé d'une reconnexion
+    /// à l'autre. Le changement glisse sans clic, et 0 dB est strictement transparent. Il n'agit
+    /// que sur la copie propre à ce sender : les autres sorties reçoivent le flux intact
+    /// (invariant section 12). Voir ``LowShelfFilter`` pour la gestion de l'écrêtage.
+    public func setBassBoost(decibels: Float) {
+        bassBoost.setGain(decibels: Double(decibels))
+        counters.bassBoostDecibels = Float(bassBoost.gainDecibels)
+    }
+
+    /// Voir ``simulatedLossInterval``. Interne : uniquement accessible aux tests.
+    func simulateLoss(everyNthPacket interval: Int) {
+        simulatedLossInterval = interval
+    }
+
     // MARK: - Session
 
     /// Établit la session RTSP et démarre la diffusion.
+    ///
+    /// Annuler la tâche appelante abandonne la négociation sans attendre ses délais. Un
+    /// ``stop()`` concurrent aussi, et `start` lève alors `CancellationError`.
     public func start(volume: Float = -20) async throws {
         guard state == .idle else { return }
         state = .connecting
         currentVolume = volume
+        lastErrorMessage = nil
+        let generation = sessionGeneration
 
         do {
-            try await negotiate(volume: volume)
+            try await negotiate()
+            guard generation == sessionGeneration else { throw CancellationError() }
         } catch {
-            state = .failed
-            log.error("Établissement de la session RAOP en échec : \(String(describing: error), privacy: .public)")
+            guard generation == sessionGeneration else {
+                // `stop()` est passé pendant la négociation et a rendu le sender au repos. Il
+                // ne reste qu'à libérer ce que la négociation a pu ouvrir depuis.
+                if state == .idle { await teardown() }
+                throw CancellationError()
+            }
+            if error is CancellationError {
+                state = .idle
+            } else {
+                state = .failed
+                lastErrorMessage = String(describing: error)
+                log.error("Établissement de la session RAOP en échec : \(String(describing: error), privacy: .public)")
+            }
             await teardown()
             throw error
         }
@@ -198,12 +292,17 @@ public actor RAOPSender {
             log.info("Arriéré de \(staleFrames) trames écarté avant le début de la diffusion")
         }
         pendingSamples.removeAll(keepingCapacity: true)
+        // Rien de ce qui a précédé ne sera plus joué : ni la queue du filtre, ni les paquets de
+        // la session d'avant. La numérotation continuant d'une session à l'autre, un paquet resté
+        // dans l'historique répondrait à une demande sur un numéro qui n'est plus le sien.
+        bassBoost.reset()
+        retransmitter.clear()
         if firstSession {
             // Photographie du compteur de refus au moment précis où la diffusion démarre.
             // Tout ce qui précède est imputable à la négociation (découverte Bonjour +
             // RTSP), pendant laquelle la capture tourne sans consommateur ; seul l'écart
             // mesuré ensuite signale un vrai sous-dimensionnement du tampon en régime établi.
-            statistics.droppedBeforeStreaming = ring.droppedFrames
+            counters.droppedBeforeStreaming = ring.droppedFrames
         }
         packetsInSession = 0
         consecutiveSendErrors = 0
@@ -212,87 +311,133 @@ public actor RAOPSender {
         timingSilenceReported = false
         // Ancre le flux sur l'horloge de capture commune aux deux sorties.
         synchronizer.beginStreaming(atCaptureFrame: ring.totalFramesRead)
+        startKeepAlive()
     }
 
     /// Surveille la diffusion et rétablit la session après une perte réseau (CDC section 8).
     ///
     /// La reconnexion est **isolée** : elle ne touche ni la capture, ni le ring buffer, ni
     /// l'autre sortie, qui n'a aucun moyen de savoir que celle-ci a décroché (invariant
-    /// section 12). Le repli exponentiel évite de marteler un récepteur absent.
+    /// section 12). Le repli exponentiel évite de marteler un récepteur absent : une perte qui
+    /// dure ne coûte qu'une tentative toutes les 15 s, sans rien accumuler d'une à l'autre.
     private func supervise() async {
         while !Task.isCancelled {
             await streamLoop()
-            guard !Task.isCancelled, sessionLost, reconnects else { break }
+            guard !Task.isCancelled, sessionLost else { break }
+            stopKeepAlive()
+            guard reconnects else {
+                state = .failed
+                lastErrorMessage = "session perdue avec le récepteur"
+                await teardown()
+                break
+            }
 
             state = .reconnecting
-            statistics.reconnections += 1
+            counters.reconnections += 1
             log.error("Session RAOP perdue — tentative de rétablissement")
             await teardown()
 
-            var backoff: Duration = .seconds(1)
+            var delay: Duration = .seconds(1)
             var reconnected = false
             while !Task.isCancelled && !reconnected {
                 do {
-                    try await Task.sleep(for: backoff)
-                    try await negotiate(volume: currentVolume)
+                    try await Task.sleep(for: delay)
+                    try await negotiate()
                     reconnected = true
                 } catch is CancellationError {
                     return
                 } catch {
-                    statistics.reconnectionAttempts += 1
+                    counters.reconnectionAttempts += 1
+                    lastErrorMessage = String(describing: error)
                     log.error(
                         "Reconnexion RAOP en échec : \(String(describing: error), privacy: .public)"
                     )
                     await teardown()
-                    backoff = min(backoff * 2, .seconds(15))
+                    guard Self.isWorthRetrying(error) else {
+                        state = .failed
+                        return
+                    }
+                    delay = Self.reconnectDelay(after: error, current: delay)
                 }
             }
             guard reconnected, !Task.isCancelled else { break }
+            lastErrorMessage = nil
             beginStreaming(firstSession: false)
             state = .streaming
             log.info("Session RAOP rétablie")
         }
     }
 
-    /// Arrête la diffusion et libère la session.
+    /// Un refus définitif ne se corrigera pas en réessayant : mot de passe exigé, ou format que
+    /// le récepteur n'annonce pas. Le reste (réseau, occupé, redémarrage) peut se résoudre seul.
+    static func isWorthRetrying(_ error: Error) -> Bool {
+        if error is RAOPSenderError { return false }
+        if let rtsp = error as? RTSPError, rtsp.requiresPassword { return false }
+        return true
+    }
+
+    /// Délai avant la prochaine tentative, doublé à chaque échec.
+    ///
+    /// Un récepteur **occupé** ne se libérera pas en quelques secondes : soit un autre appareil
+    /// diffuse, soit il garde notre ancienne session jusqu'à l'expiration de son délai. Il a donc
+    /// droit à une attente nettement plus longue, sans quoi on l'interrogerait pour rien.
+    static func reconnectDelay(after error: Error, current: Duration) -> Duration {
+        if let rtsp = error as? RTSPError, rtsp.isReceiverBusy {
+            return min(max(current * 2, .seconds(10)), .seconds(30))
+        }
+        return min(current * 2, .seconds(15))
+    }
+
+    /// Arrête la diffusion et libère la session. Ne reste jamais bloqué : la négociation en
+    /// cours est abandonnée sur-le-champ, et le `TEARDOWN` a droit à 2 s au plus.
     public func stop() async {
-        streamTask?.cancel()
+        sessionGeneration &+= 1
+        let supervision = streamTask
         streamTask = nil
+        supervision?.cancel()
+        stopKeepAlive()
+        // Attendre que la supervision ait lâché la session : elle pourrait sinon être en train
+        // de rouvrir sockets et connexion, qui survivraient à cet arrêt.
+        await supervision?.value
+
         if state == .streaming || state == .reconnecting {
-            try? await sendTeardown()
+            await sendTeardown()
         }
         await teardown()
         state = .idle
         log.info("Diffusion RAOP arrêtée (\(self.packetsSent) paquets émis)")
     }
 
-    private func negotiate(volume: Float) async throws {
-        // Choix du codec d'après `cn`. Le PCM est préféré quand le récepteur l'annonce, pour
-        // deux raisons : notre encodeur ALAC produit de toute façon des trames **non
-        // compressées** (aucun gain de débit, 3 octets de plus par paquet), et la Geneva
-        // AeroSphere décode nos trames ALAC de travers — elle restitue un ton continu, alors
-        // qu'elle joue proprement le même flux en PCM (comparaison au fil avec pyatv,
-        // 2026-08-11). L'ALAC reste le repli pour un récepteur qui n'annoncerait pas `cn=0`.
+    private func negotiate() async throws {
+        // Choix du codec d'après `cn`. Le PCM est préféré quand le récepteur l'annonce : notre
+        // encodeur ALAC produit de toute façon des trames **non compressées** (aucun gain de
+        // débit, 4 octets de plus par paquet), et c'est le seul format qu'emploie pyatv, avec
+        // lequel la Geneva a été comparée au fil (2026-08-11). L'ALAC reste le repli pour un
+        // récepteur qui n'annoncerait pas `cn=0`, en stéréo seulement.
         if device.supportsPCM {
             usesPCM = true
-        } else if device.supportsALAC {
+        } else if device.supportsALAC, device.channelCount == 2 {
             usesPCM = false
         } else {
             throw RAOPSenderError.alacUnsupported(device.serviceName)
         }
-        // Choix du mode de chiffrement d'après ce que le récepteur annonce en `et`.
-        // RSA-AES est préféré quand il est proposé : c'est le chemin validé au jalon 2, et le
-        // conserver par défaut évite de changer le comportement contre les récepteurs qui
-        // l'acceptent. Le clair n'est retenu que faute de mieux — la vraie Geneva annonce
-        // `et=0,4` et ne laisse pas d'autre choix, FairPlay (3, 4) n'étant pas implémenté.
+        // Choix du mode de chiffrement d'après ce que le récepteur annonce en `et`. Le clair est
+        // préféré dès qu'il est proposé : c'est le chemin qu'emprunte la vraie Geneva (`et=0,4`,
+        // FairPlay n'étant pas implémenté) et le seul que connaisse pyatv, qui marche. Sur un
+        // réseau local domestique, chiffrer le son d'une enceinte ne protège de personne. RSA-AES
+        // reste le repli d'un récepteur qui n'accepte que lui (`et=1`).
         let crypto: RAOPCrypto?
-        if device.supportsRSAEncryption {
-            crypto = try RAOPCrypto()
-        } else if device.supportsUnencrypted {
+        if device.supportsUnencrypted {
             crypto = nil
-            log.info("\(self.device.serviceName) n'annonce pas RSA-AES : flux émis en clair (et=0)")
+        } else if device.supportsRSAEncryption {
+            crypto = try RAOPCrypto()
         } else {
             throw RAOPSenderError.encryptionUnsupported(device.serviceName)
+        }
+        // Contrôlé avant tout échange : les canaux UDP et le SDP ne savent viser que de l'IPv4.
+        // Découvert seulement après le `SETUP`, l'échec laisserait une session ouverte en face.
+        guard UDPChannel.isIPv4Literal(device.host) else {
+            throw RAOPSenderError.ipv4Required(device.host)
         }
         self.crypto = crypto
         self.encoder = usesPCM
@@ -304,9 +449,16 @@ public actor RAOPSender {
             channelCount: AVAudioChannelCount(device.channelCount)
         )
 
+        connectionEpoch &+= 1
+        let epoch = connectionEpoch
+        receiverSession = nil
+        keepAliveAccepted = false
+
+        // Rendu visible avant de se connecter : c'est ce qui permet à `stop()` d'interrompre
+        // l'établissement, au lieu d'attendre son délai.
         let client = RTSPClient(host: device.host, port: device.port)
-        try await client.connect()
         self.rtsp = client
+        try await client.connect(honoringCancellation: true)
 
         // Les ports locaux doivent exister avant le SETUP : ils y sont annoncés.
         let control = try UDPChannel(label: "control")
@@ -327,17 +479,95 @@ public actor RAOPSender {
         try timing.setDestination(host: device.host, port: ports.timing)
 
         installTimingResponder(on: timing)
+        installRetransmitResponder(on: control)
         control.startReceiving()
         timing.startReceiving()
 
+        // Comme pyatv : la sonde précède le `RECORD`, et décide du maintien de session.
+        keepAliveAccepted = try await probeKeepAlive(client: client)
+
         try await record(client: client, uri: uri)
-        try await setVolume(volume, client: client, uri: uri)
+        do {
+            try await setVolume(currentVolume, client: client, uri: uri, honoringCancellation: true)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // Un refus du volume ne vaut pas la perte du son. Une vraie rupture de connexion,
+            // elle, sera vue par le signal posé juste après.
+            counters.errors += 1
+            log.error("Volume de départ refusé : \(String(describing: error), privacy: .public)")
+        }
 
         // Signal franc de perte de session, posé une fois la négociation terminée : le flux
         // audio étant en UDP, la rupture de cette connexion TCP est la seule indication
         // fiable qu'un récepteur a disparu (CDC section 8).
         await client.onConnectionLost { [weak self] in
-            Task { await self?.noteControlConnectionLost() }
+            Task { await self?.noteControlConnectionLost(epoch: epoch) }
+        }
+    }
+
+    /// Sonde du maintien de session : `POST /feedback`, une fois, comme pyatv.
+    ///
+    /// Un refus ou un silence ne sont pas des erreurs : le récepteur n'en a simplement pas
+    /// besoin, et aucune requête périodique ne lui sera envoyée. Le délai reste bref : la
+    /// réponse tardive, s'il y en a une, sera écartée par son `CSeq`.
+    private func probeKeepAlive(client: RTSPClient) async throws -> Bool {
+        do {
+            try await client.send(
+                RTSPRequest(method: "POST", uri: "/feedback"),
+                timeout: Self.keepAliveProbeTimeout,
+                honoringCancellation: true
+            )
+            return true
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            log.info("Pas de maintien de session : \(String(describing: error), privacy: .public)")
+            return false
+        }
+    }
+
+    /// Lance le maintien de session, si le récepteur a accepté la sonde.
+    ///
+    /// Un récepteur peut fermer une session sans nouvelle de son client au bout de quelques
+    /// minutes, le flux UDP ne comptant pas pour lui comme un signe de vie sur la connexion RTSP.
+    /// **Toute erreur reste confinée ici** : un maintien refusé ne dit rien de l'état de la
+    /// session, et la perte réelle de la connexion a son propre signal.
+    private func startKeepAlive() {
+        stopKeepAlive()
+        counters.keepAliveSupported = keepAliveAccepted
+        guard keepAliveAccepted, let client = rtsp else { return }
+        let interval = keepAliveInterval
+        keepAliveTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: interval)
+                    try await client.send(
+                        RTSPRequest(method: "POST", uri: "/feedback"),
+                        timeout: Self.keepAliveTimeout,
+                        honoringCancellation: true
+                    )
+                    await self?.noteKeepAlive(failure: nil)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    await self?.noteKeepAlive(failure: error)
+                }
+            }
+        }
+    }
+
+    private func stopKeepAlive() {
+        keepAliveTask?.cancel()
+        keepAliveTask = nil
+    }
+
+    private func noteKeepAlive(failure: Error?) {
+        if let failure {
+            counters.keepAliveFailures += 1
+            log.info("Maintien de session sans réponse : \(String(describing: failure), privacy: .public)")
+        } else {
+            counters.keepAlivesSent += 1
         }
     }
 
@@ -350,8 +580,15 @@ public actor RAOPSender {
         // Les paramètres `fmtp` sont ceux du décodeur ALAC, dans l'ordre imposé par le
         // protocole : frameLength, compatibleVersion, bitDepth, pb, mb, kb, channels,
         // maxRun, maxFrameBytes, avgBitRate, sampleRate.
+        //
+        // Un flux L16 n'en a aucun besoin, mais pyatv envoie quand même cette ligne, et la
+        // Geneva n'a jamais été validée sans : elle reste. Elle est retirée dans un seul cas,
+        // face à un récepteur qui annonce **aussi** ALAC. shairport-sync jusqu'à 5.2.1 au moins
+        // choisit son décodeur ALAC dès qu'il la voit, quel que soit le `rtpmap`, et décode alors
+        // du PCM jusqu'à en mourir (`Bus error`, en moins de 30 s). Corrigé depuis en amont.
+        let carriesDecoderParameters = !usesPCM || !device.supportsALAC
         let fmtp = [
-            "\(Self.framesPerPacket)", "0", "\(device.bitDepth)", "40", "10", "14",
+            "\(Self.framesPerPacket)", "0", "\(Self.bitsPerSample)", "40", "10", "14",
             "\(device.channelCount)", "255", "0", "0", "\(device.sampleRate)",
         ].joined(separator: " ")
 
@@ -368,20 +605,25 @@ public actor RAOPSender {
             usesPCM
                 ? "a=rtpmap:96 L16/\(device.sampleRate)/\(device.channelCount)"
                 : "a=rtpmap:96 AppleLossless",
-            "a=fmtp:96 \(fmtp)",
         ]
+        if carriesDecoderParameters {
+            lines.append("a=fmtp:96 \(fmtp)")
+        }
         if let crypto {
             lines.append("a=rsaaeskey:\(RAOPCrypto.base64Unpadded(try crypto.encryptedSessionKey()))")
             lines.append("a=aesiv:\(RAOPCrypto.base64Unpadded(crypto.aesIV))")
         }
         let sdp = lines.joined(separator: "\r\n") + "\r\n"
 
-        try await client.send(RTSPRequest(
-            method: "ANNOUNCE",
-            uri: uri,
-            headers: [("Content-Type", "application/sdp")],
-            body: Data(sdp.utf8)
-        ))
+        try await client.send(
+            RTSPRequest(
+                method: "ANNOUNCE",
+                uri: uri,
+                headers: [("Content-Type", "application/sdp")],
+                body: Data(sdp.utf8)
+            ),
+            honoringCancellation: true
+        )
     }
 
     /// `SETUP` : annonce les ports locaux, récupère ceux du récepteur.
@@ -393,32 +635,46 @@ public actor RAOPSender {
             "control_port=\(control.localPort)", "timing_port=\(timing.localPort)",
         ].joined(separator: ";")
 
-        let response = try await client.send(RTSPRequest(
-            method: "SETUP", uri: uri, headers: [("Transport", transport)]
-        ))
+        let response = try await client.send(
+            RTSPRequest(method: "SETUP", uri: uri, headers: [("Transport", transport)]),
+            honoringCancellation: true
+        )
 
         // PIÈGE : ce sont les ports **de la réponse** qui font foi, jamais ceux demandés.
         let parameters = response.transportParameters
-        guard let serverPort = parameters["server_port"].flatMap({ UInt16($0) }) else {
+        guard let serverPort = Self.port(from: parameters["server_port"]) else {
             throw RTSPError.missingHeader("Transport/server_port")
         }
-        let controlPort = parameters["control_port"].flatMap { UInt16($0) } ?? serverPort
-        let timingPort = parameters["timing_port"].flatMap { UInt16($0) } ?? serverPort
+        let controlPort = Self.port(from: parameters["control_port"]) ?? serverPort
+        let timingPort = Self.port(from: parameters["timing_port"]) ?? serverPort
+        // `Session: 1234;timeout=60` : seul l'identifiant est à reprendre.
+        receiverSession = response.headers["session"]?
+            .split(separator: ";").first
+            .map { $0.trimmingCharacters(in: .whitespaces) }
 
         log.info("Ports du récepteur — audio \(serverPort), control \(controlPort), timing \(timingPort)")
         return RTPPorts(audio: serverPort, control: controlPort, timing: timingPort)
     }
 
+    /// Lit un port du `Transport`, y compris sous sa forme d'intervalle RTSP (`6000-6001`).
+    private static func port(from value: String?) -> UInt16? {
+        guard let value else { return nil }
+        return UInt16(value.prefix { $0.isNumber })
+    }
+
     /// `RECORD` : démarre le flux. `RTP-Info` porte la séquence et l'estampille de départ.
     private func record(client: RTSPClient, uri: String) async throws {
-        let response = try await client.send(RTSPRequest(
-            method: "RECORD",
-            uri: uri,
-            headers: [
-                ("Range", "npt=0-"),
-                ("RTP-Info", "seq=\(sequenceNumber);rtptime=\(rtpTimestamp)"),
-            ]
-        ))
+        let response = try await client.send(
+            RTSPRequest(
+                method: "RECORD",
+                uri: uri,
+                headers: [
+                    ("Range", "npt=0-"),
+                    ("RTP-Info", "seq=\(sequenceNumber);rtptime=\(rtpTimestamp)"),
+                ]
+            ),
+            honoringCancellation: true
+        )
         // Latence annoncée par le récepteur : sa profondeur de tampon interne, en trames.
         // C'est précisément la grandeur qu'une mesure de trajet réseau ne verrait pas (CDC
         // 4.5) — elle vaut ici des centaines de millisecondes là où un aller-retour sur un
@@ -426,36 +682,60 @@ public actor RAOPSender {
         if let audioLatency = response.headers["audio-latency"] {
             log.info("Latence annoncée par le récepteur : \(audioLatency, privacy: .public) trames")
             let frames = Int(audioLatency) ?? 0
-            statistics.reportedLatencyFrames = frames
+            counters.reportedLatencyFrames = frames
             synchronizer.declaredReceiverLatencyFrames = frames
         }
     }
 
     /// `SET_PARAMETER` : volume, en dB. RAOP attend −144 (silence) ou −30…0.
+    ///
+    /// Pendant une négociation, la valeur est simplement retenue : elle partira à la fin de
+    /// celle-ci. Un réglage fait pendant une coupure ne doit ni échouer ni être oublié, sans
+    /// quoi la reprise se ferait à l'ancien volume.
     public func setVolume(_ volume: Float) async throws {
+        currentVolume = volume
+        if state == .connecting || state == .reconnecting { return }
         guard let client = rtsp, let uri = sessionURI else { throw RTSPError.notConnected }
         try await setVolume(volume, client: client, uri: uri)
     }
 
-    private func setVolume(_ volume: Float, client: RTSPClient, uri: String) async throws {
+    private func setVolume(
+        _ volume: Float, client: RTSPClient, uri: String, honoringCancellation: Bool = false
+    ) async throws {
         let clamped = volume <= -144 ? -144 : min(max(volume, -30), 0)
         let body = "volume: \(String(format: "%.6f", clamped))\r\n"
-        try await client.send(RTSPRequest(
-            method: "SET_PARAMETER",
-            uri: uri,
-            headers: [("Content-Type", "text/parameters")],
-            body: Data(body.utf8)
-        ))
-        statistics.volume = clamped
+        try await client.send(
+            RTSPRequest(
+                method: "SET_PARAMETER",
+                uri: uri,
+                headers: [("Content-Type", "text/parameters")],
+                body: Data(body.utf8)
+            ),
+            honoringCancellation: honoringCancellation
+        )
+        counters.volume = clamped
     }
 
-    private func sendTeardown() async throws {
+    /// `TEARDOWN`, en portant l'identifiant que le `SETUP` a rendu, comme pyatv : sans lui, un
+    /// récepteur peut ne pas reconnaître la session, la garder ouverte et répondre `453` à la
+    /// reconnexion suivante.
+    private func sendTeardown() async {
         guard let client = rtsp, let uri = sessionURI else { return }
+        var headers: [(name: String, value: String)] = []
+        if let receiverSession { headers.append(("Session", receiverSession)) }
+        let request = RTSPRequest(method: "TEARDOWN", uri: uri, headers: headers)
+
+        // Détaché, parce que l'appelant est le plus souvent une tâche **déjà annulée** : c'est
+        // ainsi que `BridgeEngine` arrête une sortie. Le récepteur doit recevoir ce message
+        // quoi qu'il arrive, sous peine de rester occupé.
+        //
         // Délai court : beaucoup de récepteurs ferment la connexion dès le TEARDOWN reçu,
         // sans jamais répondre — c'est le cas du mock shairport-sync, qui quitte. Attendre
         // les 10 s par défaut retarderait l'arrêt sans rien apporter : à ce stade la
         // diffusion est terminée et la réponse n'est plus exploitable.
-        try await client.send(RTSPRequest(method: "TEARDOWN", uri: uri), timeout: .seconds(2))
+        await Task.detached {
+            _ = try? await client.send(request, timeout: .seconds(2))
+        }.value
     }
 
     // MARK: - Diffusion
@@ -479,7 +759,7 @@ public actor RAOPSender {
                 try drainRingBuffer()
             } catch {
                 log.error("Erreur de lecture du flux RAOP : \(String(describing: error), privacy: .public)")
-                statistics.errors += 1
+                counters.errors += 1
                 // Invariant section 12 : l'échec reste confiné à ce sender. Il n'interrompt
                 // ni la capture, ni aucune autre sortie ; la boucle continue et retentera.
             }
@@ -507,7 +787,7 @@ public actor RAOPSender {
                 // Retard irrattrapable (récepteur ou réseau bloqué) : repartir de l'instant
                 // courant plutôt que d'émettre une rafale de rattrapage.
                 nextDeadline = now
-                statistics.resyncs += 1
+                counters.resyncs += 1
             }
 
             do {
@@ -516,7 +796,7 @@ public actor RAOPSender {
                 nextDeadline += packetDuration
             } catch {
                 log.error("Erreur d'émission RAOP : \(String(describing: error), privacy: .public)")
-                statistics.errors += 1
+                counters.errors += 1
                 consecutiveSendErrors += 1
                 nextDeadline += packetDuration
             }
@@ -546,8 +826,8 @@ public actor RAOPSender {
     }
 
     /// La connexion RTSP est tombée : c'est le signal franc de perte de session.
-    private func noteControlConnectionLost() {
-        guard state == .streaming else { return }
+    private func noteControlConnectionLost(epoch: Int) {
+        guard epoch == connectionEpoch, state == .streaming else { return }
         log.error("Connexion RTSP rompue — session réputée perdue")
         sessionLost = true
     }
@@ -584,11 +864,14 @@ public actor RAOPSender {
                 guard let base = buffer.baseAddress else { return [] }
                 let read = ring.read(into: base, frameCount: frames)
                 guard read > 0 else { return [] }
+                // Sur `readScratch`, donc sur la copie propre à ce sender. Avant la conversion
+                // en 16 bits, où un dépassement serait déjà un écrêtage. Sans effet à 0 dB.
+                bassBoost.process(base, frameCount: read)
                 return try resampler.convert(base, frameCount: read)
             }
             guard !converted.isEmpty else { break }
             pendingSamples.append(contentsOf: converted)
-            statistics.framesRead += frames
+            counters.framesRead += frames
         }
     }
 
@@ -631,14 +914,14 @@ public actor RAOPSender {
                 from: Array(pendingSamples[0..<(sampleCount + channels)]),
                 channelCount: channels
             )
-            statistics.framesRemoved += 1
+            counters.framesRemoved += 1
         case .insertFrame:
             consumedFrames = Self.framesPerPacket - 1
             block = SampleSplice.insertingOneFrame(
                 into: Array(pendingSamples[0..<(sampleCount - channels)]),
                 channelCount: channels
             )
-            statistics.framesInserted += 1
+            counters.framesInserted += 1
         }
         // L'ancrage doit décrire **le paquet qu'on émet**, donc être calculé avant d'avancer
         // la position du flux.
@@ -660,30 +943,55 @@ public actor RAOPSender {
                 payload.append(UInt8(truncatingIfNeeded: bits))
             }
         }
-        // `crypto` est nil en mode clair (`et=0`) : la charge utile ALAC part telle quelle.
+        // `crypto` est nil en mode clair (`et=0`) : la charge utile part telle quelle.
         try crypto?.encryptAudioInPlace(&payload)
 
         // Le bit marker signale le premier paquet du flux : le récepteur y réinitialise
         // ses tampons. Compteur de session, pas compteur global : après une reconnexion, le
         // récepteur doit repartir sur des tampons neufs.
+        let isFirstOfSession = packetsInSession == 0
+        let isSyncDue = packetsInSession % Self.syncInterval == 0
+        let timestamp = rtpTimestamp
         let packet = RTPPacketBuilder.audio(
             sequenceNumber: sequenceNumber,
-            timestamp: rtpTimestamp,
+            timestamp: timestamp,
             ssrc: ssrc,
-            marker: packetsInSession == 0,
+            marker: isFirstOfSession,
             payload: payload
         )
-        try audio.send(packet)
+        // Mémorisé avant l'émission : une demande peut arriver avant même que `send` ne rende
+        // la main, et un paquet dont l'émission échoue reste récupérable de cette façon.
+        retransmitter.record(sequence: sequenceNumber, packet: packet)
 
-        if packetsInSession % Self.syncInterval == 0 {
-            try sendSync(isFirst: packetsInSession == 0, anchorUnixTime: anchor)
-        }
-
+        // La position du flux avance **quoi qu'il arrive à l'émission**. Ces échantillons sont
+        // consommés et le synchroniseur les a comptés : ne pas avancer ferait partir l'audio
+        // suivant sous le numéro et l'estampille de celui-ci, décalant cette sortie de 8 ms sur
+        // l'horloge commune à chaque paquet perdu localement. Vu du récepteur, c'est une perte
+        // ordinaire, qu'une retransmission répare.
         sequenceNumber &+= 1
         rtpTimestamp &+= UInt32(Self.framesPerPacket)
-        packetsSent += 1
         packetsInSession += 1
-        statistics.packetsSent = packetsSent
+
+        var failure: Error?
+        do {
+            let isSimulatedLoss = simulatedLossInterval > 0 && !isFirstOfSession
+                && packetsInSession % simulatedLossInterval == 0
+            if !isSimulatedLoss { try audio.send(packet) }
+            packetsSent += 1
+            counters.packetsSent = packetsSent
+        } catch {
+            failure = error
+        }
+        if isSyncDue {
+            do {
+                try sendSync(
+                    rtpTimestamp: timestamp, isFirst: isFirstOfSession, anchorUnixTime: anchor
+                )
+            } catch {
+                failure = failure ?? error
+            }
+        }
+        if let failure { throw failure }
     }
 
     /// Annonce de synchro sur le canal de contrôle : relie l'horloge NTP au timestamp RTP.
@@ -696,7 +1004,9 @@ public actor RAOPSender {
     ///
     /// Sans horloge démarrée (sortie unique lancée hors du contexte du jalon 4), on retombe
     /// sur « maintenant », c'est-à-dire exactement le comportement validé au jalon 2.
-    private func sendSync(isFirst: Bool, anchorUnixTime: TimeInterval?) throws {
+    private func sendSync(
+        rtpTimestamp: UInt32, isFirst: Bool, anchorUnixTime: TimeInterval?
+    ) throws {
         guard let control = controlChannel else { return }
         let ntp = anchorUnixTime.map { NTPTime(unixTime: $0) } ?? NTPTime.now()
         let packet = RTPPacketBuilder.sync(
@@ -706,8 +1016,8 @@ public actor RAOPSender {
             isFirst: isFirst
         )
         try control.send(packet)
-        statistics.syncPacketsSent += 1
-        if anchorUnixTime != nil { statistics.anchoredSyncPackets += 1 }
+        counters.syncPacketsSent += 1
+        if anchorUnixTime != nil { counters.anchoredSyncPackets += 1 }
     }
 
     /// Répond aux requêtes d'horloge du récepteur **et** en tire la mesure de décalage.
@@ -718,7 +1028,7 @@ public actor RAOPSender {
     /// 2. relever l'estampille d'émission du récepteur, qui donne le décalage entre son
     ///    horloge et la nôtre (voir ``TimingEstimator``) et sert de signal de vie.
     private nonisolated func installTimingResponder(on timing: UDPChannel) {
-        timing.onReceive = { [weak self] data, _ in
+        timing.onReceive = { [weak self, weak timing] data, _ in
             let receiveTime = NTPTime.now()
             // Un paquet de timing fait 32 octets : en-tête RTP de 4, puis 4 octets de
             // bourrage, puis trois estampilles NTP de 8.
@@ -732,7 +1042,7 @@ public actor RAOPSender {
                 receiveTime: receiveTime,
                 transmitTime: NTPTime.now()
             )
-            try? timing.send(response)
+            try? timing?.send(response)
             // L'estampille d'origine est l'instant d'émission de la requête, lu sur
             // l'horloge du récepteur : c'est la matière première de la mesure.
             if let sender = self, let remote = NTPTime(bigEndianBytes: origin) {
@@ -745,12 +1055,28 @@ public actor RAOPSender {
         }
     }
 
+    /// Branche le répondeur de retransmission sur le canal de contrôle.
+    ///
+    /// La réponse repart vers **l'expéditeur de la demande**, depuis ce même socket, comme chez
+    /// pyatv : c'est le port depuis lequel le récepteur écoute ses retransmissions, pas
+    /// nécessairement celui qu'il a annoncé.
+    private nonisolated func installRetransmitResponder(on control: UDPChannel) {
+        let responder = retransmitter
+        control.onReceive = { [weak control] data, source in
+            responder.handle(datagram: data) { response in
+                try control?.send(response, to: source)
+            }
+        }
+    }
+
     private func countTimingResponse(at unixTime: TimeInterval) {
-        statistics.timingResponsesSent += 1
+        counters.timingResponsesSent += 1
         lastTimingRequestUnix = unixTime
     }
 
     private func teardown() async {
+        stopKeepAlive()
+        retransmitter.clear()
         audioChannel?.stop()
         controlChannel?.stop()
         timingChannel?.stop()
@@ -766,6 +1092,7 @@ public actor RAOPSender {
         // Après le TEARDOWN, qui l'utilise encore : une session suivante en construira une
         // nouvelle à l'ANNOUNCE.
         sessionURI = nil
+        receiverSession = nil
     }
 }
 
@@ -792,18 +1119,33 @@ public struct RAOPStatistics: Sendable {
     /// L'écart entre `AudioRingBuffer.droppedFrames` et cette valeur est le refus réel en
     /// régime établi — c'est lui, et lui seul, qui indiquerait un tampon trop petit.
     public var droppedBeforeStreaming = 0
+    /// Demandes de retransmission reçues, paquets renvoyés, paquets réclamés mais plus dans
+    /// l'historique, et paquets non renvoyés faute de débit disponible.
+    public var retransmitRequests = 0
+    public var packetsRetransmitted = 0
+    public var retransmitMisses = 0
+    public var retransmitsThrottled = 0
+    /// Le récepteur a-t-il accepté la sonde de maintien de session (`POST /feedback`) ?
+    public var keepAliveSupported = false
+    public var keepAlivesSent = 0
+    public var keepAliveFailures = 0
+    /// Consigne du renfort de basses.
+    public var bassBoostDecibels: Float = 0
 }
 
 public enum RAOPSenderError: Error, CustomStringConvertible {
     case alacUnsupported(String)
     case encryptionUnsupported(String)
+    case ipv4Required(String)
 
     public var description: String {
         switch self {
         case let .alacUnsupported(name):
-            return "\(name) n'annonce pas la prise en charge d'ALAC (cn=1)"
+            return "\(name) n'annonce aucun format audio pris en charge (ni PCM ni ALAC)"
         case let .encryptionUnsupported(name):
-            return "\(name) n'annonce pas la prise en charge de RSA-AES (et=1)"
+            return "\(name) exige un chiffrement non pris en charge (ni flux en clair ni RSA-AES)"
+        case let .ipv4Required(host):
+            return "le récepteur n'a pas d'adresse IPv4 utilisable (\(host)), requise par RAOP"
         }
     }
 }
