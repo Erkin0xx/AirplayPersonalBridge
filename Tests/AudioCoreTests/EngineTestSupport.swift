@@ -106,6 +106,7 @@ final class ManualCaptureSource: AudioCaptureSource, @unchecked Sendable {
     var routeChanged = false
     var expectation: Bool?
     var preparesToFail = 0
+    var startsToFail = 0
 
     init(
         format: AVAudioFormat = stereoFormat(),
@@ -136,6 +137,11 @@ final class ManualCaptureSource: AudioCaptureSource, @unchecked Sendable {
 
     func start(deliveringTo consumer: @escaping CaptureBlockConsumer) throws {
         lock.lock()
+        if startsToFail > 0 {
+            startsToFail -= 1
+            lock.unlock()
+            throw FakeError.prepareFailed
+        }
         self.consumer = consumer
         startCount += 1
         runningFlag = true

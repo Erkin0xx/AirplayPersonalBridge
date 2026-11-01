@@ -314,6 +314,11 @@ public actor BridgeEngine {
     /// Reconstruction en cours. Une notification ne l'annule pas : elle relit la route en
     /// terminant, et deux reconstructions simultanées lanceraient deux IO sur le même tampon.
     private var rebuildTask: Task<Void, Never>?
+    /// Les sorties ont été arrêtées pour une nouvelle fréquence, et attendent d'être relancées.
+    /// Tant que c'est vrai, une sortie cochée entre dans la liste sans démarrer : c'est la relance
+    /// qui la lancera, sur le bon tampon. Vrai aussi après une relance ratée, tant qu'aucune
+    /// reconstruction n'a abouti.
+    private var outputsAwaitingRelaunch = false
 
     private var entries: [String: OutputEntry] = [:]
     private var snapshots: [String: OutputSnapshot] = [:]
@@ -410,6 +415,7 @@ public actor BridgeEngine {
         }
 
         lifecycle = .running
+        outputsAwaitingRelaunch = false
         health = CaptureHealth()
         health.diagnosis = .waitingForFirstBlock
         resetHealthReferences(frames: fanout?.framesCaptured ?? 0, now: Date())
@@ -518,6 +524,7 @@ public actor BridgeEngine {
         adapter = nil
         clock = nil
         entries = [:]
+        outputsAwaitingRelaunch = false
         for id in outputOrder {
             snapshots[id]?.phase = .idle
             snapshots[id]?.nextAttemptAt = nil
@@ -570,6 +577,16 @@ public actor BridgeEngine {
                 throw Failure.duplicateOutput(request.id)
             }
             entries[request.id] = nil
+        }
+        guard !outputsAwaitingRelaunch else {
+            // Lancée maintenant, elle s'alimenterait à un tampon sur le point de disparaître.
+            guard entries.count < tuning.maximumOutputs else {
+                throw Failure.tooManyOutputs(limit: tuning.maximumOutputs)
+            }
+            entries[request.id] = OutputEntry(request: request, token: makeToken())
+            snapshots[request.id] = OutputSnapshot(id: request.id, phase: .connecting)
+            if !outputOrder.contains(request.id) { outputOrder.append(request.id) }
+            return
         }
         try launch(request)
     }
@@ -900,8 +917,7 @@ public actor BridgeEngine {
     }
 
     private func rebuildCapture(_ source: any AudioCaptureSource) async {
-        log.info("Périphérique de sortie changé — reconstruction de la capture")
-
+        log.info("Reconstruction de la capture")
         let stoppedAt = Date()
         let compensatedBefore = health.interruptedSeconds
         source.stop()
@@ -909,27 +925,9 @@ public actor BridgeEngine {
         var delay = tuning.rebuildRetryInitialDelay
         while lifecycle == .running, !Task.isCancelled {
             do {
-                let nativeFormat = try source.prepare()
-                let format = try CaptureBlockAdapter.normalizedFormat(for: nativeFormat)
-                if let fanout, format.sampleRate == fanout.format.sampleRate {
-                    let adapter = try CaptureBlockAdapter(
-                        sourceFormat: nativeFormat, fanout: fanout
-                    )
-                    try source.start(deliveringTo: adapter.makeConsumer())
-                    self.adapter = adapter
-                    // Le trou de capture ne doit pas entamer la marge de restitution.
-                    let elapsed = Date().timeIntervalSince(stoppedAt)
-                    let remaining = elapsed - (health.interruptedSeconds - compensatedBefore)
-                    if remaining > 0 {
-                        clock?.shiftOrigin(bySeconds: remaining)
-                        health.interruptedSeconds += remaining
-                    }
-                } else {
-                    try await restartOutputs(source, nativeFormat: nativeFormat)
-                }
-                resetHealthReferences(frames: fanout?.framesCaptured ?? 0, now: Date())
-                health.rebuilds += 1
-                health.lastRebuildError = nil
+                try await reopenCapture(
+                    source, stoppedAt: stoppedAt, compensatedBefore: compensatedBefore
+                )
                 log.info("Capture reconstruite")
                 return
             } catch {
@@ -942,22 +940,65 @@ public actor BridgeEngine {
         }
     }
 
+    /// Repart de la source, déjà arrêtée. Les sorties ne sont touchées que si la fréquence change.
+    private func reopenCapture(
+        _ source: any AudioCaptureSource, stoppedAt: Date, compensatedBefore: TimeInterval
+    ) async throws {
+        let nativeFormat = try source.prepare()
+        let format = try CaptureBlockAdapter.normalizedFormat(for: nativeFormat)
+        if let fanout, format.sampleRate == fanout.format.sampleRate {
+            let adapter = try CaptureBlockAdapter(sourceFormat: nativeFormat, fanout: fanout)
+            try source.start(deliveringTo: adapter.makeConsumer())
+            self.adapter = adapter
+            // Le trou de capture ne doit pas entamer la marge de restitution.
+            let elapsed = Date().timeIntervalSince(stoppedAt)
+            let remaining = elapsed - (health.interruptedSeconds - compensatedBefore)
+            if remaining > 0 {
+                clock?.shiftOrigin(bySeconds: remaining)
+                health.interruptedSeconds += remaining
+            }
+            // Une relance a pu échouer sur une autre fréquence avant de revenir à celle-ci : les
+            // sorties qu'elle a arrêtées resteraient sinon au repos jusqu'à la fin de la diffusion.
+            if outputsAwaitingRelaunch { relaunchOutputs() }
+        } else {
+            try await restartOutputs(source, nativeFormat: nativeFormat)
+        }
+        resetHealthReferences(frames: fanout?.framesCaptured ?? 0, now: Date())
+        health.rebuilds += 1
+        health.lastRebuildError = nil
+    }
+
     /// Relance capture et sorties pour une nouvelle fréquence d'échantillonnage.
+    ///
+    /// L'attente qui suit peut durer jusqu'à `stopTimeout`, et rien n'interdit de décocher une
+    /// sortie, d'en cocher une autre ou de bouger un volume pendant ce temps. C'est donc `entries`
+    /// **relu après l'attente** qui fait foi, jamais une photographie d'avant.
     private func restartOutputs(
         _ source: any AudioCaptureSource, nativeFormat: AVAudioFormat
     ) async throws {
         log.info("Fréquence de capture changée : relance des sorties")
-        let previous = outputOrder.compactMap { entries[$0] }
-        for entry in previous { entry.task?.cancel() }
-        _ = await Self.waitForCompletion(
-            of: previous.compactMap(\.task), timeout: tuning.stopTimeout
-        )
+        outputsAwaitingRelaunch = true
+        let running = outputOrder.compactMap { entries[$0]?.task }
+        for task in running { task.cancel() }
+        _ = await Self.waitForCompletion(of: running, timeout: tuning.stopTimeout)
         guard lifecycle == .running else { return }
 
         try openCapture(source, nativeFormat: nativeFormat)
-        entries = [:]
-        for entry in previous {
-            try launch(entry.request)
+        relaunchOutputs()
+    }
+
+    /// Relance les sorties qui attendent, dans leur état du moment.
+    private func relaunchOutputs() {
+        outputsAwaitingRelaunch = false
+        for id in outputOrder {
+            guard let request = entries[id]?.request else { continue }
+            do { try launch(request) } catch {
+                // Plus de tampon libre, ceux des sorties en retard n'étant pas encore rendus. Cette
+                // sortie seule en pâtit, et la décocher puis la recocher est une nouvelle tentative.
+                log.error("Sortie \(id, privacy: .public) non relancée : \(error)")
+                snapshots[id]?.phase = .failed("\(error)")
+                snapshots[id]?.lastError = "\(error)"
+            }
         }
     }
 
@@ -969,6 +1010,7 @@ public actor BridgeEngine {
         lastFlowDate = now
         stallAccumulator = 0
     }
+
 
     /// Mesure la capture : interruption, silence strict, arrêt des blocs.
     ///
