@@ -770,7 +770,6 @@ struct BridgeEngineRouteTests {
         #expect(source.hasRouteHandler)
         source.fireRouteChange()
         #expect(await eventually { await engine.captureHealth.rebuilds == 1 })
-        source.routeHandled()
 
         #expect(source.startCount == 2)
         #expect(source.stopCount == 1)
@@ -813,7 +812,6 @@ struct BridgeEngineRouteTests {
 
         source.fireRouteChange()
         #expect(await eventually { await engine.captureHealth.rebuilds == 1 })
-        source.routeHandled()
         #expect(await eventually { factory.senders("a").count == 2 })
         #expect(await eventually { await engine.phase(of: "a") == .streaming })
 
@@ -839,11 +837,60 @@ struct BridgeEngineRouteTests {
         source.fireRouteChange()
         #expect(await eventually { await engine.captureHealth.lastRebuildError != nil })
         #expect(await eventually { await engine.captureHealth.rebuilds == 1 })
-        source.routeHandled()
         #expect(await engine.captureHealth.lastRebuildError == nil)
         #expect(source.prepareCount == 4)
         #expect(await factory.latest("a")?.stopCount == 0)
         await engine.stop()
+    }
+
+    /// Deux reconstructions simultanées lanceraient deux IO, donc deux producteurs sur un même
+    /// tampon. Une notification reçue en pleine reconstruction est prise en compte à sa fin.
+    @Test("Une notification pendant une reconstruction ne la démarre pas en double")
+    func notificationDuringRebuildIsSerialized() async throws {
+        let ledger = CaptureLedger()
+        let source = ManualCaptureSource(ledger: ledger)
+        var tuning = BridgeEngine.Tuning.fast
+        tuning.rebuildRetryInitialDelay = .milliseconds(50)
+        tuning.rebuildRetryMaximumDelay = .milliseconds(50)
+        let engine = makeEngine(source: source, factory: FakeSenderFactory(), tuning: tuning)
+        try await engine.start(source: source0, outputs: [request("a")])
+
+        source.preparesToFail = 2
+        source.fireRouteChange()
+        #expect(await eventually { await engine.captureHealth.lastRebuildError != nil })
+        // La reconstruction est en attente de son nouvel essai : cette notification ne doit pas
+        // en lancer une seconde.
+        source.fireRouteChange()
+        #expect(await eventually { await engine.captureHealth.rebuilds >= 1 })
+        #expect(await eventually { source.startCount >= 2 })
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(ledger.maximumActive == 1)
+        #expect(ledger.activeCount == 1)
+        await engine.stop()
+        #expect(ledger.activeCount == 0)
+    }
+
+    /// `stop` doit attendre la reconstruction : sinon elle relancerait la source après son arrêt.
+    @Test("Un arrêt pendant une reconstruction ne laisse aucune capture derrière lui")
+    func stopDuringRebuildLeavesNoCapture() async throws {
+        let ledger = CaptureLedger()
+        let source = ManualCaptureSource(ledger: ledger)
+        var tuning = BridgeEngine.Tuning.fast
+        tuning.rebuildRetryInitialDelay = .milliseconds(20)
+        tuning.rebuildRetryMaximumDelay = .milliseconds(20)
+        let engine = makeEngine(source: source, factory: FakeSenderFactory(), tuning: tuning)
+        try await engine.start(source: source0, outputs: [request("a")])
+
+        source.preparesToFail = 1_000
+        source.fireRouteChange()
+        #expect(await eventually { await engine.captureHealth.lastRebuildError != nil })
+        await engine.stop()
+
+        source.preparesToFail = 0
+        try await Task.sleep(for: .milliseconds(60))
+        #expect(ledger.activeCount == 0)
+        #expect(await !engine.isRunning)
     }
 
     @Test("L'arrêt retire le gestionnaire de route")

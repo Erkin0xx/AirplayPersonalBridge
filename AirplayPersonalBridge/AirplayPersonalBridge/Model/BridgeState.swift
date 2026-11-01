@@ -101,9 +101,6 @@ final class OutputState: Identifiable {
 /// Découverte et diffusion sont réelles : `BridgeEngine` détient la capture et les senders,
 /// cette classe lui passe des intentions et recopie l'état qu'il publie. Elle n'invente aucun
 /// état et ne manipule jamais un ring buffer ni un sender directement.
-///
-/// Limite connue : l'entrée physique (ligne/micro) n'est pas encore diffusable — le moteur ne
-/// gère que les modes Process Tap, et le bouton le dit plutôt que de rester sans effet.
 @Observable
 final class BridgeState {
     // MARK: - Source
@@ -272,12 +269,8 @@ final class BridgeState {
     }
 
     private func startStreaming() async {
-        guard let mode = selectedSource.tapMode else {
-            // L'entrée physique ne passe pas par un Process Tap : le moteur ne la gère pas
-            // encore, et le dire vaut mieux qu'un bouton qui ne fait rien.
-            discoveryNotice = "L'entrée physique n'est pas encore diffusable depuis l'interface."
-            return
-        }
+        let source: BridgeEngine.Source =
+            selectedSource.tapMode.map { .processTap($0) } ?? .inputDevice
         let selected = outputs.filter(\.isEnabled)
         guard !selected.isEmpty else {
             discoveryNotice = "Aucune sortie sélectionnée."
@@ -296,7 +289,7 @@ final class BridgeState {
 
         for output in selected { output.connection = .connecting }
         do {
-            try await engine.start(mode: mode, outputs: requests)
+            try await engine.start(source: source, outputs: requests)
             isStreaming = true
             discoveryNotice = nil
             startPollingEngine()

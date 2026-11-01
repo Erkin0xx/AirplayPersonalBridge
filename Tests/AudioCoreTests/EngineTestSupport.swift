@@ -127,6 +127,8 @@ final class ManualCaptureSource: AudioCaptureSource, @unchecked Sendable {
             preparesToFail -= 1
             throw FakeError.prepareFailed
         }
+        // Comme une vraie source : une capture préparée porte sur la route courante.
+        routeChanged = false
         let format = preparedFormats[0]
         if preparedFormats.count > 1 { preparedFormats.removeFirst() }
         return format
@@ -174,12 +176,6 @@ final class ManualCaptureSource: AudioCaptureSource, @unchecked Sendable {
         let handler = routeHandler
         lock.unlock()
         handler?()
-    }
-
-    func routeHandled() {
-        lock.lock()
-        routeChanged = false
-        lock.unlock()
     }
 
     var hasRouteHandler: Bool {

@@ -1,6 +1,7 @@
 import AVFoundation
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 
 @testable import AudioCore
@@ -15,7 +16,10 @@ import Testing
 private enum AllocationProbe {
     private typealias Logger = @convention(c) (UInt32, UInt, UInt, UInt, UInt, UInt32) -> Void
 
-    nonisolated(unsafe) private static var watchedThread: pthread_t?
+    /// Identifiant du thread observé, zéro si aucun. Atomique, seul de ces champs à l'être : le
+    /// crochet s'exécute sur tous les threads du processus, mais seul le thread observé va plus
+    /// loin que cette lecture.
+    private static let watchedThread = Atomic<UInt>(0)
     nonisolated(unsafe) private static var count = 0
     /// Pile de la première allocation vue, pour qu'un échec dise où chercher. Mémoire réservée
     /// d'avance : le crochet ne doit pas allouer lui-même.
@@ -25,6 +29,12 @@ private enum AllocationProbe {
 
     /// Bit positionné par libmalloc sur les événements d'allocation (`MALLOC_LOG_TYPE_ALLOCATE`).
     private static let allocateFlag: UInt32 = 2
+
+    /// Le Thread Sanitizer remplace l'allocateur : le crochet n'y est jamais appelé, et un zéro
+    /// n'y prouverait rien.
+    static var isUsable: Bool {
+        dlsym(UnsafeMutableRawPointer(bitPattern: -2), "__tsan_init") == nil
+    }
 
     /// Rend le nombre d'allocations faites par `body` sur ce thread, ou `nil` si libmalloc
     /// n'expose pas le crochet.
@@ -36,24 +46,24 @@ private enum AllocationProbe {
         _ = stack
         count = 0
         stackDepth = 0
-        watchedThread = pthread_self()
+        let current = UInt(bitPattern: pthread_self())
+        watchedThread.store(current, ordering: .relaxed)
         slot.pointee = { type, _, _, _, _, _ in
-            guard type & AllocationProbe.allocateFlag != 0,
-                let watched = AllocationProbe.watchedThread,
-                pthread_equal(watched, pthread_self()) != 0
-            else { return }
+            guard type & AllocationProbe.allocateFlag != 0 else { return }
+            let thread = UInt(bitPattern: pthread_self())
+            guard AllocationProbe.watchedThread.load(ordering: .relaxed) == thread else { return }
             if AllocationProbe.count == 0 {
                 // Le crochet se désarme le temps de l'appel : `backtrace` peut allouer au premier
                 // passage, et compter cette allocation-là serait mentir.
-                AllocationProbe.watchedThread = nil
+                AllocationProbe.watchedThread.store(0, ordering: .relaxed)
                 AllocationProbe.stackDepth = backtrace(AllocationProbe.stack, 24)
-                AllocationProbe.watchedThread = watched
+                AllocationProbe.watchedThread.store(thread, ordering: .relaxed)
             }
             AllocationProbe.count += 1
         }
         body()
+        watchedThread.store(0, ordering: .relaxed)
         slot.pointee = nil
-        watchedThread = nil
         return count
     }
 
@@ -67,7 +77,11 @@ private enum AllocationProbe {
     }
 }
 
-@Suite("Chemin temps réel : ni allocation, ni copie du tampon partagé", .serialized)
+@Suite(
+    "Chemin temps réel : ni allocation, ni copie du tampon partagé",
+    .serialized,
+    .enabled(if: AllocationProbe.isUsable, "le Thread Sanitizer remplace l'allocateur")
+)
 struct RealTimePathTests {
     private func audioBufferList(
         _ samples: UnsafeMutablePointer<Float>, sampleCount: Int, channels: Int
@@ -86,11 +100,12 @@ struct RealTimePathTests {
     /// rien.
     @Test("La sonde détecte bien une allocation")
     func probeSeesAllocations() throws {
-        let observed = AllocationProbe.allocations {
-            let pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: 64)
-            pointer.deallocate()
-        }
+        // Un objet Objective-C plutôt qu'un `malloc` : en optimisé, le compilateur fait disparaître
+        // un couple malloc/free dont il voit les deux bouts, et la sonde paraîtrait aveugle.
+        var kept: NSMutableData?
+        let observed = AllocationProbe.allocations { kept = NSMutableData(length: 64) }
         let count = try #require(observed)
+        #expect(kept != nil)
         #expect(count >= 1)
     }
 
@@ -353,7 +368,9 @@ struct CaptureFanoutTests {
                     guard let base = buffer.baseAddress else { return }
                     _ = ring.read(into: base, frameCount: 64)
                 }
-                #expect(ring.totalFramesRead <= fanout.framesCaptured)
+                // Le producteur publie sa position après avoir écrit le bloc : elle peut retarder
+                // d'un bloc sur le tampon, jamais davantage.
+                #expect(ring.totalFramesRead <= fanout.framesCaptured + blockFrames)
                 fanout.releaseSlot(slot)
             }
             await Task.yield()

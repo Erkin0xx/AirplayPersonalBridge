@@ -27,7 +27,6 @@ import OSLog
 public actor BridgeEngine {
 
     public enum Failure: Error, CustomStringConvertible {
-        case captureFormatUnavailable
         case alreadyRunning
         case noOutputRequested
         case permissionDenied(String)
@@ -42,8 +41,6 @@ public actor BridgeEngine {
 
         public var description: String {
             switch self {
-            case .captureFormatUnavailable:
-                return "format de capture indisponible — le tap n'a pas démarré"
             case .alreadyRunning:
                 return "une diffusion est déjà en cours"
             case .noOutputRequested:
@@ -299,7 +296,11 @@ public actor BridgeEngine {
     private var adapter: CaptureBlockAdapter?
     private var clock: SharedPlaybackClock?
     private var healthTask: Task<Void, Never>?
+    /// Regroupe les notifications d'un changement de périphérique. Une nouvelle l'annule.
     private var routeTask: Task<Void, Never>?
+    /// Reconstruction en cours. Une notification ne l'annule pas : elle relit la route en
+    /// terminant, et deux reconstructions simultanées lanceraient deux IO sur le même tampon.
+    private var rebuildTask: Task<Void, Never>?
 
     private var entries: [String: OutputEntry] = [:]
     private var snapshots: [String: OutputSnapshot] = [:]
@@ -478,7 +479,6 @@ public actor BridgeEngine {
         let task = Task { await self.performStop() }
         stopTask = task
         await task.value
-        stopTask = nil
     }
 
     private func performStop() async {
@@ -487,6 +487,11 @@ public actor BridgeEngine {
         routeTask?.cancel()
         routeTask = nil
         source?.setRouteChangeHandler(nil)
+        // Elle pilote la source : la laisser finir évite de l'arrêter sous ses pieds.
+        if let rebuild = rebuildTask {
+            rebuild.cancel()
+            await rebuild.value
+        }
 
         let tasks = entries.values.compactMap(\.task)
         for task in tasks { task.cancel() }
@@ -505,6 +510,9 @@ public actor BridgeEngine {
             snapshots[id]?.nextAttemptAt = nil
         }
         health = CaptureHealth()
+        // Dans le même tour que l'état : un appel qui reprendrait entre les deux croirait un
+        // arrêt encore en cours, et attendrait une tâche déjà finie au lieu d'agir.
+        stopTask = nil
         lifecycle = .idle
         log.info("Moteur arrêté")
     }
@@ -802,11 +810,23 @@ public actor BridgeEngine {
         routeTask?.cancel()
         routeTask = Task { [weak self, debounce = tuning.routeChangeDebounce] in
             do { try await Task.sleep(for: debounce) } catch { return }
-            await self?.rebuildCaptureIfNeeded()
+            await self?.beginRebuildIfNeeded()
         }
     }
 
-    /// Reconstruit la capture sans toucher aux senders.
+    private func beginRebuildIfNeeded() {
+        guard rebuildTask == nil else { return }
+        rebuildTask = Task { [weak self] in
+            await self?.rebuildCaptureIfNeeded()
+            await self?.rebuildDidFinish()
+        }
+    }
+
+    private func rebuildDidFinish() {
+        rebuildTask = nil
+    }
+
+    /// Reconstruit la capture tant que la route le demande, sans toucher aux senders.
     ///
     /// L'agrégat du tap tient son horloge du périphérique de sortie courant (piège n° 2 de
     /// `CLAUDE.md`) : débrancher un casque lui retire. Les senders n'ont pas à le savoir : pendant
@@ -816,7 +836,12 @@ public actor BridgeEngine {
     /// rééchantillonneur est construit pour la précédente. Les laisser en place ferait jouer tout
     /// le flux à la mauvaise hauteur, sans erreur.
     func rebuildCaptureIfNeeded() async {
-        guard lifecycle == .running, let source, source.routeRequiresRebuild() else { return }
+        while lifecycle == .running, !Task.isCancelled, let source, source.routeRequiresRebuild() {
+            await rebuildCapture(source)
+        }
+    }
+
+    private func rebuildCapture(_ source: any AudioCaptureSource) async {
         log.info("Périphérique de sortie changé — reconstruction de la capture")
 
         let stoppedAt = Date()
@@ -920,9 +945,6 @@ public actor BridgeEngine {
         lastHealthFrames = frames
 
         health.framesCaptured = frames
-        if let kind = source.requiredPermission {
-            health.permission = dependencies.permissions.status(for: kind)
-        }
 
         let idleSeconds = now.timeIntervalSince(lastFlowDate)
         health.stalledSince =
@@ -931,6 +953,12 @@ public actor BridgeEngine {
         let silentSeconds = Double(fanout.framesSinceLastSignal) / rate
         let isSilent = frames > 0 && silentSeconds >= tuning.silenceThresholdSeconds
         health.silentSince = isSilent ? now.addingTimeInterval(-silentSeconds) : nil
+
+        // L'état de l'autorisation passe par un appel à `tccd` : relu au démarrage, puis seulement
+        // quand un silence le rend utile.
+        if let kind = source.requiredPermission, health.permission == nil || isSilent {
+            health.permission = dependencies.permissions.status(for: kind)
+        }
 
         if frames == 0 {
             health.diagnosis = .waitingForFirstBlock
