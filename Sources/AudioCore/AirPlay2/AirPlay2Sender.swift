@@ -534,7 +534,12 @@ public actor AirPlay2Sender {
         streamCipher = try ChaChaPoly1305(key: session.streamKey)
 
         try await session.setVolume(volume)
-        try await session.record(startSequence: sequenceNumber, startTimestamp: rtpTimestamp)
+        // Relevée et affichée, **sans entrer dans le calage** : contrairement à RAOP, rien ne la passe
+        // au synchroniseur. Aucun récepteur n'a encore été écouté avec, et un calage qui change sans
+        // écoute peut désaligner ce qui sonne juste. Ce sera tranché sur le matériel.
+        statistics.reportedLatencyFrames = try await session.record(
+            startSequence: sequenceNumber, startTimestamp: rtpTimestamp
+        )
         startKeepAlive(session: session, generation: generation)
 
         log.info(
@@ -962,6 +967,9 @@ public struct AirPlay2Statistics: Sendable {
     public var lastFailure: String?
     /// Valeur brute d'`audioBufferSize` annoncée par le récepteur, unité non établie.
     public var receiverBufferSize = 0
+    /// `Audio-Latency` du dernier `RECORD`, en trames. `nil` si le récepteur n'annonce rien. Simple
+    /// relevé : voir `negotiate`.
+    public var reportedLatencyFrames: Int?
     /// Canal d'événements effectivement ouvert.
     public var eventChannelConnected = false
     /// Sessions rétablies après une perte réseau, et tentatives infructueuses (CDC section 8).

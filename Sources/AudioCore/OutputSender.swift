@@ -61,7 +61,8 @@ public struct OutputStatistics: Sendable, Equatable {
 
     /// RAOP : réponses aux requêtes d'horloge du récepteur.
     public var timingResponsesSent: Int?
-    /// RAOP : `Audio-Latency` annoncée par le récepteur, en trames. `nil` s'il n'annonce rien.
+    /// `Audio-Latency` annoncée par le récepteur au `RECORD`, en trames. `nil` s'il n'annonce rien.
+    /// Lue sur les deux protocoles, mais seul RAOP s'en sert pour le calage.
     public var reportedLatencyFrames: Int?
     /// RAOP : dernier volume accepté par le récepteur, en dB.
     public var volumeDB: Float?
@@ -149,6 +150,7 @@ extension AirPlay2Sender: OutputSender {
         result.retransmitRequests = source.retransmitRequests
         result.receiverBufferSize = source.receiverBufferSize
         result.eventChannelConnected = source.eventChannelConnected
+        result.reportedLatencyFrames = source.reportedLatencyFrames
         result.feedbackUnanswered = source.feedbackUnanswered
         return result
     }

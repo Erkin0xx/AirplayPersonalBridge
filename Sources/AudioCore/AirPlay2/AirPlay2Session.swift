@@ -243,7 +243,11 @@ public actor AirPlay2Session {
     ///
     /// `RTP-Info` porte le premier numéro de séquence et l'horodatage initial, comme en
     /// RAOP : c'est le point d'ancrage temporel du flux.
-    public func record(startSequence: UInt16, startTimestamp: UInt32) async throws {
+    ///
+    /// - Returns: `Audio-Latency` annoncée par le récepteur, en trames, ou `nil` s'il n'annonce rien.
+    ///   Journalisée dans les deux cas : c'est ce qui établira si les HomePod en donnent une.
+    @discardableResult
+    public func record(startSequence: UInt16, startTimestamp: UInt32) async throws -> Int? {
         let request = RTSPRequest(
             method: "RECORD",
             uri: sessionURI,
@@ -252,8 +256,14 @@ public actor AirPlay2Session {
                 ("Content-Length", "0"),
             ]
         )
-        _ = try await client.send(request)
+        let response = try await client.send(request)
         log.info("RECORD accepté (seq=\(startSequence) rtptime=\(startTimestamp))")
+        guard let announced = response.headers["audio-latency"] else {
+            log.info("RECORD : pas d'Audio-Latency annoncée")
+            return nil
+        }
+        log.info("RECORD : Audio-Latency annoncée \(announced, privacy: .public) trames")
+        return Int(announced.trimmingCharacters(in: .whitespaces))
     }
 
     /// Maintien de session : `POST /feedback`, sans corps.

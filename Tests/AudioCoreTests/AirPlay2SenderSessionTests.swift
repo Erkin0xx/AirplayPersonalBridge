@@ -960,6 +960,39 @@ struct AirPlay2SenderSessionTests {
         await harness.sender.stop()
     }
 
+    // MARK: - Latence annoncée
+
+    /// « Les HomePod n'annoncent rien » n'était pas établi : la réponse du `RECORD` était jetée.
+    @Test("L'Audio-Latency du RECORD est relevée, sans entrer dans le calage")
+    func latenceAnnonceeRelevee() async throws {
+        let receiver = try await makeReceiver(options: .init(announcedAudioLatency: 11_025))
+        defer { receiver.stop() }
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        try await harness.sender.start(volume: -20)
+
+        #expect(await harness.sender.statistics.reportedLatencyFrames == 11_025)
+        #expect(await harness.sender.currentOutputStatistics().reportedLatencyFrames == 11_025)
+        // Le calage reste celui d'avant : aucun changement sans écoute.
+        #expect(harness.sender.synchronizer.declaredReceiverLatencyFrames == 0)
+        await harness.sender.stop()
+    }
+
+    @Test("Un récepteur qui n'annonce aucune latence n'en a pas d'inventée")
+    func latenceNonAnnoncee() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        try await harness.sender.start(volume: -20)
+
+        #expect(await harness.sender.statistics.reportedLatencyFrames == nil)
+        #expect(await harness.sender.currentOutputStatistics().reportedLatencyFrames == nil)
+        await harness.sender.stop()
+    }
+
     // MARK: - Volume
 
     @Test("La plage envoyée reste celle du protocole")
