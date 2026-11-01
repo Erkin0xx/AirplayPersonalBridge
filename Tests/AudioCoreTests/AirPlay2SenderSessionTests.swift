@@ -95,7 +95,7 @@ struct AirPlay2SenderSessionTests {
         defer { harness.feeder.stop() }
 
         try await harness.sender.start(volume: -20)
-        #expect(await eventually { receiver.audioPackets(inSession: 0).count >= 200 })
+        #expect(await waitUntil { receiver.audioPackets(inSession: 0).count >= 200 })
         await harness.sender.stop()
 
         let packets = receiver.audioPackets(inSession: 0)
@@ -171,14 +171,14 @@ struct AirPlay2SenderSessionTests {
         defer { harness.feeder.stop() }
 
         try await harness.sender.start(volume: -20)
-        #expect(await eventually { receiver.audioPackets(inSession: 0).count >= 50 })
+        #expect(await waitUntil { receiver.audioPackets(inSession: 0).count >= 50 })
 
         let packets = receiver.audioPackets(inSession: 0)
         let wanted = Array(packets[10..<13])
         let first = FakeAirPlay2Receiver.sequence(of: wanted[0])
         receiver.requestRetransmission(first: first, count: 3, inSession: 0)
 
-        #expect(await eventually { receiver.resendPackets(inSession: 0).count >= 3 })
+        #expect(await waitUntil { receiver.resendPackets(inSession: 0).count >= 3 })
         let resent = receiver.resendPackets(inSession: 0)
         try #require(resent.count == 3)
         for (response, original) in zip(resent, wanted) {
@@ -192,7 +192,7 @@ struct AirPlay2SenderSessionTests {
         _ = try FakeAirPlay2Receiver.decryptAudio(Data(resent[0].dropFirst(4)), key: key)
 
         #expect(
-            await eventually {
+            await waitUntil {
                 let statistics = await harness.sender.statistics
                 return statistics.retransmitRequests == 1 && statistics.retransmittedPackets == 3
             })
@@ -207,13 +207,13 @@ struct AirPlay2SenderSessionTests {
         defer { harness.feeder.stop() }
 
         try await harness.sender.start(volume: -20)
-        #expect(await eventually { receiver.audioPackets(inSession: 0).count >= 20 })
+        #expect(await waitUntil { receiver.audioPackets(inSession: 0).count >= 20 })
 
         let current = FakeAirPlay2Receiver.sequence(of: try #require(receiver.audioPackets(inSession: 0).first))
         receiver.requestRetransmission(first: current &- 2_000, count: 5, inSession: 0)
 
         #expect(
-            await eventually {
+            await waitUntil {
                 let statistics = await harness.sender.statistics
                 return statistics.retransmitRequests == 1 && statistics.retransmitMisses == 5
             })
@@ -231,7 +231,7 @@ struct AirPlay2SenderSessionTests {
         defer { harness.feeder.stop() }
 
         try await harness.sender.start(volume: -20)
-        #expect(await eventually { receiver.audioPackets(inSession: 0).count >= 300 })
+        #expect(await waitUntil { receiver.audioPackets(inSession: 0).count >= 300 })
 
         let before = receiver.audioPackets(inSession: 0).count
         let start = Date()
@@ -282,7 +282,7 @@ struct AirPlay2SenderSessionTests {
         defer { harness.feeder.stop() }
 
         try await harness.sender.start(volume: -20)
-        #expect(await eventually(timeout: .seconds(5)) { receiver.count(method: "POST", uri: "/feedback") >= 2 })
+        #expect(await waitUntil(timeout: .seconds(5)) { receiver.count(method: "POST", uri: "/feedback") >= 2 })
         await harness.sender.stop()
 
         let feedback = try #require(receiver.requests().first { $0.uri == "/feedback" })
@@ -315,7 +315,7 @@ struct AirPlay2SenderSessionTests {
 
         try await harness.sender.start(volume: -20)
         await harness.sender.setKeepAlivePolicy(.init(interval: .milliseconds(100)))
-        #expect(await eventually { await harness.sender.statistics.feedbackRefused >= 1 })
+        #expect(await waitUntil { await harness.sender.statistics.feedbackRefused >= 1 })
         try await Task.sleep(for: .seconds(1))
 
         #expect(await harness.sender.state == .streaming)
@@ -360,7 +360,7 @@ struct AirPlay2SenderSessionTests {
             .init(interval: .milliseconds(50), timeout: .milliseconds(150), silenceThreshold: 2))
         try await harness.sender.start(volume: -20)
 
-        #expect(await eventually { receiver.sessionCount >= 2 })
+        #expect(await waitUntil { receiver.sessionCount >= 2 })
         await harness.sender.stop()
     }
 
@@ -376,11 +376,11 @@ struct AirPlay2SenderSessionTests {
 
         await harness.sender.setKeepAlivePolicy(.init(interval: .milliseconds(100)))
         try await harness.sender.start(volume: -20)
-        #expect(await eventually { receiver.audioPackets(inSession: 0).count >= 10 })
+        #expect(await waitUntil { receiver.audioPackets(inSession: 0).count >= 10 })
 
         receiver.dropControlConnection(inSession: 0)
 
-        #expect(await eventually { receiver.audioPackets(inSession: 1).count >= 10 })
+        #expect(await waitUntil { receiver.audioPackets(inSession: 1).count >= 10 })
         #expect(await harness.sender.state == .streaming)
         #expect(await harness.sender.statistics.reconnections == 1)
 
@@ -407,11 +407,11 @@ struct AirPlay2SenderSessionTests {
         defer { harness.feeder.stop() }
 
         try await harness.sender.start(volume: -20)
-        #expect(await eventually { receiver.eventChannelIsOpen(inSession: 0) })
+        #expect(await waitUntil { receiver.eventChannelIsOpen(inSession: 0) })
 
         receiver.dropEventChannel(inSession: 0)
 
-        #expect(await eventually { receiver.audioPackets(inSession: 1).count >= 10 })
+        #expect(await waitUntil { receiver.audioPackets(inSession: 1).count >= 10 })
         // La connexion de contrôle vivait encore : la session a été fermée proprement.
         #expect(receiver.requests(inSession: 0).contains { $0.method == "TEARDOWN" })
         await harness.sender.stop()
@@ -428,15 +428,15 @@ struct AirPlay2SenderSessionTests {
 
         await harness.sender.setKeepAlivePolicy(.init(interval: .milliseconds(100)))
         try await harness.sender.start(volume: -20)
-        #expect(await eventually { receiver.audioPackets(inSession: 0).count >= 20 })
+        #expect(await waitUntil { receiver.audioPackets(inSession: 0).count >= 20 })
         let old = FakeAirPlay2Receiver.sequence(of: receiver.audioPackets(inSession: 0)[5])
 
         receiver.dropControlConnection(inSession: 0)
-        #expect(await eventually { receiver.audioPackets(inSession: 1).count >= 5 })
+        #expect(await waitUntil { receiver.audioPackets(inSession: 1).count >= 5 })
 
         receiver.requestRetransmission(first: old, count: 1, inSession: 1)
         #expect(
-            await eventually {
+            await waitUntil {
                 await harness.sender.statistics.retransmitMisses == 1
             })
         #expect(receiver.resendPackets(inSession: 1).isEmpty)
@@ -444,7 +444,7 @@ struct AirPlay2SenderSessionTests {
         // La session courante, elle, reste servie.
         let fresh = FakeAirPlay2Receiver.sequence(of: try #require(receiver.audioPackets(inSession: 1).first))
         receiver.requestRetransmission(first: fresh, count: 1, inSession: 1)
-        #expect(await eventually { receiver.resendPackets(inSession: 1).count == 1 })
+        #expect(await waitUntil { receiver.resendPackets(inSession: 1).count == 1 })
         await harness.sender.stop()
     }
 
@@ -463,7 +463,7 @@ struct AirPlay2SenderSessionTests {
         #expect(receiver.volumes(inSession: 0).last == "volume: -7.5\r\n")
 
         receiver.dropControlConnection(inSession: 0)
-        #expect(await eventually { !receiver.volumes(inSession: 1).isEmpty })
+        #expect(await waitUntil { !receiver.volumes(inSession: 1).isEmpty })
         #expect(receiver.volumes(inSession: 1) == ["volume: -7.5\r\n"])
         await harness.sender.stop()
     }
@@ -477,11 +477,11 @@ struct AirPlay2SenderSessionTests {
 
         await harness.sender.setKeepAlivePolicy(.init(interval: .milliseconds(100)))
         try await harness.sender.start(volume: -20)
-        #expect(await eventually { receiver.audioPackets(inSession: 0).count >= 5 })
+        #expect(await waitUntil { receiver.audioPackets(inSession: 0).count >= 5 })
 
         receiver.dropControlConnection(inSession: 0)
 
-        #expect(await eventually { await harness.sender.state == .failed })
+        #expect(await waitUntil { await harness.sender.state == .failed })
         #expect(await harness.sender.statistics.lastFailure != nil)
         await harness.sender.stop()
     }
@@ -502,12 +502,12 @@ struct AirPlay2SenderSessionTests {
 
         await harness.sender.setKeepAlivePolicy(.init(interval: .milliseconds(100)))
         try await harness.sender.start(volume: -20)
-        #expect(await eventually { receiver.audioPackets(inSession: 0).count >= 5 })
+        #expect(await waitUntil { receiver.audioPackets(inSession: 0).count >= 5 })
 
         busy.set()
         receiver.dropControlConnection(inSession: 0)
 
-        #expect(await eventually { await harness.sender.statistics.reconnectionAttempts >= 1 })
+        #expect(await waitUntil { await harness.sender.statistics.reconnectionAttempts >= 1 })
         let failure = try #require(await harness.sender.statistics.lastFailure)
         #expect(failure.contains("occupé"))
         #expect(await harness.sender.state == .reconnecting)
@@ -537,12 +537,12 @@ struct AirPlay2SenderSessionTests {
 
         await harness.sender.setKeepAlivePolicy(.init(interval: .milliseconds(100)))
         try await harness.sender.start(volume: -20)
-        #expect(await eventually { receiver.audioPackets(inSession: 0).count >= 5 })
+        #expect(await waitUntil { receiver.audioPackets(inSession: 0).count >= 5 })
 
         refused.set()
         receiver.dropControlConnection(inSession: 0)
 
-        #expect(await eventually { await harness.sender.state == .failed })
+        #expect(await waitUntil { await harness.sender.state == .failed })
         let failure = try #require(await harness.sender.statistics.lastFailure)
         #expect(failure.contains("appairage"))
         await harness.sender.stop()
@@ -585,7 +585,7 @@ struct AirPlay2SenderSessionTests {
         }
         await task.value
 
-        #expect(await eventually(timeout: .seconds(2)) { receiver.count(method: "TEARDOWN") == 1 })
+        #expect(await waitUntil(timeout: .seconds(2)) { receiver.count(method: "TEARDOWN") == 1 })
         #expect(await sender.state == .idle)
     }
 
@@ -602,7 +602,7 @@ struct AirPlay2SenderSessionTests {
         await harness.sender.stop()
         try await harness.sender.start(volume: -20)
 
-        #expect(await eventually { receiver.audioPackets(inSession: 1).count >= 5 })
+        #expect(await waitUntil { receiver.audioPackets(inSession: 1).count >= 5 })
         #expect(await harness.sender.state == .streaming)
         await harness.sender.stop()
     }
@@ -629,7 +629,7 @@ struct AirPlay2SenderSessionTests {
     /// Un socket retenu par un cycle de références garde son port : c'est le seul moyen d'observer
     /// la fuite depuis l'extérieur, faire taire le répondeur ne fermant pas le descripteur.
     private func portIsFree(_ port: UInt16) async -> Bool {
-        await eventually(timeout: .seconds(2)) {
+        await waitUntil(timeout: .seconds(2)) {
             (try? UDPChannel(label: "test-port-libre", preferredPort: port)) != nil
         }
     }
@@ -646,7 +646,7 @@ struct AirPlay2SenderSessionTests {
         await harness.sender.setKeepAlivePolicy(.init(interval: .milliseconds(100)))
         try await harness.sender.start(volume: -20)
         receiver.dropControlConnection(inSession: 0)
-        #expect(await eventually { receiver.audioPackets(inSession: 1).count >= 5 })
+        #expect(await waitUntil { receiver.audioPackets(inSession: 1).count >= 5 })
 
         // La première session portait le numéro 1, la courante le numéro 2.
         await harness.sender.noteSessionLost(generation: 1, reason: "signal en retard")
@@ -656,7 +656,7 @@ struct AirPlay2SenderSessionTests {
 
         // Le même signal, à jour, déclenche bien la reconnexion : le test ne passe pas à vide.
         await harness.sender.noteSessionLost(generation: 2, reason: "signal à jour")
-        #expect(await eventually { receiver.sessionCount >= 3 })
+        #expect(await waitUntil { receiver.sessionCount >= 3 })
         await harness.sender.stop()
     }
 
@@ -670,7 +670,7 @@ struct AirPlay2SenderSessionTests {
 
         let sender = harness.sender
         let task = Task { try await sender.start(volume: -20) }
-        #expect(await eventually { receiver.count(method: "SETUP") >= 1 })
+        #expect(await waitUntil { receiver.count(method: "SETUP") >= 1 })
 
         let start = ContinuousClock.now
         task.cancel()
@@ -690,7 +690,7 @@ struct AirPlay2SenderSessionTests {
 
         let sender = harness.sender
         let task = Task { try await sender.start(volume: -20) }
-        #expect(await eventually { receiver.count(method: "SETUP") >= 1 })
+        #expect(await waitUntil { receiver.count(method: "SETUP") >= 1 })
 
         let start = ContinuousClock.now
         await sender.stop()
@@ -890,7 +890,7 @@ struct AirPlay2SenderSessionTests {
         defer { harness.feeder.stop() }
 
         try await harness.sender.start(volume: -20)
-        #expect(await eventually { await harness.sender.statistics.errors >= 50 })
+        #expect(await waitUntil { await harness.sender.statistics.errors >= 50 })
 
         // Bien au-delà de l'ancien seuil de 20 erreurs : toujours la même session.
         #expect(receiver.sessionCount == 1)
@@ -902,7 +902,7 @@ struct AirPlay2SenderSessionTests {
         let sequence = try #require(
             rtpInfo.split(separator: ";").first?.split(separator: "=").last.flatMap { UInt16($0) })
         receiver.requestRetransmission(first: sequence, count: 1, inSession: 0)
-        #expect(await eventually { receiver.resendPackets(inSession: 0).count == 1 })
+        #expect(await waitUntil { receiver.resendPackets(inSession: 0).count == 1 })
         let resent = try #require(receiver.resendPackets(inSession: 0).first)
         _ = try FakeAirPlay2Receiver.decryptAudio(
             Data(resent.dropFirst(4)), key: receiver.streamKey(inSession: 0))
@@ -910,7 +910,7 @@ struct AirPlay2SenderSessionTests {
         // Les compteurs ont avancé malgré les échecs : le suivant porte le numéro d'après, et
         // l'horodatage de 352 trames de plus, sans quoi le flux se décalerait de 8 ms par paquet.
         receiver.requestRetransmission(first: sequence &+ 1, count: 1, inSession: 0)
-        #expect(await eventually { receiver.resendPackets(inSession: 0).count == 2 })
+        #expect(await waitUntil { receiver.resendPackets(inSession: 0).count == 2 })
         let packets = receiver.resendPackets(inSession: 0).map { [UInt8]($0.dropFirst(4)) }
         func timestamp(_ packet: [UInt8]) -> UInt32 {
             packet[4...7].reduce(0) { $0 << 8 | UInt32($1) }
@@ -920,7 +920,7 @@ struct AirPlay2SenderSessionTests {
         #expect(packets[0].suffix(8) != packets[1].suffix(8))
 
         // Au-delà de ~2 s d'échecs ininterrompus, la session est réputée perdue.
-        #expect(await eventually { receiver.sessionCount >= 2 })
+        #expect(await waitUntil { receiver.sessionCount >= 2 })
         await harness.sender.stop()
     }
 
@@ -969,7 +969,7 @@ struct AirPlay2SenderSessionTests {
         defer { harness.feeder.stop() }
 
         try await harness.sender.start(volume: -20)
-        #expect(await eventually { receiver.eventChannelIsOpen(inSession: 0) })
+        #expect(await waitUntil { receiver.eventChannelIsOpen(inSession: 0) })
 
         let sealed = try receiver.sealEvent(
             Data("POST /command RTSP/1.0\r\nCSeq: 7\r\nServer: AirTunes/700\r\nContent-Length: 0\r\n\r\n".utf8),
@@ -979,7 +979,7 @@ struct AirPlay2SenderSessionTests {
         try await Task.sleep(for: .milliseconds(50))
         receiver.sendRawEvent(sealed.dropFirst(9), inSession: 0)
 
-        #expect(await eventually { !receiver.eventPlaintext(inSession: 0).isEmpty })
+        #expect(await waitUntil { !receiver.eventPlaintext(inSession: 0).isEmpty })
         let reply = String(decoding: receiver.eventPlaintext(inSession: 0), as: UTF8.self)
         #expect(reply.hasPrefix("RTSP/1.0 200 OK\r\n"))
         #expect(reply.contains("CSeq: 7\r\n"))
@@ -987,7 +987,7 @@ struct AirPlay2SenderSessionTests {
         #expect(reply.contains("Audio-Latency: 0\r\n"))
         #expect(reply.contains("Content-Length: 0\r\n"))
 
-        #expect(await eventually { await harness.sender.statistics.eventMessages == 1 })
+        #expect(await waitUntil { await harness.sender.statistics.eventMessages == 1 })
         #expect(await harness.sender.state == .streaming)
         await harness.sender.stop()
     }
@@ -1002,7 +1002,7 @@ struct AirPlay2SenderSessionTests {
         defer { harness.feeder.stop() }
 
         try await harness.sender.start(volume: -20)
-        #expect(await eventually { receiver.eventChannelIsOpen(inSession: 0) })
+        #expect(await waitUntil { receiver.eventChannelIsOpen(inSession: 0) })
 
         // Un bloc de 8 octets annoncés, tous faux.
         receiver.sendRawEvent(Data([8, 0]) + Data(repeating: 0xAB, count: 24), inSession: 0)
@@ -1014,7 +1014,7 @@ struct AirPlay2SenderSessionTests {
 
         // Et la perte reste détectée.
         receiver.dropEventChannel(inSession: 0)
-        #expect(await eventually { receiver.sessionCount >= 2 })
+        #expect(await waitUntil { receiver.sessionCount >= 2 })
         await harness.sender.stop()
     }
 
@@ -1029,7 +1029,7 @@ struct AirPlay2SenderSessionTests {
         defer { harness.feeder.stop() }
 
         try await harness.sender.start(volume: -20)
-        #expect(await eventually { receiver.audioPackets(inSession: 0).count >= 5 })
+        #expect(await waitUntil { receiver.audioPackets(inSession: 0).count >= 5 })
         #expect(await harness.sender.statistics.eventChannelConnected == false)
         await harness.sender.stop()
     }

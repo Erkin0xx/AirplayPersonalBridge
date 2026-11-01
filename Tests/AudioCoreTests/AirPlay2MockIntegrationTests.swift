@@ -67,7 +67,7 @@ struct AirPlay2MockIntegrationTests {
         #expect(await sender.state == .streaming)
 
         // Assez long pour plusieurs `feedback`, qui passent par le canal chiffré du mock.
-        #expect(await eventually(timeout: .seconds(10)) { await sender.statistics.feedbackSent >= 3 })
+        #expect(await waitUntil(timeout: .seconds(10)) { await sender.statistics.feedbackSent >= 3 })
         let statistics = await sender.statistics
         #expect(statistics.packetsSent > 500)
         #expect(statistics.syncPacketsSent > 0)

@@ -270,7 +270,7 @@ struct RTSPClientExchangeTests {
         let task = Task {
             try await client.send(RTSPRequest(method: "POST", uri: "/feedback"), timeout: .seconds(30))
         }
-        #expect(await eventually { receiver.count(method: "POST", uri: "/feedback") == 1 })
+        #expect(await waitUntil { receiver.count(method: "POST", uri: "/feedback") == 1 })
 
         let start = ContinuousClock.now
         await client.disconnect()

@@ -903,7 +903,7 @@ struct SenderHarness {
 
 /// Attend qu'une condition devienne vraie, sans jamais attendre plus que `timeout`.
 @discardableResult
-func eventually(
+func waitUntil(
     timeout: Duration = .seconds(8),
     _ condition: () async -> Bool
 ) async -> Bool {

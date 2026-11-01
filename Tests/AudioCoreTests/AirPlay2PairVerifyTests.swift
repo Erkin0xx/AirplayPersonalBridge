@@ -205,7 +205,7 @@ struct AirPlay2PairVerifyTests {
         defer { harness.feeder.stop() }
 
         try await harness.sender.start(volume: -20)
-        #expect(await eventually { scenario.receiver.audioPackets(inSession: 0).count >= 20 })
+        #expect(await waitUntil { scenario.receiver.audioPackets(inSession: 0).count >= 20 })
         await harness.sender.stop()
 
         let key = scenario.receiver.streamKey(inSession: 0)
