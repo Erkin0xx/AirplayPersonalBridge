@@ -267,6 +267,10 @@ func isPermanentOutputFailure(_ error: Error) -> Bool {
     switch error {
     case is RAOPSenderError:
         return true
+    case let airplay2 as AirPlay2SenderError:
+        // Le sender traduit ses erreurs pour l'affichage : sans ce cas, un Apple TV qui répond
+        // 470 serait relancé sans fin, chaque tentative refaisant une négociation pour rien.
+        return airplay2.isPermanent
     case let rtsp as RTSPError:
         // 401/403/470 : le récepteur réclame une authentification que ce client n'a pas. Un
         // Apple TV refuse ainsi le pairing transitoire. Les autres statuts (453 « occupé »,

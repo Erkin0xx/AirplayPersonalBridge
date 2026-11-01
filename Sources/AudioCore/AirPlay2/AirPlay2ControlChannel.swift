@@ -66,10 +66,13 @@ public struct AirPlay2ControlChannel: @unchecked Sendable {
         }
 
         /// Nonce du bloc courant : 4 octets nuls, puis le compteur en little-endian.
-        private func nextNonce() -> Data {
+        ///
+        /// Le compteur n'avance qu'une fois le bloc traité avec succès : un bloc rejeté ne doit
+        /// pas décaler la numérotation des suivants, faute de quoi une erreur isolée se
+        /// transformerait en panne définitive sans laisser de trace de sa cause.
+        private func currentNonce() -> Data {
             var nonce = Data(repeating: 0, count: 4)
             withUnsafeBytes(of: blockCounter.littleEndian) { nonce.append(contentsOf: $0) }
-            blockCounter &+= 1
             return nonce
         }
 
@@ -90,7 +93,8 @@ public struct AirPlay2ControlChannel: @unchecked Sendable {
                     lengthPrefix.append(contentsOf: $0)
                 }
 
-                let sealed = try cipher.seal(chunk, nonce: nextNonce(), additionalData: lengthPrefix)
+                let sealed = try cipher.seal(chunk, nonce: currentNonce(), additionalData: lengthPrefix)
+                blockCounter &+= 1
                 output.append(lengthPrefix)
                 output.append(sealed)
             } while !remaining.isEmpty
@@ -103,6 +107,9 @@ public struct AirPlay2ControlChannel: @unchecked Sendable {
         /// - Returns: le texte clair, et le nombre d'octets consommés. Un bloc partiel est
         ///   laissé dans le tampon de l'appelant : c'est le cas normal en TCP, où un message
         ///   arrive en plusieurs morceaux.
+        /// - Throws: ``Failure/decryptionFailed(_:)`` sur une étiquette invalide. C'est terminal
+        ///   pour la connexion : le flux TCP ne se resynchronise pas, l'appelant doit traiter la
+        ///   session comme perdue. Aucun octet non authentifié ne remonte.
         func open(_ buffer: Data) throws -> (plaintext: Data, consumed: Int) {
             var plaintext = Data()
             var offset = buffer.startIndex
@@ -113,8 +120,9 @@ public struct AirPlay2ControlChannel: @unchecked Sendable {
                 }
                 let lengthPrefix = Data(
                     buffer[offset..<(offset + AirPlay2ControlChannel.lengthPrefixLength)])
-                let blockLength = Int(
-                    lengthPrefix.withUnsafeBytes { $0.load(as: UInt16.self).littleEndian })
+                // Octet par octet plutôt que `load(as:)` : rien ne garantit l'alignement d'un
+                // `Data`, et une lecture désalignée est une erreur fatale.
+                let blockLength = Int(buffer[offset]) | Int(buffer[offset + 1]) << 8
 
                 let bodyStart = offset + AirPlay2ControlChannel.lengthPrefixLength
                 let bodyEnd = bodyStart + blockLength + ChaChaPoly1305.tagLength
@@ -124,10 +132,11 @@ public struct AirPlay2ControlChannel: @unchecked Sendable {
                 let sealed = Data(buffer[bodyStart..<bodyEnd])
                 do {
                     plaintext.append(
-                        try cipher.open(sealed, nonce: nextNonce(), additionalData: lengthPrefix))
+                        try cipher.open(sealed, nonce: currentNonce(), additionalData: lengthPrefix))
                 } catch {
                     throw Failure.decryptionFailed(String(describing: error))
                 }
+                blockCounter &+= 1
                 offset = bodyEnd
             }
 

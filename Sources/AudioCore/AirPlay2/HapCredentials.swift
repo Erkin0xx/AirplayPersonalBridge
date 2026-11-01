@@ -38,10 +38,14 @@ public struct HapCredentials: Sendable, Equatable {
 
     public enum Failure: Error, CustomStringConvertible {
         case malformed(String)
+        /// Fichier absent ou illisible. Le chemin figure dans le message, jamais le contenu.
+        case unreadable(path: String)
 
         public var description: String {
             switch self {
             case let .malformed(reason): return "credentials illisibles : \(reason)"
+            case let .unreadable(path):
+                return "fichier de credentials introuvable ou illisible : \(path)"
             }
         }
     }
@@ -83,8 +87,16 @@ public struct HapCredentials: Sendable, Equatable {
     /// Les lignes commençant par `#` sont des commentaires : le fichier reste lisible et
     /// annotable à la main, ce qui compte pour un secret qu'on manipule rarement.
     public static func load(contentsOf url: URL) throws -> HapCredentials {
-        let text = try String(contentsOf: url, encoding: .utf8)
-        guard let line = text.split(separator: "\n")
+        let text: String
+        do {
+            text = try String(contentsOf: url, encoding: .utf8)
+        } catch {
+            throw Failure.unreadable(path: url.path)
+        }
+        // `\.isNewline` et non `"\n"` : en Swift `\r\n` est un seul caractère, qu'un découpage sur
+        // `"\n"` ne verrait pas — un fichier aux fins de ligne Windows passerait pour une seule
+        // ligne, commentaires compris.
+        guard let line = text.split(whereSeparator: \.isNewline)
             .map({ $0.trimmingCharacters(in: .whitespaces) })
             .last(where: { !$0.isEmpty && !$0.hasPrefix("#") })
         else {
@@ -97,16 +109,30 @@ public struct HapCredentials: Sendable, Equatable {
 extension Data {
     var hexEncoded: String { map { String(format: "%02x", $0) }.joined() }
 
+    /// Décode de l'hexadécimal strict, sans préfixe ni signe.
+    ///
+    /// Par octets UTF-8 et non par caractères : `UInt8(_:radix:)` accepte `+a` comme un octet
+    /// valide, et un caractère composé fausserait le décompte.
     init?(hexEncoded text: String) {
-        guard text.count % 2 == 0 else { return nil }
+        let digits = Array(text.utf8)
+        guard digits.count % 2 == 0 else { return nil }
+        func value(_ digit: UInt8) -> UInt8? {
+            switch digit {
+            case UInt8(ascii: "0")...UInt8(ascii: "9"): return digit - UInt8(ascii: "0")
+            case UInt8(ascii: "a")...UInt8(ascii: "f"): return digit - UInt8(ascii: "a") + 10
+            case UInt8(ascii: "A")...UInt8(ascii: "F"): return digit - UInt8(ascii: "A") + 10
+            default: return nil
+            }
+        }
         var bytes = [UInt8]()
-        bytes.reserveCapacity(text.count / 2)
-        var index = text.startIndex
-        while index < text.endIndex {
-            let next = text.index(index, offsetBy: 2)
-            guard let byte = UInt8(text[index..<next], radix: 16) else { return nil }
-            bytes.append(byte)
-            index = next
+        bytes.reserveCapacity(digits.count / 2)
+        var index = 0
+        while index < digits.count {
+            guard let high = value(digits[index]), let low = value(digits[index + 1]) else {
+                return nil
+            }
+            bytes.append(high << 4 | low)
+            index += 2
         }
         self.init(bytes)
     }

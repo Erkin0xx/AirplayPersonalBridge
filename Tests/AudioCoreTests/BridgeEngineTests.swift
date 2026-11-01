@@ -353,6 +353,10 @@ struct BridgeEngineRetryTests {
             AirPlay2PairingSession.Failure.receiverRejected(.authentication, step: "M2")))
         #expect(!isPermanentOutputFailure(
             AirPlay2PairingSession.Failure.receiverRejected(.busy, step: "M2")))
+        // L'erreur traduite par le sender AirPlay 2 doit se classer comme celle qu'elle traduit.
+        #expect(isPermanentOutputFailure(
+            AirPlay2SenderError.pairingRequired(receiver: "x", status: 470)))
+        #expect(!isPermanentOutputFailure(AirPlay2SenderError.receiverBusy(receiver: "x")))
     }
 
     @Test("La reconnexion d'un sender se lit dans la phase")

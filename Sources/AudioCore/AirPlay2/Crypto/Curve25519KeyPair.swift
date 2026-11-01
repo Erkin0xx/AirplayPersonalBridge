@@ -104,7 +104,10 @@ public final class Curve25519KeyPair {
                 return curve25519_donna(out, privateKeyStorage, peer)
             }
         }
-        guard status == 0 else {
+        // Une clé publique d'ordre faible, envoyée par le pair, donne un secret entièrement nul
+        // quel que soit le nôtre. RFC 7748 §6.1 demande de le refuser, et c'est ce que fait la
+        // bibliothèque `cryptography` sur laquelle s'appuie pyatv.
+        guard status == 0, shared.contains(where: { $0 != 0 }) else {
             throw Failure.computationFailed
         }
         return shared

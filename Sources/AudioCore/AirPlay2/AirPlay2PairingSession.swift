@@ -59,7 +59,8 @@ public actor AirPlay2PairingSession {
             case let .unexpectedState(step):
                 return "étape de pairing inattendue dans la réponse (\(step))"
             case .receiverIdentityMismatch:
-                return "le récepteur renvoie un identifiant qui n'est pas celui appairé"
+                return "le récepteur répond sous une autre identité que celle appairée, "
+                    + "et sa signature ne vérifie pas avec la clé enregistrée"
             case .receiverSignatureInvalid:
                 return "signature du récepteur invalide — credentials périmés ou usurpation"
             }
@@ -87,6 +88,24 @@ public actor AirPlay2PairingSession {
     /// Ce n'est pas un secret, seulement une constante du protocole.
     public static let transientPassword = "3939"
 
+    /// Domaine de pairing annoncé par l'en-tête `X-Apple-HKP`.
+    ///
+    /// Valeurs relevées chez pyatv : `3` dans `airplay/auth/hap.py`, `4` dans `hap_transient.py`.
+    /// Son accessoire simulé (`airplay/server_auth.py`) refuse en `501` tout `pair-verify` qui
+    /// n'annonce pas `3`.
+    ///
+    /// Le `pair-verify` a longtemps porté `4`, recopié du pair-setup : c'était le seul écart avec
+    /// pyatv sur ce chemin, message signé, sels, nonces et TLV étant identiques. Il explique le
+    /// symptôme relevé contre l'Apple TV — échange abouti, sous-TLV déchiffré, mais identifiant
+    /// `pi` au lieu de celui enregistré à l'appairage, et une signature qu'aucune clé candidate
+    /// ne vérifie : l'appareil répondrait depuis un autre domaine, sous une autre identité.
+    /// pyatv, lui, exige l'égalité de l'identifiant et réussit. **Explication établie par
+    /// comparaison, pas encore confirmée sur l'appareil.**
+    private enum PairingDomain: String {
+        case system = "3"
+        case transient = "4"
+    }
+
     private let client: RTSPClient
     private let device: AirPlay2Device
     private let log = AudioLog.airplay2
@@ -98,7 +117,9 @@ public actor AirPlay2PairingSession {
 
     /// Exécute le pair-setup transitoire (M1 → M4) et renvoie les clés de session.
     public func performTransientPairSetup() async throws -> SessionKeys {
-        guard device.supportsTransientPairing else {
+        // Un TXT illisible n'est pas un refus : les capacités sont inconnues, pas absentes. Le
+        // récepteur tranchera lui-même, en `470` s'il exige autre chose.
+        guard device.supportsTransientPairing || device.txt.isEmpty else {
             throw Failure.transientPairingUnsupported(features: device.features)
         }
 
@@ -121,7 +142,7 @@ public actor AirPlay2PairingSession {
             (.method, PairingTLV8.byte(PairingTLV8.Method.pairSetup.rawValue)),
             (.flags, PairingTLV8.flagsValue(.transient)),
         ])
-        let m2Items = try await exchange(m1, step: "M1")
+        let m2Items = try await exchange(m1, step: "M1", domain: .transient)
 
         guard PairingTLV8.state(in: m2Items) == .m2 else {
             throw Failure.unexpectedState(step: "M2")
@@ -143,7 +164,7 @@ public actor AirPlay2PairingSession {
             (.publicKey, publicA),
             (.proof, proofM1),
         ])
-        let m4Items = try await exchange(m3, step: "M3")
+        let m4Items = try await exchange(m3, step: "M3", domain: .transient)
 
         guard PairingTLV8.state(in: m4Items) == .m4 else {
             throw Failure.unexpectedState(step: "M4")
@@ -203,7 +224,7 @@ public actor AirPlay2PairingSession {
             (.state, PairingTLV8.byte(PairingTLV8.State.m1.rawValue)),
             (.publicKey, ephemeral.publicKey),
         ])
-        let m2 = try await exchange(m1, step: "verify-M1", uri: "/pair-verify")
+        let m2 = try await exchange(m1, step: "verify-M1", uri: "/pair-verify", domain: .system)
 
         guard let receiverPublic = m2[.publicKey], let sealed = m2[.encryptedData] else {
             throw Failure.malformedResponse(step: "verify-M2")
@@ -224,23 +245,16 @@ public actor AirPlay2PairingSession {
         else {
             throw Failure.malformedResponse(step: "verify-M2")
         }
-        // L'identifiant renvoyé n'est **pas** comparé pour égalité stricte.
-        //
-        // Un Apple TV renvoie ici son identifiant de pairing (`pi` de l'annonce Bonjour,
-        // `7358e914-…`), alors que pyatv enregistre dans ses credentials l'identifiant sous
-        // lequel *lui* désigne l'appareil (`96A1F186-…`, dérivé de l'adresse matérielle). Les
-        // deux sont légitimes et ne coïncident pas : exiger l'égalité rejetait des
-        // credentials parfaitement valides.
-        //
-        // Ce n'est de toute façon pas ce contrôle qui authentifie le récepteur, mais la
-        // **signature** vérifiée juste après : seul le détenteur de la clé privée associée à
-        // `receiverPublicKey` peut la produire. L'identifiant n'est qu'un repère, et un écart
-        // se journalise sans faire échouer la session.
-        if identifier != credentials.receiverIdentifier {
-            log.debug("""
+        // C'est la **signature**, vérifiée juste après, qui authentifie le récepteur : seul le
+        // détenteur de la clé privée associée à `receiverPublicKey` peut la produire. pyatv
+        // exige en plus l'égalité stricte de l'identifiant. Elle n'ajoute rien à la sûreté, mais
+        // son écart est un diagnostic précieux : un récepteur qui répond sous un autre
+        // identifiant répond depuis un autre domaine de pairing (voir `PairingDomain`).
+        let identityMatches = identifier == credentials.receiverIdentifier
+        if !identityMatches {
+            log.info("""
                 identifiant du récepteur différent de celui mémorisé \
-                (reçu \(String(data: identifier, encoding: .utf8) ?? identifier.hexEncoded, privacy: .public)) \
-                — sans conséquence, la signature fait foi
+                (reçu \(String(data: identifier, encoding: .utf8) ?? identifier.hexEncoded, privacy: .public))
                 """)
         }
 
@@ -250,7 +264,9 @@ public actor AirPlay2PairingSession {
             signature: signature, message: signedByReceiver,
             publicKey: credentials.receiverPublicKey
         ) else {
-            throw Failure.receiverSignatureInvalid
+            // Le contrôle n'est jamais contourné ; l'identifiant sert seulement à mieux nommer
+            // la panne.
+            throw identityMatches ? Failure.receiverSignatureInvalid : Failure.receiverIdentityMismatch
         }
 
         // Nous signons le miroir : notre clé publique ‖ notre identifiant ‖ la sienne.
@@ -265,7 +281,7 @@ public actor AirPlay2PairingSession {
             (.state, PairingTLV8.byte(PairingTLV8.State.m3.rawValue)),
             (.encryptedData, try cipher.seal(proof, nonce: Self.nonce("PV-Msg03"))),
         ])
-        _ = try await exchange(m3, step: "verify-M3", uri: "/pair-verify")
+        _ = try await exchange(m3, step: "verify-M3", uri: "/pair-verify", domain: .system)
 
         log.info("pair-verify abouti (secret partagé \(shared.count) o)")
         return SessionKeys(
@@ -292,9 +308,9 @@ public actor AirPlay2PairingSession {
         Data(repeating: 0, count: 4) + Data(label.utf8)
     }
 
-    /// Poste un message TLV8 sur `/pair-setup` et décode la réponse.
+    /// Poste un message TLV8 de pairing et décode la réponse.
     private func exchange(
-        _ body: Data, step: String, uri: String = "/pair-setup"
+        _ body: Data, step: String, uri: String = "/pair-setup", domain: PairingDomain
     ) async throws -> [PairingTLV8.Tag: Data] {
         let request = RTSPRequest(
             method: "POST",
@@ -303,8 +319,7 @@ public actor AirPlay2PairingSession {
                 ("Content-Length", String(body.count)),
                 ("User-Agent", "AirPlay/320.20"),
                 ("Connection", "keep-alive"),
-                // Indique au récepteur le mode de pairing employé. 4 = transitoire.
-                ("X-Apple-HKP", "4"),
+                ("X-Apple-HKP", domain.rawValue),
                 ("Content-Type", "application/octet-stream"),
             ],
             body: body,
