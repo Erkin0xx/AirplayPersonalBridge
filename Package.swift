@@ -103,20 +103,22 @@ let package = Package(
             dependencies: ["AudioCore"],
             path: "Sources/audiocap"
         ),
-        // Logique de l'app (plan de la pièce, état de l'interface), compilée ici à partir des
-        // mêmes fichiers que la cible Xcode, pour que `swift test` la couvre sans lancer
-        // l'app. L'isolation par défaut reproduit le réglage de la cible Xcode : sinon ces
-        // fichiers ne compileraient pas de la même façon des deux côtés.
+        // L'app elle-même (plan de la pièce, état, vues), compilée ici à partir des mêmes
+        // fichiers que la cible Xcode : `swift build` vérifie l'interface sans passer par
+        // xcodebuild, et `swift test` couvre sa logique sans lancer l'app. Seul le point
+        // d'entrée `@main` reste propre à Xcode. L'isolation par défaut reproduit le réglage
+        // de la cible Xcode, sans quoi ces fichiers ne compileraient pas de la même façon.
         .target(
-            name: "BridgeAppModel",
+            name: "BridgeApp",
             dependencies: ["AudioCore"],
-            path: "AirplayPersonalBridge/AirplayPersonalBridge/Model",
+            path: "AirplayPersonalBridge/AirplayPersonalBridge",
+            exclude: ["Assets.xcassets", "AirplayPersonalBridgeApp.swift"],
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
         .testTarget(
-            name: "BridgeAppModelTests",
-            dependencies: ["BridgeAppModel", "AudioCore"],
-            path: "Tests/BridgeAppModelTests",
+            name: "BridgeAppTests",
+            dependencies: ["BridgeApp", "AudioCore"],
+            path: "Tests/BridgeAppTests",
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
         .testTarget(

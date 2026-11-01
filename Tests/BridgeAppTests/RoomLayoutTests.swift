@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 import Testing
 
-@testable import BridgeAppModel
+@testable import BridgeApp
 
 @Suite("Plan de la pièce — géométrie")
 struct RoomLayoutTests {
