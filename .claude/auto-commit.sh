@@ -11,6 +11,11 @@
 #   - le push échoue en silence plutôt que de bloquer la fin de tour (pas de réseau,
 #     conflit distant) ; le commit local reste fait et repartira au tour suivant.
 #
+# `git add -A` prend tout ce que .gitignore ne couvre pas : c'est donc .gitignore qui garde ce
+# qui ne doit jamais partir (credentials/, clés et trousseaux, tools/, .mock-logs/, build/,
+# captures audio et réseau, worktrees d'agents). Tout nouveau secret ou artefact s'y déclare
+# AVANT sa création.
+#
 # Ce script ne remplace PAS la procédure de clôture de jalon (CDC section 14) :
 # celle-ci reste un commit délibéré, avec message rédigé, après mise à jour de
 # PROGRESS.md / CLAUDE.md / README.md.
@@ -31,15 +36,18 @@ git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 # Résumé court de ce qui change, pour que le message ait un minimum de valeur
 # à la relecture de l'historique.
 changed=$(git status --porcelain | wc -l | tr -d ' ')
-files=$(git status --porcelain | awk '{print $NF}' | xargs -n1 basename 2>/dev/null \
-        | head -3 | paste -sd ', ' -)
+# Ligne par ligne : un nom de fichier peut contenir des espaces (git le met alors entre
+# guillemets, et ne garde que la cible d'un renommage).
+files=$(git status --porcelain | cut -c4- | sed -e 's/.* -> //' -e 's/^"//' -e 's/"$//' \
+        | while IFS= read -r path; do basename "$path"; done \
+        | head -3 | paste -sd ',' - | sed 's/,/, /g')
 [ "$changed" -gt 3 ] && files="$files, +$((changed - 3))"
 
 git add -A || exit 0
 git commit -q -m "auto: $files" \
     -m "Commit automatique de fin de tour (hook Stop, .claude/auto-commit.sh).
 Ce n'est pas un commit de clôture de jalon : voir PROGRESS.md pour l'état réel." \
-    -m "Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>" || exit 0
+    -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 0
 
 branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 

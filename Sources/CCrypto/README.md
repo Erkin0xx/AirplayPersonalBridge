@@ -29,7 +29,7 @@ un projet d'intégration protocolaire.
 
 ## Écarts par rapport à l'amont
 
-Aucune modification du code cryptographique lui-même. Trois écarts de packaging seulement :
+Aucune modification du code cryptographique lui-même. Quatre écarts de packaging seulement :
 
 1. **`CEd25519` : `seed.c` retiré.** Il tire son entropie de `/dev/urandom` en C ; le projet
    sème depuis Swift. La macro `ED25519_NO_SEED` (déclarée dans `Package.swift`) neutralise
@@ -44,7 +44,12 @@ Aucune modification du code cryptographique lui-même. Trois écarts de packagin
    dépendance externe (BIGNUM, pour l'arithmétique modulaire). Elle n'est pas contournable
    sans réécrire la partie mathématique, ce que le CDC 4.4 proscrit. Les API
    `SHA*_Init/Update/Final` sont dépréciées dans OpenSSL 3 mais fonctionnelles :
-   l'avertissement est réduit au silence dans `Package.swift`, pas dans le code vendu.
+   l'avertissement est réduit au silence dans `Package.swift`, pas dans le code vendu. Le lien
+   est **statique** (`libcrypto.a`) : l'app ne dépend plus de Homebrew à l'exécution.
+4. **`CChachaPoly` : `poly1305_init` renommé à la compilation.** Une macro de `Package.swift`
+   l'appelle `cchachapoly_poly1305_init`, le fichier source restant intact. Sans cela, le lien
+   statique échoue : `libcrypto.a` exporte le même symbole (`poly1305-armv8.o`). C'est le seul
+   symbole commun aux quatre bibliothèques et à OpenSSL, vérifié avec `nm`.
 
 Les en-têtes publics sont placés dans `include/`, le reste à la racine du dossier : c'est la
 disposition attendue par SwiftPM pour une cible C.
