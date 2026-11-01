@@ -7,12 +7,13 @@ import PackageDescription
 let package = Package(
     name: "AirPlayMultiOutput",
     platforms: [
-        // Process Tap (AudioHardwareCreateProcessTap) : macOS 14.2+. Le mode entrée
-        // physique (AVAudioEngine) n'a pas cette contrainte, mais la cible du package
-        // s'aligne sur le plus exigeant des trois modes de capture (CDC 4.2).
+        // macOS 26 : c'est le plancher réel, imposé par libcrypto.a (bouteille Homebrew
+        // compilée pour cette version, liée statiquement plus bas). Annoncer moins ferait
+        // émettre à l'éditeur de liens un avertissement par objet de l'archive, 838 à chaque
+        // lien, pour promettre une compatibilité que le binaire n'a pas.
         // Valeur à garder alignée sur MACOSX_DEPLOYMENT_TARGET de la cible Xcode et sur
         // LSMinimumSystemVersion de Resources/audiocap-Info.plist.
-        .macOS(.v15)
+        .macOS(.v26)
     ],
     products: [
         // Le cœur exposé comme bibliothèque, pour que l'app SwiftUI du jalon 5 puisse le
@@ -81,10 +82,6 @@ let package = Package(
         // l'exécution (`scripts/install-app.sh` vérifie avec `otool -L` qu'aucune
         // référence à /opt/homebrew ne subsiste).
         //
-        // `-w` coupe les avertissements de l'éditeur de liens : la bouteille Homebrew est
-        // compilée pour macOS 26, plus récent que la cible de déploiement, et ld en émet un
-        // par objet de l'archive (838 à chaque lien, qui noient tout le reste dans Xcode).
-        // Ce n'est pas anodin : le binaire exige de fait la version de macOS de la bouteille.
         .target(
             name: "CSRP",
             path: "Sources/CCrypto/CSRP",
@@ -95,7 +92,7 @@ let package = Package(
                 ])
             ],
             linkerSettings: [
-                .unsafeFlags(["/opt/homebrew/opt/openssl@3/lib/libcrypto.a", "-Xlinker", "-w"]),
+                .unsafeFlags(["/opt/homebrew/opt/openssl@3/lib/libcrypto.a"]),
             ]
         ),
 

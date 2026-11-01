@@ -16,7 +16,7 @@
 	<string>1</string>
 	<!-- Aligné sur Package.swift : le binaire est lié avec une cible de déploiement 15.0. -->
 	<key>LSMinimumSystemVersion</key>
-	<string>15.0</string>
+	<string>26.0</string>
 	<!-- Deux bascules de confidentialité distinctes selon le mode de capture (CDC 4.2) :
 	     enregistrement audio système pour les modes Process Tap (global / application),
 	     micro classique pour le mode entrée physique. -->
