@@ -16,9 +16,11 @@ public struct AirPlay2Device: Sendable {
     public let txt: [String: String]
 
     /// Bits de fonctionnalité (`features`), annoncés en deux mots de 32 bits séparés par
-    /// une virgule : `features=0x405f4200,0x1c300`. Le second mot est celui de poids fort.
+    /// une virgule : `features=0x405f4200,0x1c300`. Le second mot est celui de poids fort, et
+    /// il est facultatif : `features=0x445f8a00` est tout aussi valide, sans bit au-delà du 31ᵉ.
+    /// Certains récepteurs le publient sous la clé `ft`, que pyatv lit aussi.
     public var features: UInt64 {
-        let parts = (txt["features"] ?? "").split(separator: ",")
+        let parts = (txt["features"] ?? txt["ft"] ?? "").split(separator: ",")
         func parse(_ value: Substring?) -> UInt64 {
             guard let value else { return 0 }
             let trimmed = value.trimmingCharacters(in: .whitespaces)
@@ -47,16 +49,10 @@ public struct AirPlay2Device: Sendable {
     /// Sert à vérifier la signature du récepteur pendant le `pair-verify`. Absente du TXT
     /// sur certains récepteurs, d'où l'`Optional`.
     public var publicKey: Data? {
-        guard let hex = txt["pk"], hex.count == 64 else { return nil }
-        var bytes = [UInt8]()
-        var index = hex.startIndex
-        while index < hex.endIndex {
-            let next = hex.index(index, offsetBy: 2)
-            guard let byte = UInt8(hex[index..<next], radix: 16) else { return nil }
-            bytes.append(byte)
-            index = next
+        guard let hex = txt["pk"], let key = Data(hexEncoded: hex), key.count == 32 else {
+            return nil
         }
-        return Data(bytes)
+        return key
     }
 
     /// Identifiant matériel (`deviceid`), au format d'une adresse MAC.
@@ -94,9 +90,30 @@ public enum AirPlay2DiscoveryError: Error, CustomStringConvertible {
 public actor AirPlay2Discovery {
     static let serviceType = "_airplay._tcp"
 
-    private let log = AudioLog.airplay2
+    /// Un service vu au parcours, pas encore résolu.
+    struct BrowsedService: Sendable, Equatable {
+        let name: String
+        let type: String
+        let domain: String
+    }
 
-    public init() {}
+    typealias ServiceBrowser = @Sendable (Duration) async -> [BrowsedService]
+    typealias ServiceResolver = @Sendable (BrowsedService) async -> AirPlay2Device?
+
+    private let log = AudioLog.airplay2
+    private let browser: ServiceBrowser
+    private let resolver: ServiceResolver
+
+    public init() {
+        self.init(browser: Self.browseServices, resolver: Self.resolve)
+    }
+
+    /// Injection du parcours et de la résolution : `resolve` ouvre une connexion TCP vers
+    /// l'appareil, ce qu'aucun test ne doit faire contre le matériel du réseau local.
+    init(browser: @escaping ServiceBrowser, resolver: @escaping ServiceResolver) {
+        self.browser = browser
+        self.resolver = resolver
+    }
 
     /// Parcourt `_airplay._tcp` et renvoie tous les récepteurs résolus.
     ///
@@ -105,51 +122,105 @@ public actor AirPlay2Discovery {
     /// `bonjourWithTXTRecord`, le mock AirPlay 2 **n'apparaît pas du tout** dans les
     /// résultats, alors que `dns-sd` et un parcours sans TXT le voient tous les deux. Voir
     /// l'explication dans `BonjourTXTQuery`.
+    ///
+    /// La résolution se fait en parallèle : un seul appareil éteint mais encore annoncé coûte
+    /// plusieurs secondes de délais, que les autres n'ont pas à attendre l'un après l'autre.
     public func browse(timeout: Duration = .seconds(5)) async -> [AirPlay2Device] {
-        let results = await RAOPDiscovery.browseRaw(
-            serviceType: Self.serviceType,
-            timeout: timeout,
-            includeTXTRecord: false,
-            log: log
-        )
-        var devices: [AirPlay2Device] = []
-        for result in results {
-            if let device = await resolve(result) {
-                devices.append(device)
+        let services = await browser(timeout)
+        let resolver = self.resolver
+        return await withTaskGroup(of: (Int, AirPlay2Device?).self) { group in
+            for (index, service) in services.enumerated() {
+                group.addTask { (index, await resolver(service)) }
             }
+            var resolved: [(Int, AirPlay2Device)] = []
+            for await (index, device) in group {
+                if let device { resolved.append((index, device)) }
+            }
+            return resolved.sorted { $0.0 < $1.0 }.map(\.1)
         }
-        return devices
     }
 
-    /// Cherche un récepteur dont le nom contient `name` (comparaison insensible à la casse).
+    /// Cherche un récepteur dont le nom correspond à `name`, sans tenir compte de la casse.
     ///
     /// Plusieurs tentatives plutôt qu'un seul parcours plus long : `NWBrowser` peut rendre
     /// une liste vide au premier passage et la bonne au suivant, sans erreur ni état
     /// d'échec — constaté de façon intermittente sur cette machine avec le mock, pourtant
     /// visible en permanence via `dns-sd`. Un récepteur matériel, qui met plus de temps à
     /// répondre qu'un mock local, rend cette marge d'autant plus utile.
+    ///
+    /// Deux règles en découlent, vu qu'un passage peut être incomplet :
+    ///
+    /// - **Une correspondance partielle attend un second passage.** « Salon » contenu dans
+    ///   « Salon (2) » serait sinon retenu dès que le vrai « Salon » manque à un parcours, et deux
+    ///   sorties viseraient le même appareil.
+    /// - **Seul le service retenu est résolu.** Résoudre ouvre une connexion TCP vers
+    ///   l'appareil : inutile de déranger tout le réseau, ni d'attendre ses retardataires.
     public func find(
         named name: String,
         timeout: Duration = .seconds(5),
         attempts: Int = 3
     ) async throws -> AirPlay2Device {
         let needle = name.lowercased()
-        var seen: [String] = []
+        let passes = max(1, attempts)
+        var seen: Set<String> = []
+        // Un appareil dont le TXT n'a pas pu être lu vaut mieux que rien, mais moins qu'un autre
+        // passage : sans TXT, pas de bits de fonctionnalité.
+        var fallback: AirPlay2Device?
 
-        for attempt in 1...max(1, attempts) {
-            let devices = await browse(timeout: timeout)
-            if let match = Self.bestMatch(for: needle, among: devices, name: \.serviceName) {
-                log.info(
-                    "Récepteur AirPlay 2 résolu : \(match.serviceName, privacy: .public) → \(match.host, privacy: .public):\(match.port)"
-                )
-                return match
+        for pass in 1...passes {
+            try Task.checkCancellation()
+            let services = try await cancellableBrowse(timeout: timeout)
+            seen.formUnion(services.map(\.name))
+
+            if let match = Self.bestMatch(for: needle, among: services, name: \.name) {
+                let isExact = match.name.lowercased() == needle
+                if isExact || pass >= min(2, passes), let device = await resolver(match) {
+                    guard device.txt.isEmpty, pass < passes else {
+                        log.info(
+                            "Récepteur AirPlay 2 résolu : \(device.serviceName, privacy: .public) → \(device.host, privacy: .public):\(device.port)"
+                        )
+                        return device
+                    }
+                    fallback = device
+                }
             }
-            seen = devices.map(\.serviceName)
-            if attempt < attempts {
-                log.debug("Parcours \(attempt) sans résultat pour « \(name, privacy: .public) », nouvelle tentative")
+            if pass < passes {
+                log.debug("Parcours \(pass) sans résultat définitif pour « \(name, privacy: .public) », nouvelle tentative")
             }
         }
-        throw AirPlay2DiscoveryError.notFound(name: name, seen: seen)
+        if let fallback { return fallback }
+        throw AirPlay2DiscoveryError.notFound(name: name, seen: seen.sorted())
+    }
+
+    /// Un parcours qui s'interrompt à l'annulation : il dure plusieurs secondes, et arrêter une
+    /// sortie en recherche de son récepteur ne doit pas l'attendre. Le parcours sous-jacent se
+    /// termine de lui-même à son échéance.
+    private func cancellableBrowse(timeout: Duration) async throws -> [BrowsedService] {
+        let browser = self.browser
+        let box = BrowseResumeBox()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                box.attach(continuation)
+                Task {
+                    box.finish(.success(await browser(timeout)))
+                }
+            }
+        } onCancel: {
+            box.finish(.failure(CancellationError()))
+        }
+    }
+
+    private static func browseServices(timeout: Duration) async -> [BrowsedService] {
+        let results = await RAOPDiscovery.browseRaw(
+            serviceType: serviceType,
+            timeout: timeout,
+            includeTXTRecord: false,
+            log: AudioLog.airplay2
+        )
+        return results.compactMap { result in
+            guard case let .service(name, type, domain, _) = result.endpoint else { return nil }
+            return BrowsedService(name: name, type: type, domain: domain)
+        }
     }
 
     /// Choisit le récepteur désigné par un nom, **exactitude d'abord**.
@@ -165,30 +236,68 @@ public actor AirPlay2Discovery {
             ?? devices.first { name($0).lowercased().contains(needle) }
     }
 
-    private func resolve(_ result: NWBrowser.Result) async -> AirPlay2Device? {
-        guard case let .service(name, type, domain, _) = result.endpoint else { return nil }
+    private static func resolve(_ service: BrowsedService) async -> AirPlay2Device? {
+        let log = AudioLog.airplay2
+        let name = service.name
 
         // Le TXT porte les bits de fonctionnalité (`features`), l'identifiant de pairing
         // (`pi`) et la clé publique (`pk`) : sans lui, impossible de choisir le mode de
         // pairing. Il est lu par une requête DNS dédiée, hors de Network framework.
-        // Nom pleinement qualifié : `instance._service._tcp.domaine.`, chaque composant
-        // séparé par un point. `NWEndpoint` rend le type **sans** point final (`_airplay._tcp`)
-        // et le domaine **avec** (`local.`) : les concaténer tels quels produit
-        // `_airplay._tcplocal.`, que le résolveur ne trouve jamais — et le TXT revient vide
-        // sans erreur.
-        let fullName = "\(name).\(type).\(domain)"
-        let txt = BonjourTXTQuery.lookup(fullName: fullName)
-        if txt.isEmpty {
-            log.error("TXT vide pour \(name, privacy: .public) — capacités du récepteur inconnues")
+        let fullName =
+            BonjourTXTQuery.fullName(instance: name, type: service.type, domain: service.domain)
+        var txt: [String: String] = [:]
+        if let fullName {
+            txt = await BonjourTXTQuery.lookup(fullName: fullName)
         }
 
         guard let resolved = await RAOPDiscovery.resolveEndpoint(
-            NWEndpoint.service(name: name, type: type, domain: domain, interface: nil)
+            NWEndpoint.service(name: name, type: service.type, domain: service.domain, interface: nil)
         ) else {
             log.error("Résolution impossible pour \(name, privacy: .public)")
             return nil
         }
 
+        // L'appareil vient de répondre : un TXT manquant tient plutôt à une réponse multicast
+        // perdue qu'à une absence réelle, et une seconde question ne coûte plus rien à personne.
+        if txt.isEmpty, let fullName {
+            txt = await BonjourTXTQuery.lookup(fullName: fullName)
+        }
+        if txt.isEmpty {
+            log.error("TXT vide pour \(name, privacy: .public) — capacités du récepteur inconnues")
+        }
+
         return AirPlay2Device(serviceName: name, host: resolved.host, port: resolved.port, txt: txt)
+    }
+}
+
+/// Reprise unique d'un parcours, par son résultat ou par son annulation.
+private final class BrowseResumeBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<[AirPlay2Discovery.BrowsedService], Error>?
+    /// Une annulation peut précéder l'installation de la continuation.
+    private var early: Result<[AirPlay2Discovery.BrowsedService], Error>?
+
+    func attach(_ continuation: CheckedContinuation<[AirPlay2Discovery.BrowsedService], Error>) {
+        lock.lock()
+        guard let early else {
+            self.continuation = continuation
+            lock.unlock()
+            return
+        }
+        lock.unlock()
+        continuation.resume(with: early)
+    }
+
+    func finish(_ result: Result<[AirPlay2Discovery.BrowsedService], Error>) {
+        lock.lock()
+        guard let pending = continuation else {
+            if early == nil { early = result }
+            lock.unlock()
+            return
+        }
+        continuation = nil
+        early = result
+        lock.unlock()
+        pending.resume(with: result)
     }
 }
