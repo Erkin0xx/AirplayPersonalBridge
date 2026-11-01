@@ -286,6 +286,7 @@ actor FakeSender: OutputSender {
     enum StartBehaviour: Sendable {
         case succeed
         case fail(FakeError)
+        case failWith(any Error & Sendable)
         case failPermanently
         /// Reste en négociation jusqu'à `releaseStart` ou `stop`.
         case hang
@@ -332,6 +333,9 @@ actor FakeSender: OutputSender {
         case .succeed:
             break
         case let .fail(error):
+            state = .failed
+            throw error
+        case let .failWith(error):
             state = .failed
             throw error
         case .failPermanently:

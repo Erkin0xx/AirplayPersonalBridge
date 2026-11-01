@@ -378,7 +378,7 @@ public actor RAOPSender {
     /// Un refus définitif ne se corrigera pas en réessayant : mot de passe exigé, ou format que
     /// le récepteur n'annonce pas. Le reste (réseau, occupé, redémarrage) peut se résoudre seul.
     static func isWorthRetrying(_ error: Error) -> Bool {
-        if error is RAOPSenderError { return false }
+        if let raop = error as? RAOPSenderError { return !raop.isPermanent }
         if let rtsp = error as? RTSPError, rtsp.requiresPassword { return false }
         return true
     }
@@ -1151,6 +1151,18 @@ public enum RAOPSenderError: Error, CustomStringConvertible {
     case alacUnsupported(String)
     case encryptionUnsupported(String)
     case ipv4Required(String)
+
+    /// Réessayer sans intervention ne servira à rien.
+    ///
+    /// Vrai des refus de capacité, annoncés par le récepteur lui-même. Pas de ``ipv4Required`` : une
+    /// résolution rendue à l'échéance avec le seul AAAA parce que le A a tardé sur le réseau décrit
+    /// un instant, pas l'appareil. Une nouvelle découverte le retrouvera avec son IPv4.
+    public var isPermanent: Bool {
+        switch self {
+        case .alacUnsupported, .encryptionUnsupported: return true
+        case .ipv4Required: return false
+        }
+    }
 
     public var description: String {
         switch self {

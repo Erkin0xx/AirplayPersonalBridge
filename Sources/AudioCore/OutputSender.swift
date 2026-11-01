@@ -314,8 +314,8 @@ final class OnceThrowingResumer<T: Sendable>: @unchecked Sendable {
 /// d'authentification.
 func isPermanentOutputFailure(_ error: Error) -> Bool {
     switch error {
-    case is RAOPSenderError:
-        return true
+    case let raop as RAOPSenderError:
+        return raop.isPermanent
     case let airplay2 as AirPlay2SenderError:
         // Le sender traduit ses erreurs pour l'affichage : sans ce cas, un Apple TV qui répond
         // 470 serait relancé sans fin, chaque tentative refaisant une négociation pour rien.

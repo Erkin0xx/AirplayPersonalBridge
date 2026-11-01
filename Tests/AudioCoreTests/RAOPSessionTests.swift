@@ -463,6 +463,7 @@ struct RAOPSessionTests {
             RTSPError.unexpectedStatus(method: "ANNOUNCE", code: 401, reason: "")
         ))
         #expect(!RAOPSender.isWorthRetrying(RAOPSenderError.alacUnsupported("x")))
+        #expect(RAOPSender.isWorthRetrying(RAOPSenderError.ipv4Required("fe80::1")))
         #expect(RAOPSender.isWorthRetrying(
             RTSPError.unexpectedStatus(method: "ANNOUNCE", code: 453, reason: "")
         ))

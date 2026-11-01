@@ -343,6 +343,9 @@ struct BridgeEngineRetryTests {
     @Test("Les refus d'authentification et de capacité sont définitifs, l'absence non")
     func failureClassification() {
         #expect(isPermanentOutputFailure(RAOPSenderError.alacUnsupported("x")))
+        #expect(isPermanentOutputFailure(RAOPSenderError.encryptionUnsupported("x")))
+        // Une réponse DNS tardive décrit un instant, pas l'appareil.
+        #expect(!isPermanentOutputFailure(RAOPSenderError.ipv4Required("fe80::1")))
         #expect(isPermanentOutputFailure(
             RTSPError.unexpectedStatus(method: "POST", code: 470, reason: "")))
         #expect(!isPermanentOutputFailure(
@@ -357,6 +360,20 @@ struct BridgeEngineRetryTests {
         #expect(isPermanentOutputFailure(
             AirPlay2SenderError.pairingRequired(receiver: "x", status: 470)))
         #expect(!isPermanentOutputFailure(AirPlay2SenderError.receiverBusy(receiver: "x")))
+    }
+
+    /// Un AAAA arrivé seul dans les 3 s de la résolution, et la sortie était abandonnée pour de bon
+    /// alors que le A n'avait fait que tarder.
+    @Test("Une adresse sans IPv4 est réessayée, pas définitive")
+    func missingIPv4IsRetried() async throws {
+        let factory = FakeSenderFactory()
+        factory.script("a", [.failWith(RAOPSenderError.ipv4Required("fe80::1")), .succeed])
+        let engine = makeEngine(source: ManualCaptureSource(), factory: factory)
+        try await engine.start(source: source0, outputs: [request("a")])
+
+        #expect(await eventually { await engine.phase(of: "a") == .streaming })
+        #expect(factory.senders("a").count == 2)
+        await engine.stop()
     }
 
     @Test("La reconnexion d'un sender se lit dans la phase")
