@@ -8,7 +8,8 @@ import Testing
 ///
 /// **Jamais lancés par défaut** : `RUN_MOCK_TESTS=1 swift test --filter RAOPMockIntegration`,
 /// après avoir démarré le mock (`shairport-sync` seul suffit, il quitte à chaque `TEARDOWN`).
-/// Ils ne passent pas par la découverte Bonjour, qui contacterait les vrais appareils du réseau.
+/// Ils visent le mock par son adresse et ne passent jamais par `RAOPDiscovery`, dont le parcours
+/// général ouvre une connexion vers chaque récepteur vu, y compris les vrais.
 ///
 /// Le niveau est de −50 dBFS, car shairport-sync joue sur les haut-parleurs du Mac. Pour juger le
 /// son lui-même, lancer le mock avec `shairport-sync -o stdout > sortie.pcm` : plus rien ne
@@ -51,15 +52,24 @@ struct RAOPMockIntegrationTests {
         }
     }
 
-    /// Passif pour tous les autres appareils : `find` ne contacte que celui qu'il retient.
-    @Test("La découverte trouve le mock par son nom affiché, TXT compris, sans attendre le délai")
-    func discovery() async throws {
-        let start = ContinuousClock.now
-        let device = try await RAOPDiscovery().find(named: "Geneva-Mock")
-        #expect(secondsSince(start) < 4, "le parcours doit s'arrêter dès le nom exact trouvé")
+    /// Une requête DNS sur ce seul nom : aucun parcours, et personne d'autre n'est sollicité.
+    ///
+    /// Le nom est à fournir par `RAOP_MOCK_INSTANCE`, relevé par `dns-sd -B _raop._tcp local`, qui
+    /// n'ouvre aucune connexion. Son préfixe ne se déduit de rien de connu : `52B8FAE6DA40` le
+    /// 2026-11-01, contre `65D15B6D3AC1` au jalon -1, et ce n'est pas l'adresse MAC d'`en0`.
+    @Test(
+        "Le TXT du mock se lit par son nom complet, nom échappé compris",
+        .enabled(if: ProcessInfo.processInfo.environment["RAOP_MOCK_INSTANCE"] != nil)
+    )
+    func mockTXT() async throws {
+        let instance = try #require(ProcessInfo.processInfo.environment["RAOP_MOCK_INSTANCE"])
+        let fullName = RAOPDiscovery.fullServiceName(
+            name: instance, type: RAOPDiscovery.serviceType, domain: "local."
+        )
+        let txt = await Task { BonjourTXTQuery.lookup(fullName: fullName) }.value
+        let device = RAOPDevice(serviceName: instance, host: "127.0.0.1", port: 5000, txt: txt)
+        #expect(!txt.isEmpty, "\(fullName) : TXT vide, le préfixe a peut-être changé")
         #expect(device.displayName == "Geneva-Mock")
-        #expect(device.port == 5000)
-        #expect(UDPChannel.isIPv4Literal(device.host), "\(device.host)")
         #expect(device.supportsUnencrypted)
         #expect(device.supportsRSAEncryption)
         #expect(device.supportsPCM)

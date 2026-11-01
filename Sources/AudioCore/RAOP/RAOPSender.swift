@@ -130,6 +130,8 @@ public actor RAOPSender {
     private let reconnects: Bool
     /// Vrai quand la boucle de diffusion a conclu à une perte de session.
     private var sessionLost = false
+    /// Connexion dont la rupture a déjà été signalée. Voir ``noteControlConnectionLost(epoch:)``.
+    private var lostConnectionEpoch: Int?
     private var consecutiveSendErrors = 0
     /// Instant de la dernière requête d'horloge reçue, s'il y en a eu une.
     private var lastTimingRequestUnix: TimeInterval?
@@ -233,6 +235,10 @@ public actor RAOPSender {
         simulatedLossInterval = interval
     }
 
+    /// Négociation en cours ou dernière en date. Interne : uniquement lu par les tests, pour
+    /// livrer un signal de perte à un instant précis de la négociation.
+    var currentConnectionEpoch: Int { connectionEpoch }
+
     // MARK: - Session
 
     /// Établit la session RTSP et démarre la diffusion.
@@ -306,7 +312,8 @@ public actor RAOPSender {
         }
         packetsInSession = 0
         consecutiveSendErrors = 0
-        sessionLost = false
+        // Pas un simple `false` : la connexion a pu tomber à la toute fin de la négociation.
+        sessionLost = lostConnectionEpoch == connectionEpoch
         lastTimingRequestUnix = nil
         timingSilenceReported = false
         // Ancre le flux sur l'horloge de capture commune aux deux sorties.
@@ -826,8 +833,15 @@ public actor RAOPSender {
     }
 
     /// La connexion RTSP est tombée : c'est le signal franc de perte de session.
-    private func noteControlConnectionLost(epoch: Int) {
-        guard epoch == connectionEpoch, state == .streaming else { return }
+    ///
+    /// Le signal arrive par une tâche, et peut donc précéder le passage en `.streaming` quand la
+    /// connexion tombe à la toute fin de la négociation. Il est conservé pour
+    /// ``beginStreaming(firstSession:)`` : ignoré, il laissait le sender diffuser dans le vide,
+    /// le flux UDP n'échouant jamais, sans plus rien pour lui signaler la perte.
+    func noteControlConnectionLost(epoch: Int) {
+        guard epoch == connectionEpoch else { return }
+        lostConnectionEpoch = epoch
+        guard state == .streaming else { return }
         log.error("Connexion RTSP rompue — session réputée perdue")
         sessionLost = true
     }

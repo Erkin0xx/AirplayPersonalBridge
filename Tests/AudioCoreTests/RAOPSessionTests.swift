@@ -505,6 +505,78 @@ struct RAOPSessionTests {
         await rig.close()
     }
 
+    @Test("Une coupure brutale du récepteur relance la session, comme une fermeture propre")
+    func rstTriggersReconnection() async throws {
+        let rig = try await makeRig()
+        try await rig.sender.start(volume: -20)
+        #expect(await raopEventually { rig.server.audioPackets.count > 10 })
+
+        rig.server.abortConnections()
+        #expect(await raopEventually(within: .seconds(5)) {
+            await rig.sender.statistics.reconnections == 1
+                && rig.server.requests.filter { $0.method == "RECORD" }.count == 2
+        })
+        await rig.close()
+    }
+
+    @Test("Un signal de perte arrivé avant le passage en diffusion n'est pas oublié")
+    func lossSignalledBeforeStreamingIsKept() async throws {
+        // Le signal arrive par une tâche, et peut précéder le passage en `.streaming`. Cette
+        // fenêtre est trop étroite pour être touchée à coup sûr par une vraie fermeture : on force
+        // l'ordre en livrant le signal pendant que le `SET_PARAMETER` attend sa réponse.
+        let rig = try await makeRig(
+            script: {
+                $0.method == "SET_PARAMETER" ? .delayed(.milliseconds(300), body: "") : .standard
+            },
+            reconnects: false
+        )
+        let starting = Task { try await rig.sender.start(volume: -20) }
+        #expect(await raopEventually {
+            rig.server.requests.contains { $0.method == "SET_PARAMETER" }
+        })
+        let epoch = await rig.sender.currentConnectionEpoch
+        await rig.sender.noteControlConnectionLost(epoch: epoch)
+        let stateDuringNegotiation = await rig.sender.state
+        #expect(stateDuringNegotiation == .connecting)
+
+        try await starting.value
+        let noticed = await raopEventually(within: .seconds(2)) {
+            await rig.sender.state == .failed
+        }
+        #expect(noticed, "le sender diffuse dans le vide")
+        await rig.close()
+    }
+
+    @Test("Le signal d'une ancienne connexion ne fait pas tomber la session suivante")
+    func staleLossSignalIsIgnored() async throws {
+        let rig = try await makeRig(reconnects: false)
+        try await rig.sender.start(volume: -20)
+        let epoch = await rig.sender.currentConnectionEpoch
+        await rig.sender.noteControlConnectionLost(epoch: epoch &- 1)
+        #expect(await raopEventually { rig.server.audioPackets.count > 20 })
+        let state = await rig.sender.state
+        #expect(state == .streaming)
+        await rig.close()
+    }
+
+    @Test("Une connexion fermée juste après la dernière réponse de négociation est remarquée")
+    func finAtTheEndOfNegotiationIsNotLost() async throws {
+        // Le scénario réel, de bout en bout. Plusieurs essais, l'ordre exact dépendant de
+        // l'ordonnanceur : `lossSignalledBeforeStreamingIsKept` force, lui, le cas défavorable.
+        for _ in 0..<20 {
+            let rig = try await makeRig(
+                script: { $0.method == "SET_PARAMETER" ? .standardThenClose : .standard },
+                reconnects: false
+            )
+            try await rig.sender.start(volume: -20)
+            let noticed = await raopEventually(within: .seconds(2)) {
+                await rig.sender.state == .failed
+            }
+            #expect(noticed, "le sender diffuse dans le vide")
+            await rig.close()
+        }
+    }
+
     @Test("Sans reconnexion automatique, une session perdue se voit dans l'état")
     func lostSessionWithoutReconnection() async throws {
         let rig = try await makeRig(reconnects: false)
