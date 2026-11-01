@@ -26,15 +26,21 @@ public enum AirPlay2SenderError: Error, CustomStringConvertible, LocalizedError,
     case noResponse(receiver: String, step: String)
     /// La connexion s'est rompue en cours d'échange.
     case connectionLost(receiver: String)
-    /// Le pairing a échoué pour une autre raison que le refus d'un appairage.
+    /// Le récepteur refuse explicitement le pairing : mauvaise preuve, nombre maximal d'appairages
+    /// atteint, ou pairing indisponible.
+    case pairingRefused(receiver: String, detail: String)
+    /// Le pairing a échoué pour une autre raison qu'un refus explicite.
     case pairingFailed(receiver: String, detail: String)
     /// Tout le reste : le message d'origine, déjà en français, faute de mieux à en dire.
     case other(receiver: String, detail: String)
 
     /// Réessayer sans intervention ne servira à rien : il faut un geste de l'utilisateur.
+    ///
+    /// Reprend le partage de `isPermanentOutputFailure` du moteur : ne sont permanents que les
+    /// refus explicites de capacité ou d'authentification.
     public var isPermanent: Bool {
         switch self {
-        case .pairingRequired, .credentialsRejected: return true
+        case .pairingRequired, .credentialsRejected, .pairingRefused: return true
         default: return false
         }
     }
@@ -103,6 +109,8 @@ public enum AirPlay2SenderError: Error, CustomStringConvertible, LocalizedError,
             return "« \(receiver) » ne répond plus (\(step)). Vérifiez qu'il est allumé et sur le réseau."
         case let .connectionLost(receiver):
             return "La connexion à « \(receiver) » s'est rompue."
+        case let .pairingRefused(receiver, detail):
+            return "« \(receiver) » refuse le pairing : \(detail)."
         case let .pairingFailed(receiver, detail):
             return "Le pairing avec « \(receiver) » a échoué : \(detail)."
         case let .other(receiver, detail):
@@ -203,7 +211,9 @@ public enum AirPlay2SenderError: Error, CustomStringConvertible, LocalizedError,
                 return .pairingBackoff(receiver: receiver)
             case .authentication where hasCredentials:
                 return .credentialsRejected(receiver: receiver, detail: tlv.description)
-            case .authentication, .unknown, .maxPeers, .unavailable:
+            case .authentication, .maxPeers, .unavailable:
+                return .pairingRefused(receiver: receiver, detail: tlv.description)
+            case .unknown:
                 return .pairingFailed(receiver: receiver, detail: tlv.description)
             }
         case .malformedResponse, .unexpectedState:

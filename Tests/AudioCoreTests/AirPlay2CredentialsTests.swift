@@ -133,6 +133,39 @@ struct CryptoWrapperBoundsTests {
         }
     }
 
+    /// La preuve ci-dessus n'établit pas grand-chose à elle seule : une lecture hors limites ne
+    /// plante pas forcément, et `memcmp` s'arrête au premier écart. Ici la preuve est tronquée mais
+    /// **juste sur toute sa longueur**, et posée contre une page protégée : lire un octet de plus
+    /// tue le processus.
+    @Test("Une preuve tronquée n'est jamais lue au-delà de sa longueur")
+    func preuveTronqueeContrePageProtegee() throws {
+        let server = try SRPTestServer(username: SRPClient.pairSetupUsername, password: "3939")
+        let client = try SRPClient(password: "3939")
+        let publicA = try client.startAuthentication()
+        let (salt, publicB) = try server.challenge(forClientPublicKey: publicA)
+        let clientProof = try client.processChallenge(salt: salt, serverPublicKey: publicB)
+        let serverProof = try server.verify(clientProof: clientProof)
+
+        let pageSize = Int(getpagesize())
+        let region = try #require(
+            mmap(nil, pageSize * 2, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0))
+        try #require(region != MAP_FAILED)
+        defer { munmap(region, pageSize * 2) }
+        try #require(mprotect(region + pageSize, pageSize, PROT_NONE) == 0)
+
+        // 32 octets : au-delà de ce qu'un `Data` recopie dans sa représentation en ligne.
+        let length = 32
+        let start = region + pageSize - length
+        serverProof.copyBytes(to: start.assumingMemoryBound(to: UInt8.self), count: length)
+        let truncated = Data(bytesNoCopy: start, count: length, deallocator: .none)
+
+        #expect(throws: SRPClient.Failure.serverProofRejected) {
+            try client.verifyServerProof(truncated)
+        }
+        // La preuve entière, elle, passe : le test ne réussit pas pour une autre raison.
+        try client.verifyServerProof(serverProof)
+    }
+
     @Test("Une preuve de la bonne taille mais fausse est refusée")
     func preuveFausse() throws {
         let client = try challenged()

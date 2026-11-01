@@ -69,7 +69,7 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
     }
 
     struct Options: Sendable {
-        /// `nil` : refuse le transitoire en `470`, comme un Apple TV.
+        /// `false` : refuse le transitoire en `470`, comme un Apple TV.
         var transientEnabled = true
         /// `nil` : pas d'appairage système.
         var identity: SimulatedIdentity?
@@ -79,6 +79,9 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         /// Comme le HomePod : pas de réponse au `SETUP` tant que notre horloge n'a pas répondu.
         var requiresTimingBeforeSetup = true
         var eventChannelEnabled = true
+        /// Port de données annoncé à la place du vrai : `0` fait échouer chaque `sendto`, le seul
+        /// moyen de provoquer une erreur d'émission sans toucher au réseau.
+        var announcedDataPort: Int?
     }
 
     /// Tout ce qui concerne une session, c'est-à-dire une connexion de contrôle.
@@ -704,7 +707,7 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         let response: [String: Any] = [
             "streams": [
                 [
-                    "dataPort": Int(data.localPort),
+                    "dataPort": options.announcedDataPort ?? Int(data.localPort),
                     "controlPort": Int(control.localPort),
                     "streamID": 1,
                     "type": 96,

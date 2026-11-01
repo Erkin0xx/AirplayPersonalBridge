@@ -363,12 +363,13 @@ public actor AirPlay2Sender {
     ) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let resumed = ManagedFlag()
-            Task {
-                await task.value
+            let timer = Task {
+                try? await Task.sleep(for: limit)
                 if resumed.claim() { continuation.resume() }
             }
             Task {
-                try? await Task.sleep(for: limit)
+                await task.value
+                timer.cancel()
                 if resumed.claim() { continuation.resume() }
             }
         }
@@ -606,7 +607,7 @@ public actor AirPlay2Sender {
     /// récepteur disparu ne provoque aucune erreur d'émission — les datagrammes partiraient
     /// indéfiniment dans le vide. Un signal peut arriver pendant la négociation (la boucle de
     /// diffusion sort alors aussitôt), ou en retard d'une session : le numéro l'écarte.
-    private func noteSessionLost(generation: Int, reason: String) {
+    func noteSessionLost(generation: Int, reason: String) {
         guard generation == sessionGeneration, !sessionLost else { return }
         log.error("Session AirPlay 2 réputée perdue : \(reason, privacy: .public)")
         sessionLost = true

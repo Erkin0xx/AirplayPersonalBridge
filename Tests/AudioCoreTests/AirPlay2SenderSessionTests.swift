@@ -256,14 +256,14 @@ struct AirPlay2SenderSessionTests {
     }
 
     @Test("La borne des 65 535 paquets et le passage par zéro")
-    func enveloppeRetransmission() {
+    func enveloppeRetransmission() throws {
         let retransmitter = AirPlay2Retransmitter()
         let packet = Data([0x80, 0x60, 0xFF, 0xFF, 1, 2, 3])
         retransmitter.record(sequence: 0xFFFF, packet: packet)
         retransmitter.record(sequence: 0x0000, packet: Data([0x80, 0x60, 0x00, 0x00, 4]))
 
         let request = RTPRetransmitRequest(datagram: Data([0x80, 0xD5, 0, 1, 0xFF, 0xFF, 0, 2]))
-        let (responses, missing) = retransmitter.responses(for: try! #require(request))
+        let (responses, missing) = retransmitter.responses(for: try #require(request))
         #expect(responses.count == 2)
         #expect(missing == 0)
         #expect(responses[0] == Data([0x80, 0xD6, 0xFF, 0xFF]) + packet)
@@ -390,6 +390,12 @@ struct AirPlay2SenderSessionTests {
         #expect(receiver.streamKey(inSession: 0) != receiver.streamKey(inSession: 1))
         let restart = try #require(receiver.audioPackets(inSession: 1).first)
         #expect(restart[restart.startIndex + 1] == 0xE0)
+
+        // Pas de fuite d'une session à l'autre : l'ancien socket d'horloge est fermé, le nouveau
+        // répond. Chaque reconnexion en laissait un de plus, qui continuait de répondre.
+        #expect(try await receiver.probeTiming(port: receiver.timingPort(inSession: 1), timeout: 1))
+        #expect(try await receiver.probeTiming(port: receiver.timingPort(inSession: 0), timeout: 0.3) == false)
+        #expect(await portIsFree(receiver.timingPort(inSession: 0)))
         await harness.sender.stop()
     }
 
@@ -617,6 +623,41 @@ struct AirPlay2SenderSessionTests {
         await harness.sender.stop()
 
         #expect(try await receiver.probeTiming(port: port, timeout: 0.3) == false)
+        #expect(await portIsFree(port), "le socket d'horloge n'a pas été rendu au système")
+    }
+
+    /// Un socket retenu par un cycle de références garde son port : c'est le seul moyen d'observer
+    /// la fuite depuis l'extérieur, faire taire le répondeur ne fermant pas le descripteur.
+    private func portIsFree(_ port: UInt16) async -> Bool {
+        await eventually(timeout: .seconds(2)) {
+            (try? UDPChannel(label: "test-port-libre", preferredPort: port)) != nil
+        }
+    }
+
+    /// Un signal de perte peut arriver en retard, par une tâche en vol. Il ne doit jamais
+    /// condamner la session qui a remplacé la sienne.
+    @Test("Un signal de perte d'une session précédente est ignoré")
+    func signalEnRetard() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        await harness.sender.setKeepAlivePolicy(.init(interval: .milliseconds(100)))
+        try await harness.sender.start(volume: -20)
+        receiver.dropControlConnection(inSession: 0)
+        #expect(await eventually { receiver.audioPackets(inSession: 1).count >= 5 })
+
+        // La première session portait le numéro 1, la courante le numéro 2.
+        await harness.sender.noteSessionLost(generation: 1, reason: "signal en retard")
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(await harness.sender.state == .streaming)
+        #expect(receiver.sessionCount == 2)
+
+        // Le même signal, à jour, déclenche bien la reconnexion : le test ne passe pas à vide.
+        await harness.sender.noteSessionLost(generation: 2, reason: "signal à jour")
+        #expect(await eventually { receiver.sessionCount >= 3 })
+        await harness.sender.stop()
     }
 
     @Test("Annuler une négociation en cours rend la main aussitôt")
@@ -793,6 +834,94 @@ struct AirPlay2SenderSessionTests {
             try await sender.start(volume: -20)
         }
         #expect(receiver.requests().isEmpty)
+    }
+
+    /// Le moteur abandonne sur un échec permanent et réessaie sur les autres : ce partage doit
+    /// rester celui de `isPermanentOutputFailure`, faute de quoi un Apple TV serait relancé sans
+    /// fin, ou une enceinte occupée abandonnée à la première réponse.
+    @Test("Le partage entre échecs permanents et passagers est celui du moteur")
+    func permanence() {
+        func failure(_ error: Error, credentials: Bool = false) -> AirPlay2SenderError {
+            AirPlay2SenderError(
+                classifying: error, receiver: "R", address: "a", hasCredentials: credentials)
+        }
+        func status(_ code: Int) -> RTSPError {
+            .unexpectedStatus(method: "SETUP", code: code, reason: "")
+        }
+        func rejected(_ reason: PairingTLV8.PairingError) -> AirPlay2PairingSession.Failure {
+            .receiverRejected(reason, step: "M1")
+        }
+
+        for code in [401, 403, 470] {
+            #expect(failure(status(code)).isPermanent)
+            #expect(failure(status(code), credentials: true).isPermanent)
+        }
+        #expect(failure(AirPlay2PairingSession.Failure.transientPairingUnsupported(features: 0)).isPermanent)
+        #expect(failure(AirPlay2PairingSession.Failure.receiverIdentityMismatch).isPermanent)
+        #expect(failure(AirPlay2PairingSession.Failure.receiverSignatureInvalid).isPermanent)
+        for reason in [PairingTLV8.PairingError.authentication, .maxPeers, .unavailable] {
+            #expect(failure(rejected(reason)).isPermanent, "\(reason)")
+        }
+
+        for code in [400, 404, 453, 500, 503] {
+            #expect(!failure(status(code)).isPermanent, "\(code)")
+        }
+        for reason in [PairingTLV8.PairingError.unknown, .backoff, .maxTries, .busy] {
+            #expect(!failure(rejected(reason)).isPermanent, "\(reason)")
+        }
+        #expect(!failure(AirPlay2PairingSession.Failure.malformedResponse(step: "M2")).isPermanent)
+        #expect(!failure(AirPlay2PairingSession.Failure.unexpectedState(step: "M2")).isPermanent)
+        #expect(!failure(RTSPError.timedOut(method: "SETUP")).isPermanent)
+        #expect(!failure(RTSPError.connectionFailed("x")).isPermanent)
+    }
+
+    // MARK: - Erreurs d'émission
+
+    /// Un accroc d'émission est une perte ordinaire : le paquet reste réclamable, et quelques
+    /// erreurs ne valent pas une reconnexion. Provoqué par un port de données nul, sur lequel
+    /// `sendto` échoue à chaque paquet.
+    @Test("Un paquet raté reste réclamable, et l'accroc ne coupe pas la session")
+    func erreurDEmission() async throws {
+        var options = FakeAirPlay2Receiver.Options()
+        options.announcedDataPort = 0
+        let receiver = try await makeReceiver(options: options)
+        defer { receiver.stop() }
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        try await harness.sender.start(volume: -20)
+        #expect(await eventually { await harness.sender.statistics.errors >= 50 })
+
+        // Bien au-delà de l'ancien seuil de 20 erreurs : toujours la même session.
+        #expect(receiver.sessionCount == 1)
+        #expect(await harness.sender.state == .streaming)
+
+        // Le premier paquet n'est jamais parti, et son numéro est celui annoncé au `RECORD`.
+        let record = try #require(receiver.requests().first { $0.method == "RECORD" })
+        let rtpInfo = try #require(record.headers["rtp-info"])
+        let sequence = try #require(
+            rtpInfo.split(separator: ";").first?.split(separator: "=").last.flatMap { UInt16($0) })
+        receiver.requestRetransmission(first: sequence, count: 1, inSession: 0)
+        #expect(await eventually { receiver.resendPackets(inSession: 0).count == 1 })
+        let resent = try #require(receiver.resendPackets(inSession: 0).first)
+        _ = try FakeAirPlay2Receiver.decryptAudio(
+            Data(resent.dropFirst(4)), key: receiver.streamKey(inSession: 0))
+
+        // Les compteurs ont avancé malgré les échecs : le suivant porte le numéro d'après, et
+        // l'horodatage de 352 trames de plus, sans quoi le flux se décalerait de 8 ms par paquet.
+        receiver.requestRetransmission(first: sequence &+ 1, count: 1, inSession: 0)
+        #expect(await eventually { receiver.resendPackets(inSession: 0).count == 2 })
+        let packets = receiver.resendPackets(inSession: 0).map { [UInt8]($0.dropFirst(4)) }
+        func timestamp(_ packet: [UInt8]) -> UInt32 {
+            packet[4...7].reduce(0) { $0 << 8 | UInt32($1) }
+        }
+        #expect(timestamp(packets[1]) == timestamp(packets[0]) &+ 352)
+        // Et aucun nonce n'a été réutilisé, ce qui casserait l'AEAD.
+        #expect(packets[0].suffix(8) != packets[1].suffix(8))
+
+        // Au-delà de ~2 s d'échecs ininterrompus, la session est réputée perdue.
+        #expect(await eventually { receiver.sessionCount >= 2 })
+        await harness.sender.stop()
     }
 
     // MARK: - Volume
