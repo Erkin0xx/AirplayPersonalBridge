@@ -45,16 +45,20 @@ enum BonjourTXTQuery {
         return String(cString: buffer)
     }
 
-    /// Version asynchrone de ``lookup(fullName:timeout:)``.
+    /// ``lookup(fullName:timeout:)`` sur un fil à part, sans bloquer l'appelant.
+    ///
+    /// Un autre nom plutôt qu'une surcharge `async` : dans un contexte asynchrone, le compilateur
+    /// préférerait celle-ci et casserait les appels synchrones existants.
     ///
     /// L'attente sur le socket bloque son fil : elle n'a rien à faire sur le pool coopératif de
     /// Swift Concurrency, où quelques services muets suffiraient à immobiliser tous les acteurs
     /// du processus — dont les senders.
-    static func lookup(fullName: String, timeout: TimeInterval = 3) async -> [String: String] {
+    static func lookupInBackground(
+        fullName: String, timeout: TimeInterval = 3
+    ) async -> [String: String] {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                let result: [String: String] = lookup(fullName: fullName, timeout: timeout)
-                continuation.resume(returning: result)
+                continuation.resume(returning: lookup(fullName: fullName, timeout: timeout))
             }
         }
     }

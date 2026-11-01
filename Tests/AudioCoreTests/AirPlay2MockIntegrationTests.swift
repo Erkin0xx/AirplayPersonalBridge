@@ -35,9 +35,7 @@ struct AirPlay2MockIntegrationTests {
 
     private func mockDevice() throws -> AirPlay2Device {
         let environment = ProcessInfo.processInfo.environment
-        let txt: [String: String] = BonjourTXTQuery.lookup(
-            fullName: "ApTV-HomePod-Mock._airplay._tcp.local."
-        )
+        let txt = BonjourTXTQuery.lookup(fullName: "ApTV-HomePod-Mock._airplay._tcp.local.")
         return AirPlay2Device(
             serviceName: "ApTV-HomePod-Mock",
             host: try environment["MOCK_AIRPLAY2_HOST"] ?? localAddress(of: "en0"),

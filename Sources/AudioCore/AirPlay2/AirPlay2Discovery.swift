@@ -247,7 +247,7 @@ public actor AirPlay2Discovery {
             BonjourTXTQuery.fullName(instance: name, type: service.type, domain: service.domain)
         var txt: [String: String] = [:]
         if let fullName {
-            txt = await BonjourTXTQuery.lookup(fullName: fullName)
+            txt = await BonjourTXTQuery.lookupInBackground(fullName: fullName)
         }
 
         guard let resolved = await RAOPDiscovery.resolveEndpoint(
@@ -260,7 +260,7 @@ public actor AirPlay2Discovery {
         // L'appareil vient de répondre : un TXT manquant tient plutôt à une réponse multicast
         // perdue qu'à une absence réelle, et une seconde question ne coûte plus rien à personne.
         if txt.isEmpty, let fullName {
-            txt = await BonjourTXTQuery.lookup(fullName: fullName)
+            txt = await BonjourTXTQuery.lookupInBackground(fullName: fullName)
         }
         if txt.isEmpty {
             log.error("TXT vide pour \(name, privacy: .public) — capacités du récepteur inconnues")
