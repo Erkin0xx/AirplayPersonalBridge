@@ -758,6 +758,69 @@ struct BridgeStateLifecycleTests {
     }
 }
 
+@Suite("État — réglages d'une enceinte AirPlay 1", .serialized)
+struct BridgeStateUnconfirmedAnnouncementTests {
+    private let blankGeneva = AirPlay2Device(
+        serviceName: "Geneva", host: "192.168.1.42", port: 7000, txt: [:]
+    )
+
+    @Test("Une recherche creuse ne coûte ni la coche ni les réglages de la Geneva")
+    func singleBadRoundKeepsSettings() async throws {
+        let harness = BridgeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.genevaAirPlay2])
+        let geneva = try #require(harness.output(Devices.genevaID))
+        geneva.trimDB = 3
+        geneva.delayMS = 25
+        geneva.bassBoostDB = 6
+        harness.state.flushSettings()
+
+        await harness.discover(raop: [], airplay2: [blankGeneva])
+        #expect(harness.output(Devices.genevaID) === geneva)
+        #expect(harness.output("airplay2/Geneva") == nil)
+        #expect(geneva.presence == .online)
+        harness.state.flushSettings()
+        #expect(harness.store.stored.outputs[Devices.genevaID]?.bassBoostDB == 6)
+
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.genevaAirPlay2])
+        #expect(harness.output(Devices.genevaID) === geneva)
+        #expect(geneva.isEnabled)
+        #expect(geneva.trimDB == 3)
+        #expect(geneva.delayMS == 25)
+    }
+
+    @Test("La Geneva allumée ne finit pas hors ligne après une annonce AirPlay 2 sans TXT")
+    func blankAnnouncementLeavesNoGhost() async throws {
+        let harness = BridgeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.genevaAirPlay2])
+
+        await harness.discover(raop: [], airplay2: [blankGeneva])
+        for _ in 0..<4 {
+            await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.genevaAirPlay2])
+        }
+
+        #expect(harness.output(Devices.genevaID)?.presence == .online)
+        #expect(harness.output("airplay2/Geneva") == nil)
+    }
+
+    /// Le cas que la règle ne doit pas casser : un HomePod déjà vu avec le bit 48 dont le TXT se perd
+    /// le temps d'une recherche reste une seule ligne, sur le bon protocole.
+    @Test("Un HomePod confirmé garde sa ligne quand son TXT se perd")
+    func confirmedHomePodStillAbsorbs() async throws {
+        let harness = BridgeHarness()
+        await harness.discover(raop: [Devices.leftRAOP], airplay2: [Devices.left])
+        let left = try #require(harness.output(Devices.leftID))
+
+        let blank = AirPlay2Device(
+            serviceName: "Salon", host: Devices.left.host, port: 7000, txt: [:]
+        )
+        await harness.discover(raop: [Devices.leftRAOP], airplay2: [blank])
+
+        #expect(harness.state.outputs.map(\.id) == [Devices.leftID])
+        #expect(harness.output(Devices.leftID) === left)
+        #expect(left.presence == .online)
+    }
+}
+
 @Suite("État — source")
 struct BridgeStateSourceTests {
     private let music = CaptureSource.application(pids: [42], name: "Music", bundleID: "com.apple.Music")

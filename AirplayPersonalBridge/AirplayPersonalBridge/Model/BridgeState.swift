@@ -126,6 +126,8 @@ final class OutputState: Identifiable {
 
     /// Recherches consécutives qui ne l'ont pas vue.
     @ObservationIgnored fileprivate var missedRounds = 0
+    /// Vue au moins une fois avec le bit 48 : voir `OutputCatalog.reconcile`.
+    @ObservationIgnored fileprivate var confirmsTransientPairing = false
     @ObservationIgnored fileprivate var onSettingsChange: (() -> Void)?
 
     init(
@@ -506,7 +508,8 @@ final class BridgeState {
                     proto: output.proto, presence: output.presence,
                     missedRounds: output.missedRounds,
                     isRetained: output.isEnabled || activeOutputIDs.contains(output.id),
-                    isInSession: activeOutputIDs.contains(output.id)
+                    isInSession: activeOutputIDs.contains(output.id),
+                    confirmsTransientPairing: output.confirmsTransientPairing
                 )
             },
             discovered: discovered
@@ -527,6 +530,7 @@ final class BridgeState {
             if output.unavailability != found.unavailability {
                 output.unavailability = found.unavailability
             }
+            if found.confirmsTransientPairing { output.confirmsTransientPairing = true }
         }
         for (id, presence) in reconciliation.presence {
             guard let output = byID[id], output.presence != presence else { continue }
@@ -578,6 +582,7 @@ final class BridgeState {
             isEnabled: isFirstEverDiscovery && found.unavailability == nil && !isLive
         )
         restore(settings.outputs[found.id] ?? fallback, on: output)
+        output.confirmsTransientPairing = found.confirmsTransientPairing
         return output
     }
 

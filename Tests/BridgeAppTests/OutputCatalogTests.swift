@@ -121,21 +121,23 @@ struct OutputCatalogMergeTests {
 struct OutputCatalogReconcileTests {
     private func discovered(
         _ id: String, name: String? = nil, host: String = "10.0.0.1",
-        proto: OutputProtocol = .airplay2
+        proto: OutputProtocol = .airplay2, confirmed: Bool = false
     ) -> DiscoveredOutput {
         DiscoveredOutput(
-            id: id, displayName: name ?? id, host: host, port: 7000, proto: proto
+            id: id, displayName: name ?? id, host: host, port: 7000, proto: proto,
+            confirmsTransientPairing: confirmed
         )
     }
 
     private func entry(
         _ id: String, name: String? = nil, host: String = "10.0.0.1",
         proto: OutputProtocol = .airplay2, presence: OutputPresence = .online, missed: Int = 0,
-        retained: Bool = false, inSession: Bool = false
+        retained: Bool = false, inSession: Bool = false, confirmed: Bool = false
     ) -> OutputCatalog.Entry {
         OutputCatalog.Entry(
             id: id, displayName: name ?? id, host: host, proto: proto, presence: presence,
-            missedRounds: missed, isRetained: retained, isInSession: inSession
+            missedRounds: missed, isRetained: retained, isInSession: inSession,
+            confirmsTransientPairing: confirmed
         )
     }
 
@@ -220,7 +222,9 @@ struct OutputCatalogReconcileTests {
     @Test("Un HomePod rendu en RAOP à cause d'un TXT perdu reste une seule ligne, en ligne")
     func lostTXTDoesNotDuplicate() {
         let result = OutputCatalog.reconcile(
-            current: [entry("airplay2/Salon", name: "Salon", host: "10.0.0.5", retained: true)],
+            current: [
+                entry("airplay2/Salon", name: "Salon", host: "10.0.0.5", retained: true, confirmed: true)
+            ],
             discovered: [
                 discovered("raop/1@Salon", name: "Salon", host: "10.0.0.5", proto: .raop)
             ]
@@ -231,17 +235,60 @@ struct OutputCatalogReconcileTests {
         #expect(result.missedRounds["airplay2/Salon"] == 0)
     }
 
-    @Test("Une ligne RAOP s'efface quand la même adresse répond en AirPlay 2")
+    @Test("Une ligne RAOP s'efface quand la même adresse confirme le bit 48")
     func airPlay2SupersedesRAOP() {
         let result = OutputCatalog.reconcile(
             current: [
                 entry("raop/1@Salon", name: "Salon", host: "10.0.0.5", proto: .raop, retained: true)
             ],
-            discovered: [discovered("airplay2/Salon", name: "Salon", host: "10.0.0.5")]
+            discovered: [
+                discovered("airplay2/Salon", name: "Salon", host: "10.0.0.5", confirmed: true)
+            ]
         )
         #expect(result.removed == ["raop/1@Salon"])
         #expect(result.superseded == ["raop/1@Salon"])
         #expect(result.order == ["airplay2/Salon"])
+    }
+
+    /// Une seule recherche où la Geneva manquait en RAOP et perdait son TXT supprimait sa ligne
+    /// cochée, ses réglages avec, et créait une ligne AirPlay 2 injouable.
+    @Test("Une annonce sans le bit 48 ne remplace pas une ligne RAOP, et n'en crée pas d'autre")
+    func unconfirmedDoesNotSupersede() {
+        let result = OutputCatalog.reconcile(
+            current: [
+                entry("raop/1@Geneva", name: "Geneva", host: "10.0.0.5", proto: .raop, retained: true)
+            ],
+            discovered: [discovered("airplay2/Geneva", name: "Geneva", host: "10.0.0.5")]
+        )
+        #expect(result.removed.isEmpty)
+        #expect(result.superseded.isEmpty)
+        #expect(result.added.isEmpty)
+        #expect(result.order == ["raop/1@Geneva"])
+        // L'adresse répond : l'appareil est là, même absent de cette recherche en RAOP.
+        #expect(result.presence["raop/1@Geneva"] == .online)
+        #expect(result.missedRounds["raop/1@Geneva"] == 0)
+    }
+
+    /// L'autre moitié du même défaut : une ligne AirPlay 2 jamais confirmée absorbait ensuite la vraie
+    /// annonce RAOP, à chaque recherche, et la Geneva restait injouable.
+    @Test("Une ligne AirPlay 2 jamais confirmée n'absorbe pas la vraie annonce RAOP")
+    func unconfirmedDoesNotAbsorb() {
+        let result = OutputCatalog.reconcile(
+            current: [entry("airplay2/Geneva", name: "Geneva", host: "10.0.0.5")],
+            discovered: [
+                discovered("raop/1@Geneva", name: "Geneva", host: "10.0.0.5", proto: .raop)
+            ]
+        )
+        #expect(result.added.map(\.id) == ["raop/1@Geneva"])
+        #expect(result.missedRounds["airplay2/Geneva"] == 1)
+    }
+
+    @Test("Un appareil annoncé sans le bit 48, sans ligne RAOP, reste proposé")
+    func unconfirmedAloneIsAdded() {
+        let result = OutputCatalog.reconcile(
+            current: [], discovered: [discovered("airplay2/Inconnu", host: "10.0.0.9")]
+        )
+        #expect(result.added.map(\.id) == ["airplay2/Inconnu"])
     }
 
     @Test("Une ligne RAOP que le moteur fait vivre n'est pas retirée sous ses pieds")
@@ -253,7 +300,9 @@ struct OutputCatalogReconcileTests {
                     inSession: true
                 )
             ],
-            discovered: [discovered("airplay2/Salon", name: "Salon", host: "10.0.0.5")]
+            discovered: [
+                discovered("airplay2/Salon", name: "Salon", host: "10.0.0.5", confirmed: true)
+            ]
         )
         #expect(result.removed.isEmpty)
         #expect(result.order.contains("raop/1@Salon"))

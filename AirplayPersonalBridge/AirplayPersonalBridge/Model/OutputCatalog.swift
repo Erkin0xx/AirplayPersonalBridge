@@ -25,6 +25,8 @@ struct DiscoveredOutput: Sendable, Equatable {
     let port: UInt16
     let proto: OutputProtocol
     var unavailability: OutputUnavailability?
+    /// Cette annonce porte le bit 48 : ce n'est pas une ligne AirPlay 2 par défaut d'autre chose.
+    var confirmsTransientPairing = false
 }
 
 /// Présence d'une sortie sur le réseau, distincte de son état de connexion.
@@ -82,7 +84,8 @@ enum OutputCatalog {
             byHost[device.host] = DiscoveredOutput(
                 id: "airplay2/\(device.serviceName)", displayName: device.serviceName,
                 host: device.host, port: device.port, proto: .airplay2,
-                unavailability: needsPairing ? .pairingRequired : nil
+                unavailability: needsPairing ? .pairingRequired : nil,
+                confirmsTransientPairing: device.supportsTransientPairing
             )
         }
         return byHost.values.sorted(by: isOrderedBefore)
@@ -144,6 +147,8 @@ enum OutputCatalog {
         var isRetained: Bool
         /// Le moteur la fait vivre en ce moment.
         var isInSession: Bool
+        /// Vue au moins une fois avec le bit 48 : c'est bien un récepteur AirPlay 2.
+        var confirmsTransientPairing = false
     }
 
     struct Reconciliation: Equatable {
@@ -164,6 +169,12 @@ enum OutputCatalog {
 
     /// Réconcilie la liste affichée avec le résultat d'une découverte, **sans recréer ce qui
     /// existe** : l'interface et le moteur tiennent des références aux sorties conservées.
+    ///
+    /// Une même adresse peut répondre sur les deux services, et une ligne peut alors en remplacer
+    /// une autre. **Seul le bit 48 en donne le droit** : effacer une ligne RAOP efface aussi sa coche
+    /// et ses réglages, et une annonce sans TXT ne prouve rien. Une seule recherche où la Geneva
+    /// manquait en RAOP et perdait son TXT suffisait sinon à la remplacer par une ligne AirPlay 2
+    /// injouable, qui absorbait ensuite la vraie annonce à chaque recherche.
     static func reconcile(
         current: [Entry], discovered: [DiscoveredOutput],
         missedRoundsBeforeOffline: Int = OutputCatalog.missedRoundsBeforeOffline
@@ -177,7 +188,7 @@ enum OutputCatalog {
         // ligne. L'adresse dit qu'il s'agit du même appareil : il est donc bien là.
         var stillPresent: Set<String> = []
         for entry in current where entry.proto == .airplay2 && !discoveredIDs.contains(entry.id) {
-            guard !entry.host.isEmpty,
+            guard entry.confirmsTransientPairing, !entry.host.isEmpty,
                 let index = candidates.firstIndex(where: {
                     $0.proto == .raop && $0.host == entry.host
                 })
@@ -186,7 +197,20 @@ enum OutputCatalog {
             stillPresent.insert(entry.id)
         }
 
+        // L'inverse : la ligne RAOP manque à cette recherche, mais la même adresse s'annonce en
+        // AirPlay 2 sans le bit 48. C'est un TXT perdu ou un appareil AirPlay 1 : il est bien là, et
+        // cette annonce n'a pas à devenir une seconde ligne.
         let currentIDs = Set(current.map(\.id))
+        for entry in current where entry.proto == .raop && !discoveredIDs.contains(entry.id) {
+            guard !entry.host.isEmpty,
+                candidates.contains(where: { isUnconfirmedAnnouncement($0, at: entry.host) })
+            else { continue }
+            candidates.removeAll {
+                isUnconfirmedAnnouncement($0, at: entry.host) && !currentIDs.contains($0.id)
+            }
+            stillPresent.insert(entry.id)
+        }
+
         result.added = candidates.filter { !currentIDs.contains($0.id) }
         result.seen = candidates.filter { currentIDs.contains($0.id) }
         let candidateIDs = Set(candidates.map(\.id))
@@ -200,12 +224,14 @@ enum OutputCatalog {
                 continue
             }
 
-            // L'inverse de la règle précédente : la même adresse répond désormais en AirPlay 2, la
-            // ligne RAOP n'a plus lieu d'être. Sauf si le moteur la fait vivre : le retrait se
-            // décidera quand elle sera décochée, pas sous ses pieds.
+            // La même adresse répond désormais en AirPlay 2, bit 48 à l'appui : la ligne RAOP n'a
+            // plus lieu d'être. Sauf si le moteur la fait vivre : le retrait se décidera quand elle
+            // sera décochée, pas sous ses pieds.
             let isSuperseded =
                 entry.proto == .raop && !entry.host.isEmpty
-                && candidates.contains { $0.proto == .airplay2 && $0.host == entry.host }
+                && candidates.contains {
+                    $0.proto == .airplay2 && $0.confirmsTransientPairing && $0.host == entry.host
+                }
             if isSuperseded && !entry.isInSession {
                 result.removed.append(entry.id)
                 result.superseded.append(entry.id)
@@ -228,5 +254,11 @@ enum OutputCatalog {
 
         result.order = kept.sorted(by: isOrdered).map(\.id)
         return result
+    }
+
+    private static func isUnconfirmedAnnouncement(
+        _ candidate: DiscoveredOutput, at host: String
+    ) -> Bool {
+        candidate.proto == .airplay2 && !candidate.confirmsTransientPairing && candidate.host == host
     }
 }
