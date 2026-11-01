@@ -31,6 +31,8 @@ final class FakeRAOPReceiver: @unchecked Sendable {
         case silence
         /// Ferme la connexion sans répondre.
         case close
+        /// Répond normalement, puis ferme aussitôt la connexion.
+        case standardThenClose
         /// Envoie ces octets tels quels, morceau par morceau.
         case chunks([Data], spacing: Duration)
         /// Répond normalement après ce délai, avec éventuellement un corps reconnaissable.
@@ -189,6 +191,17 @@ final class FakeRAOPReceiver: @unchecked Sendable {
         }
     }
 
+    /// Coupe brutalement toutes les connexions (RST), comme un récepteur qui plante.
+    func abortConnections() {
+        queue.sync {
+            lock.lock()
+            let open = connections
+            connections.removeAll()
+            lock.unlock()
+            for connection in open { connection.forceCancel() }
+        }
+    }
+
     /// Referme les connexions et refuse les suivantes en les fermant aussitôt.
     func refuseNewConnections() {
         lock.lock()
@@ -288,6 +301,12 @@ final class FakeRAOPReceiver: @unchecked Sendable {
         case .close:
             markAnswered()
             connection.cancel()
+        case .standardThenClose:
+            markAnswered()
+            connection.send(
+                content: standardResponse(to: request),
+                completion: .contentProcessed { _ in connection.cancel() }
+            )
         case let .chunks(chunks, spacing):
             markAnswered()
             let seconds = Self.seconds(spacing)

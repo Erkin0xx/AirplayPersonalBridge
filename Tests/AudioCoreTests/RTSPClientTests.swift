@@ -186,6 +186,54 @@ struct RTSPClientTests {
         await client.disconnect()
     }
 
+    @Test("Une coupure brutale du récepteur (RST) est signalée elle aussi")
+    func rstIsReportedAsConnectionLoss() async throws {
+        let server = try await FakeRAOPReceiver()
+        defer { server.shutdown() }
+        let client = try await connectedClient(to: server)
+        _ = try await client.send(options(), timeout: .seconds(2))
+
+        let lost = LostFlag()
+        await client.onConnectionLost { lost.set() }
+        server.abortConnections()
+        #expect(await raopEventually(within: .seconds(3)) { lost.value })
+        await client.disconnect()
+    }
+
+    @Test("Une réponse suivie d'un FIN est remise, et la perte signalée ensuite")
+    func responseFollowedByFinIsDelivered() async throws {
+        let server = try await FakeRAOPReceiver { _ in .standardThenClose }
+        defer { server.shutdown() }
+        let client = try await connectedClient(to: server)
+
+        // La fermeture arrive avec la réponse, voire avant que le lecteur ne la traite : elle ne
+        // doit pas passer devant des octets déjà reçus.
+        let response = try await client.send(options(), timeout: .seconds(2))
+        #expect(response.isSuccess)
+
+        let lost = LostFlag()
+        await client.onConnectionLost { lost.set() }
+        #expect(await raopEventually(within: .seconds(3)) { lost.value })
+        await client.disconnect()
+    }
+
+    @Test("Une requête en cours échoue dès le FIN, sans attendre son délai")
+    func pendingRequestFailsFastOnFin() async throws {
+        let server = try await FakeRAOPReceiver { _ in .close }
+        defer { server.shutdown() }
+        let client = try await connectedClient(to: server)
+
+        let start = ContinuousClock.now
+        do {
+            try await client.send(options(), timeout: .seconds(30))
+            Issue.record("la connexion a été fermée sans réponse")
+        } catch {
+            #expect(String(describing: error).contains("fermée"), "\(error)")
+        }
+        #expect(secondsSince(start) < 1)
+        await client.disconnect()
+    }
+
     @Test("Une connexion déjà tombée le signale dès l'abonnement")
     func lossBeforeSubscriptionIsReported() async throws {
         let server = try await FakeRAOPReceiver()
