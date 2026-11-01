@@ -184,8 +184,9 @@ actor StubSender: OutputSender {
     }
 
     func setVolume(_ volume: Float) async throws { pushedVolumes.append(volume) }
+    /// Le moteur règle le délai juste avant `start` : seul ce qui suit est une poussée.
     func setManualDelay(seconds: TimeInterval) {
-        pushedDelays.append(seconds)
+        if startedVolume != nil { pushedDelays.append(seconds) }
         synchronizer.manualOffsetSeconds = seconds
     }
     func setBassBoost(decibels: Float) { pushedBass.append(decibels) }

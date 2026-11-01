@@ -130,8 +130,8 @@ struct ContentView: View {
                     OutputRow(
                         output: output,
                         effectiveGainDB: state.effectiveGainDB(for: output),
-                        suggestedDelayMS: state.suggestedDelayMS(for: output),
-                        onApplySuggestedDelay: { state.applySuggestedDelay(to: output) }
+                        listeningCompensationMS: state.listeningCompensationMS(for: output),
+                        listeningPlaceName: state.listeningPlaceName
                     )
                 }
 

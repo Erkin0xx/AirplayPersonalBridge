@@ -95,7 +95,8 @@ final class OutputState: Identifiable {
     }
 
     /// Décalage manuel de restitution, en millisecondes. Agit sur l'ancrage annoncé, pas
-    /// sur les échantillons : instantané, sans rupture de flux (jalon 4).
+    /// sur les échantillons : instantané, sans rupture de flux (jalon 4). S'ajoute à la
+    /// compensation du lieu d'écoute (`BridgeState.effectiveDelayMS`).
     var delayMS: Double = 0 {
         didSet { if oldValue != delayMS { onSettingsChange?() } }
     }
@@ -326,27 +327,55 @@ final class BridgeState {
 
     func persistRoomLayout() { environment.saveRoomLayout(roomLayout) }
 
-    /// Délai suggéré par le plan, en millisecondes, ou `nil` si le plan ne permet pas de
-    /// le calculer (enceinte non posée, pas de position d'écoute).
+    /// Compensation du lieu d'écoute en vigueur, en millisecondes, ou `nil` si le plan ne permet
+    /// pas de la calculer (enceinte non posée, pas de position d'écoute).
     ///
-    /// Suggéré, et pas appliqué : les distances sont relevées à la main, les enceintes ne
-    /// sont pas des sources ponctuelles et les réflexions de la pièce dominent souvent le
-    /// trajet direct. C'est un point de départ pour le réglage manuel, pas une mesure.
-    func suggestedDelayMS(for output: OutputState) -> Double? {
-        suggestedDelays[output.id]
+    /// Appliquée, et plus seulement suggérée : un sélecteur de lieu n'aurait sinon aucun effet.
+    /// Elle reste une estimation : les distances sont relevées à la main, les enceintes ne sont
+    /// pas des sources ponctuelles et les réflexions de la pièce dominent souvent le trajet
+    /// direct. C'est pourquoi le réglage manuel (`delayMS`) s'y ajoute, et ne la remplace pas.
+    func listeningCompensationMS(for output: OutputState) -> Double? {
+        listeningCompensations[output.id]
     }
 
-    private var suggestedDelays: [String: Double] {
-        roomLayout.suggestedDelaysMS(for: outputs.map(\.id))
+    /// Calculée sur **les sorties rattachées dans le plan**, et sur elles seules : la référence
+    /// est l'enceinte la plus lointaine, et la prendre parmi les sorties découvertes ou cochées
+    /// ferait bouger le calage des autres en pleine écoute, dès qu'on coche une enceinte ou que la
+    /// Geneva s'allume. Le plan, lui, ne change que si on le modifie.
+    ///
+    /// Sans doublons : une paire stéréo pose deux enceintes sur une même sortie.
+    private var listeningCompensations: [String: Double] {
+        let bound = Set(
+            roomLayout.objects.compactMap { object -> String? in
+                guard case let .speaker(outputID) = object.kind else { return nil }
+                return outputID
+            }
+        )
+        return roomLayout.suggestedDelaysMS(for: Array(bound))
     }
 
-    func applySuggestedDelay(to output: OutputState) {
-        guard let suggested = suggestedDelayMS(for: output) else { return }
-        output.delayMS = suggested
+    /// Délai envoyé au moteur : le réglage manuel, plus la compensation du lieu d'écoute. Une
+    /// sortie sans enceinte sur le plan n'a que son réglage manuel.
+    ///
+    /// C'est cette valeur, et elle seule, que le moteur reçoit. Elle agit sur l'ancrage annoncé et
+    /// non sur les échantillons : changer de lieu en pleine diffusion ne rompt pas le flux.
+    func effectiveDelayMS(for output: OutputState) -> Double {
+        output.delayMS + (listeningCompensationMS(for: output) ?? 0)
     }
 
-    func applyAllSuggestedDelays() {
-        for output in outputs { applySuggestedDelay(to: output) }
+    /// Nom du lieu d'écoute en vigueur, s'il en a un.
+    var listeningPlaceName: String? {
+        guard let name = roomLayout.listener?.name, !name.isEmpty else { return nil }
+        return name
+    }
+
+    /// Choisit le lieu d'écoute. En pleine diffusion, le tour suivant pousse les nouveaux délais
+    /// aux sorties concernées (`pushChanges`), sans rupture de flux.
+    func selectListeningPlace(id: UUID) {
+        guard id != roomLayout.listener?.id, roomLayout.listeners.contains(where: { $0.id == id })
+        else { return }
+        roomLayout.selectListener(id: id)
+        persistRoomLayout()
     }
 
     // MARK: - Création
@@ -413,7 +442,6 @@ final class BridgeState {
     /// Le panneau vient de s'ouvrir : il doit dire ce qui est vrai maintenant.
     func panelDidOpen() {
         refreshSources()
-        guard !isLive else { return }
         if let lastDiscovery,
             lastDiscovery.duration(to: .now) < environment.timing.panelRefreshMinimumAge
         {
@@ -424,11 +452,11 @@ final class BridgeState {
 
     // MARK: - Découverte
 
-    /// Une recherche automatique. Aucune pendant une diffusion : `browse` ouvre une connexion TCP
-    /// vers chaque appareil, y compris ceux qui reçoivent le flux, et le moteur dit déjà où en sont
-    /// les sorties qu'il fait vivre. « Rechercher » reste possible, parce que c'est demandé.
+    /// Une recherche automatique. Elle continue pendant une diffusion : la découverte ne fait que
+    /// des requêtes DNS, sans connexion vers les appareils, et une enceinte trouvée à ce moment
+    /// reste décochée. Rien pendant la veille, où le réseau n'est pas là pour répondre.
     private func periodicDiscoveryRound() async {
-        guard !isSystemAsleep, !isLive else { return }
+        guard !isSystemAsleep else { return }
         await refreshOutputs()
     }
 
@@ -710,7 +738,7 @@ final class BridgeState {
             proto: output.proto == .raop ? .raop : .airplay2,
             deviceName: output.displayName,
             volumeDB: Self.receiverVolume(forGainDB: effectiveGainDB(for: output)),
-            manualDelaySeconds: output.delayMS / 1000,
+            manualDelaySeconds: effectiveDelayMS(for: output) / 1000,
             bassBoostDB: Float(output.supportsBassBoost ? output.bassBoostDB : 0)
         )
     }
@@ -1090,6 +1118,7 @@ extension BridgeState {
         case searching = "recherche"
         case empty = "vide"
         case inputSource = "entree-physique"
+        case listeningPlaces = "lieux-ecoute"
     }
 
     static func preview(_ scene: PanelScene) -> BridgeState {
@@ -1169,6 +1198,13 @@ extension BridgeState {
             state.outputs = speakers
             state.streamingPhase = .starting
             for output in [geneva, left, right] { output.connection = .connecting }
+        case .listeningPlaces:
+            state.outputs = speakers
+            state.streamingPhase = .running
+            for output in [geneva, left, right] { output.connection = .streaming }
+            state.roomLayout = RoomLayout.salon.bindingSpeakers(
+                toOutputs: speakers.map { (id: $0.id, name: $0.displayName) }
+            )
         case .inputSource:
             state.outputs = speakers
             state.selectedSource = .inputDevice

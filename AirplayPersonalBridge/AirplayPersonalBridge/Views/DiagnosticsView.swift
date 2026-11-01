@@ -169,8 +169,10 @@ struct DiagnosticsView: View {
                     )
                 }
                 if let sync = output.sync {
+                    // Ce que le moteur applique : le réglage manuel plus le lieu d'écoute.
                     metricText(
-                        "Décalage manuel", String(format: "%.0f ms", sync.manualOffsetSeconds * 1000)
+                        "Décalage appliqué",
+                        String(format: "%.1f ms", sync.manualOffsetSeconds * 1000)
                     )
                     metricText("Délai de pipeline", Self.milliseconds(sync.pipelineDelaySeconds))
                     // C'est la grandeur à comparer au seuil de perception de 20 à 30 ms du CDC

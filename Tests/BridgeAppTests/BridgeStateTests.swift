@@ -260,6 +260,254 @@ struct BridgeStatePushTests {
     }
 }
 
+@Suite("État — lieu d'écoute")
+struct BridgeStateListeningPlaceTests {
+    // Tout à la même hauteur, pour lire les délais à la règle : 3,43 m font 10 ms.
+    private let tableID = UUID()
+    private let sofaID = UUID()
+
+    private func speaker(_ output: String?, x: Double, name: String = "") -> RoomObject {
+        RoomObject(
+            kind: .speaker(outputID: output), position: CGPoint(x: x, y: 0),
+            size: CGSize(width: 0.2, height: 0.2), elevation: 1.10, name: name, shape: .ellipse
+        )
+    }
+
+    private func place(id: UUID, _ name: String, x: Double) -> RoomObject {
+        var object = RoomObject(
+            kind: .listener, position: CGPoint(x: x, y: 0),
+            size: CGSize(width: 0.45, height: 0.40), elevation: 1.10, name: name
+        )
+        object.id = id
+        return object
+    }
+
+    /// Depuis la table (x = 0), la Geneva est 3,43 m plus proche que le HomePod : +10 ms pour elle.
+    /// Depuis le canapé (x = 10), c'est l'inverse : +10 ms pour le HomePod.
+    private var plan: RoomLayout {
+        var layout = RoomLayout(
+            objects: [
+                speaker(Devices.genevaID, x: 3.43, name: "Geneva"),
+                speaker(Devices.leftID, x: 6.86, name: "HomePod G"),
+                place(id: tableID, "À table", x: 0),
+                place(id: sofaID, "Au canapé", x: 10),
+            ]
+        )
+        layout.activeListenerID = tableID
+        return layout
+    }
+
+    private func isClose(_ value: Double?, to expected: Double) -> Bool {
+        guard let value else { return false }
+        return abs(value - expected) < 1e-9
+    }
+
+    private func makeHarness() -> BridgeHarness {
+        let harness = BridgeHarness()
+        harness.layout = plan
+        return harness
+    }
+
+    @Test("La compensation part dès le démarrage, sans geste de l'utilisateur")
+    func compensationIsApplied() async throws {
+        let harness = makeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.left])
+        await harness.startStreaming(expecting: [Devices.genevaID, Devices.leftID])
+
+        let geneva = try #require(harness.factory.latest(Devices.genevaID))
+        let left = try #require(harness.factory.latest(Devices.leftID))
+        #expect(isClose(await geneva.startedDelay, to: 0.010))
+        #expect(isClose(await left.startedDelay, to: 0))
+        await harness.stopStreaming()
+    }
+
+    /// Le cœur de la demande : sans cela, le sélecteur n'aurait aucun effet.
+    @Test("Changer de lieu pousse les bons délais, sans toucher à la session")
+    func changingPlacePushesDelays() async throws {
+        let harness = makeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.left])
+        await harness.startStreaming(expecting: [Devices.genevaID, Devices.leftID])
+        let geneva = try #require(harness.factory.latest(Devices.genevaID))
+        let left = try #require(harness.factory.latest(Devices.leftID))
+        #expect(await geneva.pushedDelays.isEmpty)
+        #expect(await left.pushedDelays.isEmpty)
+
+        harness.state.selectListeningPlace(id: sofaID)
+        #expect(harness.state.roomLayout.listener?.id == sofaID)
+        #expect(harness.layoutSaveCount == 1)
+        let reached = await eventually {
+            let (g, l) = (await geneva.pushedDelays.last, await left.pushedDelays.last)
+            return isClose(g, to: 0) && isClose(l, to: 0.010)
+        }
+        #expect(reached)
+
+        // Ni capture relancée, ni sender remplacé : c'est ce qui garantit l'absence de coupure.
+        #expect(harness.captures.count == 1)
+        #expect(await geneva.stopCount == 0)
+        #expect(await left.stopCount == 0)
+        #expect(harness.factory.senders(Devices.genevaID).count == 1)
+        #expect(harness.factory.senders(Devices.leftID).count == 1)
+        await harness.stopStreaming()
+    }
+
+    @Test("Le lieu choisi vaut pour la diffusion suivante")
+    func placeOutsideSession() async throws {
+        let harness = makeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.left])
+        harness.state.selectListeningPlace(id: sofaID)
+        await harness.startStreaming(expecting: [Devices.genevaID, Devices.leftID])
+
+        let left = try #require(harness.factory.latest(Devices.leftID))
+        #expect(isClose(await left.startedDelay, to: 0.010))
+        await harness.stopStreaming()
+    }
+
+    @Test("Le réglage manuel s'additionne à la compensation, et la suit d'un lieu à l'autre")
+    func manualDelayAdds() async throws {
+        let harness = makeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.left])
+        let output = try #require(harness.output(Devices.genevaID))
+        output.delayMS = 5
+        #expect(isClose(harness.state.effectiveDelayMS(for: output), to: 15))
+
+        await harness.startStreaming(expecting: [Devices.genevaID, Devices.leftID])
+        let geneva = try #require(harness.factory.latest(Devices.genevaID))
+        #expect(isClose(await geneva.startedDelay, to: 0.015))
+
+        output.delayMS = 8
+        #expect(await eventually { isClose(await geneva.pushedDelays.last, to: 0.018) })
+
+        // Le réglage manuel n'a pas absorbé la compensation : changer de lieu ne l'emporte pas.
+        harness.state.selectListeningPlace(id: sofaID)
+        #expect(await eventually { isClose(await geneva.pushedDelays.last, to: 0.008) })
+        #expect(output.delayMS == 8)
+        await harness.stopStreaming()
+    }
+
+    /// Le défaut que la consigne écarte : calculée sur les sorties cochées, la compensation de la
+    /// Geneva changerait dès qu'on coche le HomePod, qui en est la référence.
+    @Test("Cocher une sortie ne change rien au calage des autres")
+    func checkingDoesNotMoveOthers() async throws {
+        let harness = makeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.left])
+        let left = try #require(harness.output(Devices.leftID))
+        left.isEnabled = false
+        await harness.startStreaming(expecting: [Devices.genevaID])
+        let geneva = try #require(harness.factory.latest(Devices.genevaID))
+        #expect(isClose(await geneva.startedDelay, to: 0.010))
+
+        left.isEnabled = true
+        #expect(await eventually { left.connection == .streaming })
+        #expect(await staysFalse { await !geneva.pushedDelays.isEmpty })
+
+        left.isEnabled = false
+        #expect(await staysFalse { await !geneva.pushedDelays.isEmpty })
+        await harness.stopStreaming()
+    }
+
+    /// Même défaut, côté réseau : la Geneva éteinte reste rattachée, donc reste la référence.
+    @Test("Une enceinte rattachée qui s'allume ne change rien au calage des autres")
+    func discoveryDoesNotMoveOthers() async throws {
+        let harness = BridgeHarness()
+        var layout = RoomLayout(
+            objects: [
+                speaker(Devices.genevaID, x: 6.86, name: "Geneva"),
+                speaker(Devices.leftID, x: 3.43, name: "HomePod G"),
+                place(id: tableID, "À table", x: 0),
+            ]
+        )
+        layout.activeListenerID = tableID
+        harness.layout = layout
+
+        await harness.discover(airplay2: [Devices.left])
+        await harness.startStreaming(expecting: [Devices.leftID])
+        let left = try #require(harness.factory.latest(Devices.leftID))
+        #expect(isClose(await left.startedDelay, to: 0.010))
+
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.left])
+        #expect(harness.output(Devices.genevaID) != nil)
+        #expect(await staysFalse { await !left.pushedDelays.isEmpty })
+        await harness.stopStreaming()
+    }
+
+    @Test("Une sortie absente du plan n'a que son réglage manuel, et ne bouge pas")
+    func outputOutOfPlan() async throws {
+        let harness = makeHarness()
+        await harness.discover(
+            raop: [Devices.genevaRAOP], airplay2: [Devices.left, Devices.right]
+        )
+        let right = try #require(harness.output(Devices.rightID))
+        right.isEnabled = true
+        #expect(harness.state.listeningCompensationMS(for: right) == nil)
+        #expect(harness.state.effectiveDelayMS(for: right) == 0)
+        right.delayMS = 7
+        #expect(harness.state.effectiveDelayMS(for: right) == 7)
+
+        await harness.startStreaming(expecting: [Devices.rightID])
+        let sender = try #require(harness.factory.latest(Devices.rightID))
+        #expect(isClose(await sender.startedDelay, to: 0.007))
+
+        harness.state.selectListeningPlace(id: sofaID)
+        let geneva = try #require(harness.factory.latest(Devices.genevaID))
+        #expect(await eventually { await !geneva.pushedDelays.isEmpty })
+        #expect(await sender.pushedDelays.isEmpty)
+        await harness.stopStreaming()
+    }
+
+    /// Les deux enceintes d'une paire portent la même sortie : la liste des sorties rattachées doit
+    /// être sans doublon, sous peine de planter dans `Dictionary(uniqueKeysWithValues:)`.
+    @Test("Une sortie posée deux fois sur le plan compte une fois, à sa distance moyenne")
+    func stereoPair() throws {
+        let harness = BridgeHarness()
+        var layout = RoomLayout(
+            objects: [
+                speaker(Devices.leftID, x: 1, name: "HomePod G"),
+                speaker(Devices.leftID, x: 3, name: "HomePod D"),
+                speaker(Devices.genevaID, x: 5.43, name: "Geneva"),
+                place(id: tableID, "À table", x: 0),
+            ]
+        )
+        layout.activeListenerID = tableID
+        harness.layout = layout
+        let output = OutputState(
+            id: Devices.leftID, displayName: "Salon", host: "", port: 0, proto: .airplay2
+        )
+        let compensation = try #require(harness.state.listeningCompensationMS(for: output))
+        // Moyenne de 1 et 3 m contre 5,43 m : 3,43 m, soit 10 ms.
+        #expect(abs(compensation - 10) < 1e-9)
+    }
+
+    @Test("Sans lieu d'écoute, aucune compensation")
+    func noListener() {
+        let harness = BridgeHarness()
+        harness.layout = RoomLayout(objects: [speaker(Devices.genevaID, x: 3)])
+        let output = OutputState(
+            id: Devices.genevaID, displayName: "Geneva", host: "", port: 0, proto: .raop
+        )
+        output.delayMS = 4
+        #expect(harness.state.listeningCompensationMS(for: output) == nil)
+        #expect(harness.state.effectiveDelayMS(for: output) == 4)
+    }
+
+    @Test("Resélectionner le lieu en vigueur, ou un inconnu, n'écrit rien")
+    func uselessSelections() {
+        let harness = makeHarness()
+        harness.state.selectListeningPlace(id: tableID)
+        harness.state.selectListeningPlace(id: UUID())
+        #expect(harness.layoutSaveCount == 0)
+        #expect(harness.state.roomLayout.listener?.id == tableID)
+        #expect(harness.state.listeningPlaceName == "À table")
+    }
+
+    @Test("Le plan du salon propose bien ses deux lieux, la table d'abord")
+    func salonPlan() {
+        let harness = BridgeHarness()
+        harness.layout = RoomLayout.salon
+        #expect(harness.state.roomLayout.listeners.map(\.name) == ["À table", "Au canapé"])
+        #expect(harness.state.listeningPlaceName == "À table")
+    }
+}
+
 @Suite("État — ce que le moteur dit")
 struct BridgeStateReflectionTests {
     @Test("Un récepteur absent se lit en attente, avec le message du moteur")
@@ -724,9 +972,10 @@ struct BridgeStateDiscoveryTests {
         #expect(harness.discovery.maximumRunning == 1)
     }
 
-    /// `browse` ouvre une connexion TCP vers chaque appareil, y compris ceux qui reçoivent le flux.
-    @Test("Aucune recherche automatique pendant une diffusion ; le bouton reste possible")
-    func noAutomaticRoundDuringSession() async {
+    /// La découverte ne fait que des requêtes DNS : elle n'a aucune raison de s'interrompre pendant
+    /// une diffusion, et aucun effet sur elle.
+    @Test("La recherche continue pendant une diffusion, sans toucher à la session")
+    func roundsContinueDuringSession() async throws {
         var timing = BridgeEnvironment.Timing.fast
         timing.discoveryInterval = .milliseconds(5)
         let harness = BridgeHarness(timing: timing)
@@ -735,13 +984,12 @@ struct BridgeStateDiscoveryTests {
         #expect(await eventually { harness.output(Devices.genevaID) != nil })
 
         await harness.startStreaming(expecting: [Devices.genevaID])
+        let sender = try #require(harness.factory.latest(Devices.genevaID))
         let rounds = harness.discovery.roundCount
-        harness.state.panelDidOpen()
-        #expect(await staysFalse { harness.discovery.roundCount > rounds + 1 })
-
-        let before = harness.discovery.roundCount
-        await harness.state.refreshOutputs()
-        #expect(harness.discovery.roundCount == before + 1)
+        #expect(await eventually { harness.discovery.roundCount >= rounds + 3 })
+        #expect(harness.discovery.maximumRunning == 1)
+        #expect(await sender.stopCount == 0)
+        #expect(harness.factory.senders(Devices.genevaID).count == 1)
         await harness.stopStreaming()
     }
 

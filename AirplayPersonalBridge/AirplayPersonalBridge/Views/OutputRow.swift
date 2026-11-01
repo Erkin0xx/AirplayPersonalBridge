@@ -13,9 +13,10 @@ import SwiftUI
 struct OutputRow: View {
     @Bindable var output: OutputState
     let effectiveGainDB: Double
-    /// Délai déduit du plan de la pièce, s'il est calculable. Proposé, jamais imposé.
-    var suggestedDelayMS: Double?
-    var onApplySuggestedDelay: (() -> Void)?
+    /// Compensation du lieu d'écoute, s'il est calculable. En lecture seule : elle s'applique
+    /// d'elle-même, et le curseur « Délai » s'y ajoute.
+    var listeningCompensationMS: Double?
+    var listeningPlaceName: String?
 
     /// Colonnes fixes : les valeurs s'alignent d'un curseur à l'autre, ce qui permet de
     /// balayer la carte verticalement au lieu de rechercher chaque nombre.
@@ -72,23 +73,19 @@ struct OutputRow: View {
                 "Délai", value: $output.delayMS, in: BridgeSettings.Limits.delayMS,
                 format: { String(format: "%.0f ms", $0) }
             )
-            if let suggestedDelayMS {
+            if let listeningCompensationMS {
                 HStack(spacing: 5) {
                     Spacer().frame(width: labelWidth)
                     Image(systemName: "ruler").font(.system(size: 9))
-                    Text(String(format: "Plan : %.0f ms", suggestedDelayMS))
-                    // Rien à appliquer si le curseur y est déjà, à un demi-quantum
-                    // d'affichage près — le bouton n'aurait alors rien à dire.
-                    if abs(suggestedDelayMS - output.delayMS) > 0.5 {
-                        Button("Appliquer") { onApplySuggestedDelay?() }
-                            .buttonStyle(.plain)
-                            .font(Theme.Font.tiny.weight(.medium))
-                            .foregroundStyle(Theme.info)
-                    }
+                    Text(
+                        "\(listeningPlaceName ?? "Lieu d'écoute") : "
+                            + String(format: "+ %.1f ms", listeningCompensationMS)
+                    )
                     Spacer(minLength: 0)
                 }
                 .font(Theme.Font.tiny)
                 .foregroundStyle(Theme.mutedForeground)
+                .help("Compensation du lieu d'écoute, appliquée d'elle-même. Le curseur s'y ajoute.")
             }
             if output.supportsBassBoost {
                 settingRow(
@@ -240,8 +237,8 @@ private struct LevelBar: View {
                 OutputRow(
                     output: output,
                     effectiveGainDB: state.effectiveGainDB(for: output),
-                    suggestedDelayMS: state.suggestedDelayMS(for: output),
-                    onApplySuggestedDelay: { state.applySuggestedDelay(to: output) }
+                    listeningCompensationMS: state.listeningCompensationMS(for: output),
+                    listeningPlaceName: state.listeningPlaceName
                 )
             }
         }

@@ -296,6 +296,8 @@ struct MenuBarPanelContent: View {
                     .frame(width: 48, alignment: .trailing)
             }
 
+            listeningPlacePicker
+
             HStack(spacing: 8) {
                 Text("Source").shadMuted()
                 Spacer(minLength: 4)
@@ -330,6 +332,26 @@ struct MenuBarPanelContent: View {
             )
         }
         .padding(contentPadding)
+    }
+
+    /// Visible à partir de deux lieux : avec un seul, il n'y aurait rien à choisir.
+    @ViewBuilder
+    private var listeningPlacePicker: some View {
+        let places = state.roomLayout.listeners
+        if places.count >= 2, let active = state.roomLayout.listener {
+            HStack(spacing: 8) {
+                Text("Écoute").shadMuted()
+                Spacer(minLength: 4)
+                ShadTabs(
+                    selection: Binding(
+                        get: { active.id },
+                        set: { state.selectListeningPlace(id: $0) }
+                    ),
+                    items: places.map { ($0.id, $0.name.isEmpty ? $0.kind.label : $0.name) }
+                )
+            }
+            .help("Recale les enceintes pour ce lieu, sans couper le son.")
+        }
     }
 
     /// Le sélecteur porte des identifiants : les PID d'une application varient d'un relevé à
