@@ -178,6 +178,25 @@ public enum RTPPacketBuilder {
         return Data(packet)
     }
 
+    /// Réponse à une demande de retransmission : `80 D6 | séquence d'origine | paquet complet`.
+    ///
+    /// Le paquet audio est renvoyé tel qu'il est parti, en-tête RTP et chiffrement compris :
+    /// c'est `RAOPCrypto` qui rend cela possible, chaque paquet se déchiffrant isolément.
+    /// Format de `_retransmit_lost_packets` dans pyatv, que le récepteur lit sur son port de
+    /// contrôle (type `0x56`, marqueur posé).
+    ///
+    /// - Returns: `nil` si `originalPacket` n'a même pas d'en-tête RTP lisible.
+    public static func retransmissionResponse(originalPacket: Data) -> Data? {
+        guard originalPacket.count >= 4 else { return nil }
+        let sequence = originalPacket[
+            originalPacket.startIndex + 2..<originalPacket.startIndex + 4
+        ]
+        var response = Data([0x80, RTPPayloadType.audioResend.rawValue | 0x80])
+        response.append(contentsOf: sequence)
+        response.append(originalPacket)
+        return response
+    }
+
     /// Réponse à une requête d'horloge du récepteur.
     ///
     /// Le récepteur mesure l'aller-retour pour estimer le décalage entre son horloge et
