@@ -110,7 +110,8 @@ struct RoomObject: Codable, Equatable, Identifiable {
         /// d'allumer quoi que ce soit, et rien ne doit dépendre de ce qui est visible sur
         /// le réseau à cet instant. Le rattachement se fait ensuite, dans l'inspecteur.
         case speaker(outputID: String?)
-        /// La position d'écoute — le « bonhomme ». Une seule dans un plan.
+        /// Un lieu d'écoute — le « bonhomme ». Un plan peut en porter plusieurs, entre lesquels on
+        /// choisit : voir `RoomLayout.activeListenerID`.
         case listener
         case armchair
         case chair
@@ -477,6 +478,11 @@ struct RoomLayout: Codable, Equatable {
     /// Image de fond à décalquer : photo ou capture d'un plan existant.
     var background: Background?
 
+    /// Le lieu d'écoute choisi, celui qui commande les distances et les délais. `nil`, ou un
+    /// objet disparu, revient au premier du plan : supprimer le lieu choisi ne doit pas laisser
+    /// le calcul sans référence.
+    var activeListenerID: UUID?
+
     /// Un plan existant posé sous la grille, mis à l'échelle par calibrage.
     ///
     /// L'échelle ne se devine pas : une image ne porte aucune notion de mètre. On la
@@ -600,7 +606,18 @@ struct RoomLayout: Codable, Equatable {
 
     // MARK: - Accès
 
-    var listener: RoomObject? { objects.first { $0.kind == .listener } }
+    var listeners: [RoomObject] { objects.filter { $0.kind == .listener } }
+
+    /// Le lieu d'écoute en vigueur.
+    var listener: RoomObject? {
+        listeners.first { $0.id == activeListenerID } ?? listeners.first
+    }
+
+    /// Choisit le lieu d'écoute. Un identifiant qui ne désigne pas un lieu d'écoute est ignoré.
+    mutating func selectListener(id: UUID) {
+        guard listeners.contains(where: { $0.id == id }) else { return }
+        activeListenerID = id
+    }
 
     /// Les objets du dessous vers le dessus. Le tri est stable : à étage égal, le dernier
     /// posé reste au-dessus, comme avant l'introduction des étages.
@@ -1070,7 +1087,7 @@ struct PlanHistory: Equatable {
 
 extension RoomLayout {
     enum CodingKeys: String, CodingKey {
-        case walls, objects, background
+        case walls, objects, background, activeListenerID
     }
 
     /// Un élément de liste qui n'empêche pas de lire ses voisins s'il est illisible.
@@ -1094,6 +1111,7 @@ extension RoomLayout {
         objects = ((try? container.decode([Lossy<RoomObject>].self, forKey: .objects)) ?? [])
             .compactMap(\.value)
         background = try? container.decode(Background.self, forKey: .background)
+        activeListenerID = try? container.decode(UUID.self, forKey: .activeListenerID)
     }
 }
 
