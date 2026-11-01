@@ -84,9 +84,9 @@ public enum AirPlay2DiscoveryError: Error, CustomStringConvertible {
 /// Invariant section 12 : ce module ne connaît que le protocole AirPlay 2. Il ignore la
 /// capture, et ignore l'existence du sender RAOP.
 ///
-/// Le parcours et la résolution sont partagés avec `RAOPDiscovery` (méthodes `static`) :
-/// seule change la valeur du type de service. Dupliquer `NWBrowser` et sa gestion de
-/// reprise unique aurait été du copier-coller sans bénéfice.
+/// Le parcours est partagé avec `RAOPDiscovery` (méthode `static`), et la résolution passe par
+/// le même `BonjourAddressResolver` : seule change la valeur du type de service. Dupliquer
+/// `NWBrowser` et sa gestion de reprise unique aurait été du copier-coller sans bénéfice.
 public actor AirPlay2Discovery {
     static let serviceType = "_airplay._tcp"
 
@@ -103,16 +103,25 @@ public actor AirPlay2Discovery {
     private let log = AudioLog.airplay2
     private let browser: ServiceBrowser
     private let resolver: ServiceResolver
+    private let resolutionBudget: Duration
 
     public init() {
-        self.init(browser: Self.browseServices, resolver: Self.resolve)
+        self.init(
+            browser: { await Self.browseServices(serviceType: Self.serviceType, timeout: $0) },
+            resolver: Self.resolve
+        )
     }
 
-    /// Injection du parcours et de la résolution : `resolve` ouvre une connexion TCP vers
-    /// l'appareil, ce qu'aucun test ne doit faire contre le matériel du réseau local.
-    init(browser: @escaping ServiceBrowser, resolver: @escaping ServiceResolver) {
+    /// Injection du parcours et de la résolution : un test ne doit jamais interroger le matériel du
+    /// réseau local, et simule ainsi les parcours incomplets qu'on ne sait pas provoquer.
+    init(
+        browser: @escaping ServiceBrowser,
+        resolver: @escaping ServiceResolver,
+        resolutionBudget: Duration = BonjourAddressResolver.batchBudget
+    ) {
         self.browser = browser
         self.resolver = resolver
+        self.resolutionBudget = resolutionBudget
     }
 
     /// Parcourt `_airplay._tcp` et renvoie tous les récepteurs résolus.
@@ -123,21 +132,14 @@ public actor AirPlay2Discovery {
     /// résultats, alors que `dns-sd` et un parcours sans TXT le voient tous les deux. Voir
     /// l'explication dans `BonjourTXTQuery`.
     ///
-    /// La résolution se fait en parallèle : un seul appareil éteint mais encore annoncé coûte
-    /// plusieurs secondes de délais, que les autres n'ont pas à attendre l'un après l'autre.
+    /// La résolution ne contacte aucun appareil (voir `BonjourAddressResolver`) et se fait en
+    /// parallèle : un seul appareil parti sans se désannoncer coûte plusieurs secondes de délais,
+    /// que les autres n'ont pas à attendre. Il est simplement absent de ce passage.
     public func browse(timeout: Duration = .seconds(5)) async -> [AirPlay2Device] {
         let services = await browser(timeout)
-        let resolver = self.resolver
-        return await withTaskGroup(of: (Int, AirPlay2Device?).self) { group in
-            for (index, service) in services.enumerated() {
-                group.addTask { (index, await resolver(service)) }
-            }
-            var resolved: [(Int, AirPlay2Device)] = []
-            for await (index, device) in group {
-                if let device { resolved.append((index, device)) }
-            }
-            return resolved.sorted { $0.0 < $1.0 }.map(\.1)
-        }
+        return await BonjourAddressResolver.resolveAll(
+            services, budget: resolutionBudget, using: resolver
+        )
     }
 
     /// Cherche un récepteur dont le nom correspond à `name`, sans tenir compte de la casse.
@@ -153,8 +155,8 @@ public actor AirPlay2Discovery {
     /// - **Une correspondance partielle attend un second passage.** « Salon » contenu dans
     ///   « Salon (2) » serait sinon retenu dès que le vrai « Salon » manque à un parcours, et deux
     ///   sorties viseraient le même appareil.
-    /// - **Seul le service retenu est résolu.** Résoudre ouvre une connexion TCP vers
-    ///   l'appareil : inutile de déranger tout le réseau, ni d'attendre ses retardataires.
+    /// - **Seul le service retenu est résolu.** Inutile d'interroger tout le réseau, ni d'attendre
+    ///   ses retardataires.
     public func find(
         named name: String,
         timeout: Duration = .seconds(5),
@@ -174,7 +176,11 @@ public actor AirPlay2Discovery {
 
             if let match = Self.bestMatch(for: needle, among: services, name: \.name) {
                 let isExact = match.name.lowercased() == needle
-                if isExact || pass >= min(2, passes), let device = await resolver(match) {
+                if isExact || pass >= min(2, passes),
+                    let device = await BonjourAddressResolver.resolveAll(
+                        [match], budget: resolutionBudget, using: resolver
+                    ).first
+                {
                     guard device.txt.isEmpty, pass < passes else {
                         log.info(
                             "Récepteur AirPlay 2 résolu : \(device.serviceName, privacy: .public) → \(device.host, privacy: .public):\(device.port)"
@@ -210,7 +216,7 @@ public actor AirPlay2Discovery {
         }
     }
 
-    private static func browseServices(timeout: Duration) async -> [BrowsedService] {
+    static func browseServices(serviceType: String, timeout: Duration) async -> [BrowsedService] {
         let results = await RAOPDiscovery.browseRaw(
             serviceType: serviceType,
             timeout: timeout,
@@ -236,31 +242,35 @@ public actor AirPlay2Discovery {
             ?? devices.first { name($0).lowercased().contains(needle) }
     }
 
-    private static func resolve(_ service: BrowsedService) async -> AirPlay2Device? {
+    static func resolve(_ service: BrowsedService) async -> AirPlay2Device? {
         let log = AudioLog.airplay2
         let name = service.name
 
         // Le TXT porte les bits de fonctionnalité (`features`), l'identifiant de pairing
         // (`pi`) et la clé publique (`pk`) : sans lui, impossible de choisir le mode de
         // pairing. Il est lu par une requête DNS dédiée, hors de Network framework.
+        //
+        // TXT et adresse sont demandés en même temps : un appareil parti coûte ainsi un seul
+        // délai, pas la somme des deux.
         let fullName =
             BonjourTXTQuery.fullName(instance: name, type: service.type, domain: service.domain)
+        async let address = BonjourAddressResolver.resolveInBackground(
+            name: name, type: service.type, domain: service.domain, log: log
+        )
         var txt: [String: String] = [:]
         if let fullName {
             txt = await BonjourTXTQuery.lookupInBackground(fullName: fullName)
         }
 
-        guard let resolved = await RAOPDiscovery.resolveEndpoint(
-            NWEndpoint.service(name: name, type: service.type, domain: service.domain, interface: nil)
-        ) else {
+        guard let resolved = await address else {
             log.error("Résolution impossible pour \(name, privacy: .public)")
             return nil
         }
 
-        // L'appareil vient de répondre : un TXT manquant tient plutôt à une réponse multicast
+        // Le service vient de se résoudre : un TXT manquant tient plutôt à une réponse multicast
         // perdue qu'à une absence réelle, et une seconde question ne coûte plus rien à personne.
         if txt.isEmpty, let fullName {
-            txt = await BonjourTXTQuery.lookupInBackground(fullName: fullName)
+            txt = await BonjourTXTQuery.lookupInBackground(fullName: fullName, timeout: 2)
         }
         if txt.isEmpty {
             log.error("TXT vide pour \(name, privacy: .public) — capacités du récepteur inconnues")

@@ -128,15 +128,13 @@ struct SalonPlanTests {
         #expect(geneva.kind == .speaker(outputID: nil))
     }
 
-    @Test("La position d'écoute est sur le canapé, face à la télé, oreilles à 1,10 m")
-    func listenerSitsOnTheSofa() throws {
+    @Test("La position d'écoute est au centre de la table, oreilles à 1,10 m")
+    func listenerSitsAtTheTable() throws {
         let listener = try #require(salon.listener)
         #expect(listener.elevation == 1.10)
-        #expect(listener.rotation == 180)
-        let sofa = try #require(salon.objects.first { $0.kind == .sofa && $0.shape == .lShape })
-        #expect(sofa.contains(listener.position))
-        let tv = try #require(salon.objects.first { $0.kind == .tv })
-        #expect(tv.position.y > listener.position.y)
+        let table = try #require(salon.objects.first { $0.kind == .table })
+        #expect(hypot(listener.position.x - table.position.x,
+                      listener.position.y - table.position.y) < 0.01)
     }
 
     @Test("Le canapé d'angle garde ses cotes réelles, retour en bas à droite")
@@ -185,8 +183,8 @@ struct SalonPlanTests {
         let listener = try #require(bound.listener)
         let geneva = try object(named: "Geneva")
         let distance = salon.distance(from: geneva, to: listener)
-        // Lue directement sur le plan : 3,4 m en y, 1,8 m en x.
-        #expect(distance > 3.5 && distance < 4.2)
+        // Lue directement sur le plan : 1,3 m en y, 1,8 m en x depuis le centre de la table.
+        #expect(distance > 2.0 && distance < 2.4)
 
         for id in ["airplay2/Salon", "airplay2/Salon (2)"] {
             let speakers = bound.speakers(forOutput: id)
@@ -195,8 +193,9 @@ struct SalonPlanTests {
             let expected = (distance - bound.distance(from: near, to: listener))
                 / RoomLayout.speedOfSound * 1000
             #expect(abs(try #require(delays[id]) - expected) < 0.001)
-            // Quelques millisecondes : l'ordre de grandeur d'une pièce, pas d'une erreur.
-            #expect(expected > 3 && expected < 10)
+            // La table est presque à égale distance des trois enceintes : moins de 2 ms, et la
+            // Geneva reste la plus lointaine.
+            #expect(expected > 0 && expected < 2)
         }
     }
 

@@ -4,8 +4,8 @@ import dnssd
 
 @testable import AudioCore
 
-/// Parcours et résolution sont injectés : `AirPlay2Discovery()` ouvrirait une connexion TCP vers
-/// chaque appareil du réseau, ce qu'aucun test ne doit faire.
+/// Parcours et résolution sont injectés : `AirPlay2Discovery()` interrogerait les appareils du
+/// réseau, ce qu'aucun test ne doit faire.
 @Suite("Découverte AirPlay 2")
 struct AirPlay2DiscoveryTests {
 
@@ -101,8 +101,7 @@ struct AirPlay2DiscoveryTests {
         #expect(recorder.passes == 1)
     }
 
-    /// Résoudre ouvre une connexion TCP vers l'appareil : chercher un récepteur n'a pas à
-    /// déranger tous les autres, ni à attendre leurs délais.
+    /// Chercher un récepteur n'a pas à interroger tous les autres, ni à attendre leurs délais.
     @Test("Seul le récepteur retenu est résolu")
     func seulLeRetenuEstResolu() async throws {
         let recorder = Recorder()
