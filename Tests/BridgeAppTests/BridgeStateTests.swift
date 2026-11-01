@@ -308,6 +308,17 @@ struct BridgeStateListeningPlaceTests {
         return harness
     }
 
+    @Test("Le plan ne trace de trait que pour les sorties cochées")
+    func planDrawsCheckedOutputsOnly() async throws {
+        let harness = makeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.left])
+        #expect(Set(harness.state.outputIDsDrawnOnPlan) == [Devices.genevaID, Devices.leftID])
+
+        let geneva = try #require(harness.state.outputs.first { $0.id == Devices.genevaID })
+        geneva.isEnabled = false
+        #expect(harness.state.outputIDsDrawnOnPlan == [Devices.leftID])
+    }
+
     @Test("La compensation part dès le démarrage, sans geste de l'utilisateur")
     func compensationIsApplied() async throws {
         let harness = makeHarness()

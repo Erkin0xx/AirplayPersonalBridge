@@ -260,6 +260,10 @@ final class BridgeState {
     /// Un changement de source ou d'option relance la diffusion.
     private(set) var isRestarting = false
 
+    /// Les sorties dont le plan trace le trait vers le lieu d'écoute : celles qui sont cochées. Le
+    /// plan montre ainsi ce qui va réellement jouer, et non tout ce qui est visible sur le réseau.
+    var outputIDsDrawnOnPlan: [String] { outputs.filter(\.isEnabled).map(\.id) }
+
     /// Le bouton Diffuser/Arrêter répond-il ? Pas en pleine transition : il n'y a rien à annuler
     /// de plus, et un second clic ne doit rien démarrer en double.
     var canToggleStreaming: Bool {
