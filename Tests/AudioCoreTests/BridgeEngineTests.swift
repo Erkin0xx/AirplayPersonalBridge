@@ -389,6 +389,111 @@ struct BridgeEngineRetryTests {
         await engine.stop()
     }
 
+    /// Défaut d'origine : le moteur ignorait ce que le sender disait de son échec. Il le remplaçait
+    /// sans fin, et l'interface affichait « session perdue » au lieu de « mot de passe exigé ».
+    @Test("Un sender qui renonce en donnant sa raison met la sortie en échec, sans la relancer")
+    func senderGivingUpWithReasonFails() async throws {
+        let factory = FakeSenderFactory()
+        let engine = makeEngine(source: ManualCaptureSource(), factory: factory)
+        try await engine.start(source: source0, outputs: [request("a"), request("b")])
+        #expect(await eventually { await engine.phase(of: "a") == .streaming })
+
+        let first = try #require(factory.latest("a"))
+        await first.setError("le récepteur exige un mot de passe")
+        await first.setState(.failed)
+        #expect(await eventually {
+            await engine.phase(of: "a") == .failed("le récepteur exige un mot de passe")
+        })
+        #expect(await engine.snapshot(of: "a")?.lastError == "le récepteur exige un mot de passe")
+        #expect(await first.stopCount >= 1)
+        #expect(factory.senders("a").count == 1)
+        // La panne reste confinée à sa sortie.
+        #expect(await engine.phase(of: "b") == .streaming)
+
+        // Recochée, la sortie retente sa chance sur un sender neuf.
+        try await engine.addOutput(request("a"))
+        #expect(await eventually { factory.senders("a").count == 2 })
+        #expect(await eventually { await engine.phase(of: "a") == .streaming })
+        await engine.stop()
+    }
+
+    @Test("Ce qui retarde une reconnexion se lit dans l'instantané, et s'efface au rétablissement")
+    func reconnectionReasonIsPublished() async throws {
+        let factory = FakeSenderFactory()
+        let engine = makeEngine(source: ManualCaptureSource(), factory: factory)
+        try await engine.start(source: source0, outputs: [request("a")])
+        #expect(await eventually { await engine.phase(of: "a") == .streaming })
+
+        let sender = try #require(factory.latest("a"))
+        await sender.setError("récepteur occupé")
+        await sender.setState(.reconnecting)
+        #expect(await eventually { await engine.snapshot(of: "a")?.lastError == "récepteur occupé" })
+
+        await sender.setError(nil)
+        await sender.setState(.streaming)
+        #expect(await eventually {
+            guard let snapshot = await engine.snapshot(of: "a") else { return false }
+            return snapshot.phase == .streaming && snapshot.lastError == nil
+        })
+        await engine.stop()
+    }
+
+    @Test("Le renfort de basses part avant la connexion, puis suit les changements")
+    func bassBoostReachesRAOPSender() async throws {
+        let factory = FakeSenderFactory()
+        let engine = makeEngine(source: ManualCaptureSource(), factory: factory)
+        try await engine.start(source: source0, outputs: [request("a", bassBoost: 6)])
+        #expect(await eventually { await engine.phase(of: "a") == .streaming })
+
+        let sender = try #require(factory.latest("a"))
+        #expect(await sender.startedBassBoost == 6)
+
+        await engine.setBassBoost(9, for: "a")
+        #expect(await sender.pushedBassBoosts.last == 9)
+        await engine.stop()
+    }
+
+    @Test("Le renfort réglé pendant la négociation est appliqué à la connexion, et survit au sender")
+    func bassBoostDuringNegotiationIsApplied() async throws {
+        let factory = FakeSenderFactory()
+        factory.script("a", [.hang])
+        let engine = makeEngine(source: ManualCaptureSource(), factory: factory)
+        try await engine.start(source: source0, outputs: [request("a", bassBoost: 3)])
+        #expect(await eventually {
+            guard let sender = factory.latest("a") else { return false }
+            return await sender.isNegotiating
+        })
+
+        await engine.setBassBoost(8, for: "a")
+        let first = try #require(factory.latest("a"))
+        await first.releaseStart()
+        #expect(await eventually { await first.pushedBassBoosts.last == 8 })
+
+        // Un sender abandonné est remplacé : le suivant repart de la dernière consigne.
+        await first.setState(.failed)
+        #expect(await eventually { factory.senders("a").count == 2 })
+        let second = try #require(factory.latest("a"))
+        #expect(await eventually { await second.startedBassBoost == 8 })
+        await engine.stop()
+    }
+
+    /// CDC section 2 : le renfort ne concerne que la Geneva, les HomePod restent intacts.
+    @Test("Le renfort de basses n'atteint jamais une sortie AirPlay 2")
+    func bassBoostIgnoresAirPlay2() async throws {
+        let factory = FakeSenderFactory()
+        let engine = makeEngine(source: ManualCaptureSource(), factory: factory)
+        try await engine.start(
+            source: source0, outputs: [request("homepod", proto: .airplay2, bassBoost: 6)]
+        )
+        #expect(await eventually { await engine.phase(of: "homepod") == .streaming })
+
+        await engine.setBassBoost(9, for: "homepod")
+        await engine.setBassBoost(9, for: "inconnue")
+        let sender = try #require(factory.latest("homepod"))
+        #expect(await sender.pushedBassBoosts.isEmpty)
+        await engine.stop()
+    }
+
     /// Défaut d'origine : un réglage poussé avant la fin de la connexion était perdu, alors que
     /// l'appelant le croyait transmis et ne le renvoyait jamais.
     @Test("Volume et délai réglés pendant la négociation sont appliqués à la connexion")
@@ -1040,12 +1145,17 @@ struct BridgeEngineHealthTests {
         let other = try #require(factory.latest("b")).context.clock
         source.push(frames: 480)
 
+        // Le temps écoulé depuis le démarrage, sans trames, compte comme un déficit : sous la charge
+        // d'une suite parallèle il dépasse les 50 ms tolérées et s'ajouterait à l'interruption
+        // mesurée. Un relevé normal, 10 ms et 480 trames plus tard, remet le cumul à zéro.
         let start = Date()
         await engine.tickHealth(now: start)
+        source.push(frames: 480)
+        await engine.tickHealth(now: start.addingTimeInterval(0.01))
         let before = try #require(clock.presentationUnixTime(forCaptureFrame: 0))
 
         // 3 s sans le moindre bloc, puis la reprise.
-        await engine.tickHealth(now: start.addingTimeInterval(3))
+        await engine.tickHealth(now: start.addingTimeInterval(3.01))
         let after = try #require(clock.presentationUnixTime(forCaptureFrame: 0))
         #expect(abs((after - before) - 3) < 0.001)
         #expect(abs(await engine.captureHealth.interruptedSeconds - 3) < 0.001)

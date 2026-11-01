@@ -25,9 +25,14 @@ public protocol OutputSender: Actor {
     func stop() async
     func setVolume(_ volume: Float) async throws
     func setManualDelay(seconds: TimeInterval)
+    /// Renfort de basses, en dB. Applicable à tout moment, et conservé d'une reconnexion à l'autre.
+    func setBassBoost(decibels: Float)
 
     /// État courant. Lu périodiquement : c'est ce qui fait remonter une reconnexion.
     func currentOutputState() -> OutputSenderState
+    /// Dernière erreur de session, rédigée pour l'affichage, ou `nil`. N'est lue qu'en
+    /// `reconnecting` et en `failed` : c'est la raison d'un état, pas un historique.
+    func currentOutputError() -> String?
     /// Compteurs courants, ramenés à la forme commune.
     func currentOutputStatistics() -> OutputStatistics
 }
@@ -71,6 +76,8 @@ public struct OutputStatistics: Sendable, Equatable {
 }
 
 extension RAOPSender: OutputSender {
+    public func currentOutputError() -> String? { lastErrorMessage }
+
     public func currentOutputState() -> OutputSenderState {
         switch state {
         case .idle: return .idle
@@ -106,6 +113,12 @@ extension RAOPSender: OutputSender {
 }
 
 extension AirPlay2Sender: OutputSender {
+    /// Le CDC ne prévoit le renfort que pour la Geneva : les HomePod gardent une stéréo pleine
+    /// bande intacte. Le moteur ne l'appelle d'ailleurs pas sur cette sortie.
+    public func setBassBoost(decibels: Float) {}
+
+    public func currentOutputError() -> String? { statistics.lastFailure }
+
     public func currentOutputState() -> OutputSenderState {
         switch state {
         case .idle: return .idle

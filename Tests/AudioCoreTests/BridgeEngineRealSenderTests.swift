@@ -11,6 +11,8 @@ private final class LoopbackRAOPReceiver: @unchecked Sendable {
     private let queue = DispatchQueue(label: "fr.baptiste.airplaymultioutput.tests.loopback-raop")
     private var connections: [NWConnection] = []
     private var answerDelay: TimeInterval = 0
+    /// Statut rendu aux `ANNOUNCE` suivants, à la place d'un `200`.
+    private var announceRefusal: String?
 
     init() throws {
         listener = try NWListener(using: .tcp, on: .any)
@@ -56,6 +58,16 @@ private final class LoopbackRAOPReceiver: @unchecked Sendable {
         }
     }
 
+    /// Coupe les sessions en cours, et refuse les suivantes : c'est ainsi qu'un récepteur se met à
+    /// exiger un mot de passe, ce qu'aucune nouvelle tentative ne corrigera.
+    func dropSessions(thenRefuseWith status: String) {
+        queue.sync {
+            announceRefusal = status
+            for connection in connections { connection.forceCancel() }
+            connections = []
+        }
+    }
+
     private func accept(_ connection: NWConnection) {
         connections.append(connection)
         connection.start(queue: queue)
@@ -96,7 +108,8 @@ private final class LoopbackRAOPReceiver: @unchecked Sendable {
     }
 
     private func answer(_ head: String, on connection: NWConnection) {
-        var response = "RTSP/1.0 200 OK\r\nCSeq: \(Self.header("CSeq", in: head) ?? "0")\r\n"
+        let status = head.hasPrefix("ANNOUNCE") ? announceRefusal ?? "200 OK" : "200 OK"
+        var response = "RTSP/1.0 \(status)\r\nCSeq: \(Self.header("CSeq", in: head) ?? "0")\r\n"
         if head.hasPrefix("SETUP") {
             // Des ports où rien n'écoute : l'audio part en UDP, sans retour, comme vers un
             // récepteur réel qui ne signalerait rien.
@@ -199,5 +212,43 @@ struct BridgeEngineRealSenderTests {
         let stopping = await clock.measure { await engine.stop() }
         #expect(stopping < .seconds(5))
         #expect(await sender.currentOutputState() == .idle)
+    }
+
+    /// Le vrai `RAOPSender` renonce sur un refus définitif et le dit dans `lastErrorMessage` : c'est
+    /// cette raison qui doit arriver jusqu'à la ligne de l'enceinte. Le moteur la perdait, et
+    /// relançait un sender neuf en affichant « session perdue ».
+    @Test("Un récepteur qui se met à refuser définitivement se lit comme une panne, avec sa raison")
+    func permanentRefusalIsVisible() async throws {
+        let receiver = try LoopbackRAOPReceiver()
+        let port = try await receiver.start()
+        defer { receiver.stop() }
+        let factory = LoopbackSenderFactory(port: port)
+
+        var dependencies = BridgeEngine.Dependencies.live
+        dependencies.senderFactory = factory
+        dependencies.tuning.monitorInterval = .milliseconds(20)
+        let engine = BridgeEngine(dependencies: dependencies)
+        let output = BridgeEngine.OutputRequest(
+            id: "boucle", proto: .raop, deviceName: "Boucle", volumeDB: -30
+        )
+
+        try await engine.start(source: .tone(frequency: 440, levelDBFS: -50), outputs: [output])
+        #expect(await eventually { await engine.phase(of: "boucle") == .streaming })
+        let sender = try #require(factory.sender)
+
+        receiver.dropSessions(thenRefuseWith: "401 Unauthorized")
+        #expect(await eventually(timeout: .seconds(15)) {
+            if case .failed = await engine.phase(of: "boucle") { return true }
+            return false
+        })
+
+        let snapshot = try #require(await engine.snapshot(of: "boucle"))
+        let expected = try #require(await sender.lastErrorMessage)
+        #expect(snapshot.phase == .failed(expected))
+        #expect(snapshot.lastError == expected)
+        #expect(expected.contains("mot de passe"))
+        // Pas de remplaçant : celui-ci aurait reçu le même refus.
+        #expect(factory.sender === sender)
+        await engine.stop()
     }
 }

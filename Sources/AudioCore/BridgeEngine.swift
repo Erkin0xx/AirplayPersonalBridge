@@ -94,6 +94,9 @@ public actor BridgeEngine {
         public let deviceName: String
         public var volumeDB: Float
         public var manualDelaySeconds: TimeInterval
+        /// Renfort de basses, en dB (ADR-002). Ignoré hors RAOP : le CDC ne le prévoit que pour la
+        /// Geneva, les HomePod gardant une pleine bande intacte.
+        public var bassBoostDB: Float
         /// Credentials d'appairage système, pour un récepteur qui refuse le transitoire. Sans
         /// objet en RAOP.
         public let credentials: HapCredentials?
@@ -104,6 +107,7 @@ public actor BridgeEngine {
             deviceName: String,
             volumeDB: Float,
             manualDelaySeconds: TimeInterval = 0,
+            bassBoostDB: Float = 0,
             credentials: HapCredentials? = nil
         ) {
             self.id = id
@@ -111,6 +115,7 @@ public actor BridgeEngine {
             self.deviceName = deviceName
             self.volumeDB = volumeDB
             self.manualDelaySeconds = manualDelaySeconds
+            self.bassBoostDB = bassBoostDB
             self.credentials = credentials
         }
     }
@@ -145,6 +150,9 @@ public actor BridgeEngine {
         /// Prochaine tentative, pendant `waitingForReceiver`. `nil` quand une tentative est en
         /// cours ou qu'aucune n'est prévue.
         public var nextAttemptAt: Date?
+        /// Ce que le sender dit de sa panne, rédigé pour l'affichage. Renseigné en `reconnecting`
+        /// (ce qui retarde le rétablissement) et en `failed` ; `nil` quand tout va bien.
+        public var lastError: String?
 
         public var packetsSent: Int { statistics.packetsSent }
         public var errors: Int { statistics.errors }
@@ -612,7 +620,9 @@ public actor BridgeEngine {
 
     private enum MonitorOutcome {
         case cancelled
-        case senderGaveUp
+        /// Le sender a renoncé. Sa raison, s'il en donne une, est un refus définitif : les vrais
+        /// senders ne quittent leur boucle de reconnexion que sur ce type de refus.
+        case senderGaveUp(reason: String?)
     }
 
     /// Fait vivre une sortie : découverte, connexion, surveillance, et nouvel essai si besoin.
@@ -621,7 +631,7 @@ public actor BridgeEngine {
     /// de repartir de cet état.
     private func runOutput(id: String, token: UInt64, context: OutputSenderContext) async {
         var attempt = 0
-        while !Task.isCancelled {
+        attempts: while !Task.isCancelled {
             guard let request = entries[id]?.request, entries[id]?.token == token else { return }
 
             var lastError: String
@@ -633,6 +643,9 @@ public actor BridgeEngine {
                 sender = created
                 try Task.checkCancellation()
                 await created.setManualDelay(seconds: request.manualDelaySeconds)
+                if request.proto == .raop {
+                    await created.setBassBoost(decibels: request.bassBoostDB)
+                }
                 try await Self.startSender(created, volume: request.volumeDB)
                 // Un `start` qui aboutit malgré l'annulation laisse une session ouverte : le
                 // `catch` ci-dessous la referme.
@@ -644,8 +657,22 @@ public actor BridgeEngine {
                 detach(id: id, token: token)
                 await created.stop()
                 sender = nil
-                if outcome == .cancelled { break }
-                lastError = "session perdue"
+                switch outcome {
+                case .cancelled:
+                    break attempts
+                case let .senderGaveUp(reason?):
+                    // Un sender neuf rencontrerait le même refus, et le dernier message resterait
+                    // « session perdue » pendant que la vraie cause disparaît. La sortie s'arrête
+                    // là : la décocher puis la recocher est une nouvelle tentative.
+                    update(id, token: token) {
+                        $0.phase = .failed(reason)
+                        $0.lastError = reason
+                        $0.nextAttemptAt = nil
+                    }
+                    return
+                case .senderGaveUp(reason: nil):
+                    lastError = "session perdue"
+                }
             } catch {
                 detach(id: id, token: token)
                 // Toujours, y compris sur un `start` en échec : c'est ce qui garantit qu'une
@@ -659,6 +686,7 @@ public actor BridgeEngine {
                 if isPermanentOutputFailure(error) {
                     update(id, token: token) {
                         $0.phase = .failed("\(error)")
+                        $0.lastError = "\(error)"
                         $0.nextAttemptAt = nil
                     }
                     return
@@ -671,6 +699,7 @@ public actor BridgeEngine {
             let retryAt = Date().addingTimeInterval(Self.seconds(delay))
             update(id, token: token) {
                 $0.phase = .waitingForReceiver(attempt: attempt, lastError: lastError)
+                $0.lastError = lastError
                 $0.nextAttemptAt = retryAt
             }
             do { try await Task.sleep(for: delay) } catch { break }
@@ -678,6 +707,7 @@ public actor BridgeEngine {
         }
         update(id, token: token) {
             $0.phase = .idle
+            $0.lastError = nil
             $0.nextAttemptAt = nil
         }
     }
@@ -710,8 +740,8 @@ public actor BridgeEngine {
         return Double(seconds) + Double(attoseconds) / 1e18
     }
 
-    /// Rend le sender joignable par `setVolume`/`setManualDelay`, et rattrape les réglages faits
-    /// pendant la négociation.
+    /// Rend le sender joignable par `setVolume`/`setManualDelay`/`setBassBoost`, et rattrape les
+    /// réglages faits pendant la négociation.
     ///
     /// Sans ce rattrapage, un volume poussé avant la fin de la connexion était perdu : l'appelant
     /// le croyait transmis et ne le renvoyait jamais.
@@ -722,9 +752,13 @@ public actor BridgeEngine {
         entries[id]?.sender = sender
         update(id, token: token) {
             $0.phase = .streaming
+            $0.lastError = nil
             $0.nextAttemptAt = nil
         }
         guard let latest = entries[id]?.request else { return }
+        if latest.proto == .raop, latest.bassBoostDB != request.bassBoostDB {
+            await sender.setBassBoost(decibels: latest.bassBoostDB)
+        }
         if latest.manualDelaySeconds != request.manualDelaySeconds {
             await sender.setManualDelay(seconds: latest.manualDelaySeconds)
         }
@@ -747,6 +781,7 @@ public actor BridgeEngine {
         while !Task.isCancelled {
             let state = await sender.currentOutputState()
             let statistics = await sender.currentOutputStatistics()
+            let message = await sender.currentOutputError()
             sender.synchronizer.noteRefusedCaptureFrames(total: ring.droppedFrames)
             let sync = sender.synchronizer.snapshot()
             let refused = ring.droppedFrames
@@ -755,14 +790,20 @@ public actor BridgeEngine {
                 $0.sync = sync
                 $0.droppedWhileStreaming = max(0, refused - statistics.droppedBeforeStreaming)
                 switch state {
-                case .reconnecting: $0.phase = .reconnecting
-                case .streaming: $0.phase = .streaming
-                case .idle, .connecting, .failed: break
+                case .reconnecting:
+                    $0.phase = .reconnecting
+                    $0.lastError = message
+                case .streaming:
+                    $0.phase = .streaming
+                    $0.lastError = nil
+                case .idle, .connecting, .failed:
+                    break
                 }
             }
-            // Les senders réels se rétablissent seuls et ne passent jamais par là ; un sender qui
-            // abandonne n'a de toute façon plus rien à attendre.
-            if state == .failed { return .senderGaveUp }
+            // Un sender réel se rétablit seul d'une perte réseau, mais il renonce sur un refus
+            // définitif (mot de passe, appairage). Sans la lecture de sa raison, le moteur le
+            // remplaçait sans fin et n'affichait que « session perdue ».
+            if state == .failed { return .senderGaveUp(reason: message) }
             do { try await Task.sleep(for: tuning.monitorInterval) } catch { return .cancelled }
         }
         return .cancelled
@@ -795,6 +836,18 @@ public actor BridgeEngine {
         entries[id]?.request.manualDelaySeconds = seconds
         guard let sender = entries[id]?.sender else { return }
         await sender.setManualDelay(seconds: seconds)
+    }
+
+    /// Pousse un renfort de basses à une sortie, sans rupture de flux.
+    ///
+    /// Sans effet hors RAOP : le renfort n'est prévu que pour la Geneva (ADR-002, CDC section 2), et
+    /// les HomePod doivent recevoir le flux intact. Comme le volume, une valeur poussée pendant la
+    /// négociation est appliquée à la connexion.
+    public func setBassBoost(_ decibels: Float, for id: String) async {
+        guard entries[id]?.request.proto == .raop else { return }
+        entries[id]?.request.bassBoostDB = decibels
+        guard let sender = entries[id]?.sender else { return }
+        await sender.setBassBoost(decibels: decibels)
     }
 
     private func update(_ id: String, token: UInt64, _ change: (inout OutputSnapshot) -> Void) {

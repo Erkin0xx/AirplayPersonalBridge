@@ -294,6 +294,9 @@ actor FakeSender: OutputSender {
     private(set) var startedDelay: TimeInterval?
     private(set) var pushedVolumes: [Float] = []
     private(set) var pushedDelays: [TimeInterval] = []
+    private(set) var pushedBassBoosts: [Float] = []
+    private(set) var startedBassBoost: Float?
+    private var errorMessage: String?
     private(set) var stopCount = 0
     private var statistics = OutputStatistics()
     private let behaviour: StartBehaviour
@@ -317,6 +320,7 @@ actor FakeSender: OutputSender {
     func start(volume: Float) async throws {
         startedVolume = volume
         startedDelay = synchronizer.manualOffsetSeconds
+        startedBassBoost = pushedBassBoosts.last
         state = .connecting
         switch behaviour {
         case .succeed:
@@ -363,10 +367,14 @@ actor FakeSender: OutputSender {
         synchronizer.manualOffsetSeconds = seconds
     }
 
+    func setBassBoost(decibels: Float) { pushedBassBoosts.append(decibels) }
+
+    func currentOutputError() -> String? { errorMessage }
     func currentOutputState() -> OutputSenderState { state }
     func currentOutputStatistics() -> OutputStatistics { statistics }
 
     func setState(_ state: OutputSenderState) { self.state = state }
+    func setError(_ message: String?) { errorMessage = message }
     func setStatistics(_ statistics: OutputStatistics) { self.statistics = statistics }
 
     /// Lit tout l'arriéré du tampon, comme la boucle d'un vrai sender.
@@ -494,10 +502,12 @@ func makeEngine(
 }
 
 func request(
-    _ id: String, volume: Float = -20, delay: TimeInterval = 0
+    _ id: String, volume: Float = -20, delay: TimeInterval = 0,
+    proto: BridgeEngine.OutputProtocol = .raop, bassBoost: Float = 0
 ) -> BridgeEngine.OutputRequest {
     BridgeEngine.OutputRequest(
-        id: id, proto: .raop, deviceName: id, volumeDB: volume, manualDelaySeconds: delay
+        id: id, proto: proto, deviceName: id, volumeDB: volume, manualDelaySeconds: delay,
+        bassBoostDB: bassBoost
     )
 }
 
