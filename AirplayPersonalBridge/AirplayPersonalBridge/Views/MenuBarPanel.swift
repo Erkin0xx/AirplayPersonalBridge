@@ -7,13 +7,13 @@ import AppKit
 import AudioCore
 import SwiftUI
 
-/// L'icône de la barre de menus. La barre est monochrome : seul le symbole dit où on en est.
+/// L'icône de la barre de menus. La barre est monochrome : seule la forme dit où on en est.
 struct MenuBarLabel: View {
     let state: BridgeState
 
     var body: some View {
         let status = state.status.menuBar
-        Image(systemName: status.symbolName)
+        Image(nsImage: MenuBarGlyphImage.image(for: status.glyph))
             .accessibilityLabel(status.accessibilityLabel)
     }
 }
@@ -97,209 +97,337 @@ struct MenuBarPanelActions {
     var quit: () -> Void = {}
 }
 
+/// Ce que le rendu hors écran force, faute de souris : le panneau réel ne s'en sert jamais.
+struct PanelPreviewOptions {
+    var expandsOptions = false
+    var hoveredSpeakerID: String?
+    var showsVolumeValue = false
+}
+
 /// Le contenu du panneau : d'un coup d'œil, ce qui joue et où ; d'un clic, jouer ailleurs.
 ///
-/// Le geste principal est celui du menu AirPlay de macOS : cocher une enceinte, et ça joue dessus.
-/// Tout le reste s'efface devant lui. Les réglages fins (délai, basses, plan) restent dans la
-/// fenêtre, à laquelle le pied du panneau donne accès.
+/// Le modèle est le module Son du Centre de contrôle et le sélecteur de sortie audio de macOS, pas un
+/// tableau de bord. D'où trois partis pris : **aucun fond maison**, le panneau hérite du matériau de
+/// `MenuBarExtra` et tout s'y pose en couleurs sémantiques ; des **rangées plutôt que des cases**, où
+/// c'est la pastille qui dit qu'une enceinte est retenue ; et **le reste en retrait**, derrière une
+/// section repliable. Les réglages fins (délai, basses, plan) restent dans la fenêtre.
+///
+/// Ce qui est propre au widget vit dans ses fichiers (`PanelControls`, `PanelSpeakerRow`,
+/// `MenuBarGlyph`) : le thème de `DesignSystem` sert à la fenêtre principale.
 struct MenuBarPanelContent: View {
     @Bindable var state: BridgeState
     let loginItem: LoginItemController
-    var actions = MenuBarPanelActions()
+    var actions: MenuBarPanelActions
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isOptionsExpanded: Bool
+    private let previewOptions: PanelPreviewOptions
 
     /// Au-delà, la liste défile plutôt que de pousser le panneau hors de l'écran.
     private let maximumRowsWithoutScrolling = 6
-    private let contentPadding: CGFloat = 12
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            ShadSeparator()
-            speakers
-            ShadSeparator()
-            controls
-            ShadSeparator()
-            footer
-        }
-        .frame(width: 320)
-        .background(Theme.background)
+    init(
+        state: BridgeState, loginItem: LoginItemController,
+        actions: MenuBarPanelActions = MenuBarPanelActions(),
+        preview: PanelPreviewOptions = PanelPreviewOptions()
+    ) {
+        self.state = state
+        self.loginItem = loginItem
+        self.actions = actions
+        self.previewOptions = preview
+        // Un message de l'ouverture de session demande une action : il ne doit pas rester caché.
+        _isOptionsExpanded = State(initialValue: preview.expandsOptions || loginItem.message != nil)
     }
 
-    // MARK: - En-tête : l'état, et le grand bouton
+    var body: some View {
+        GlassEffectContainer(spacing: 8) {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 12) {
+                    header
+                    notices
+                    PanelVolumeSlider(
+                        decibels: $state.masterVolumeDB, isMuted: $state.isMuted,
+                        range: BridgeSettings.Limits.masterDB,
+                        showsValue: previewOptions.showsVolumeValue
+                    )
+                }
+                .padding(.horizontal, PanelMetrics.margin)
+                .padding(.top, PanelMetrics.margin)
+                .padding(.bottom, 10)
+
+                speakers
+                listeningPlace
+                PanelSeparator()
+                options
+                PanelSeparator()
+                footer
+            }
+        }
+        .frame(width: PanelMetrics.width)
+        .background(alignment: .top) { streamingWash }
+    }
+
+    /// La diffusion se sent dans tout le panneau, sans rien y ajouter : une lueur de la couleur
+    /// d'accent qui descend du haut et s'éteint avant les enceintes.
+    private var streamingWash: some View {
+        LinearGradient(
+            colors: [Color.accentColor.opacity(0.2), Color.accentColor.opacity(0)],
+            startPoint: .top, endPoint: .bottom
+        )
+        .frame(height: 120)
+        .opacity(state.status.menuBar == .streaming ? 1 : 0)
+        .animation(PanelMotion.standard(reduceMotion: reduceMotion), value: state.status.menuBar)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    // MARK: - En-tête : l'état et la commande
 
     private var header: some View {
         let status = state.status
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 9) {
-                Image(systemName: status.menuBar.symbolName)
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(tint(for: status.menuBar))
-                    .frame(width: 22)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(status.title)
-                        .font(Theme.Font.title)
-                        .foregroundStyle(Theme.foreground)
-                    if let detail = status.detail {
-                        Text(detail).shadMuted().lineLimit(1)
+        return HStack(spacing: PanelMetrics.columnGap) {
+            PanelStatusChip(status: status.menuBar, isAudible: state.captureAlert == nil)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(status.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.9)
+                if let detail = status.detail {
+                    Text(detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            // Pas de `Spacer` ici : il compterait deux fois l'espacement de la pile, soit les 20 pt
+            // qui manquent pour écrire « Diffusion vers 3 enceintes » en entier.
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            command
+        }
+    }
+
+    /// Pendant une transition, la commande garde son nom et sa largeur : un témoin remplace son icône.
+    /// C'est le titre de l'en-tête qui dit « Démarrage… », pas la peine de le répéter à côté.
+    private var command: some View {
+        let isStopSide = state.streamingPhase == .running || state.streamingPhase == .stopping
+        let isTransition = state.streamingPhase == .starting || state.streamingPhase == .stopping
+        return Button {
+            state.toggleStreaming()
+        } label: {
+            HStack(spacing: 5) {
+                Group {
+                    if isTransition {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Image(systemName: isStopSide ? "stop.fill" : "play.fill")
+                            .font(.system(size: 10, weight: .semibold))
                     }
                 }
-                Spacer(minLength: 0)
+                .frame(width: 12, height: 12)
+                Text(isStopSide ? "Arrêter" : "Diffuser")
             }
-
-            Button {
-                state.toggleStreaming()
-            } label: {
-                Label(primaryActionTitle, systemImage: state.isStreaming ? "stop.fill" : "play.fill")
-                    .frame(maxWidth: .infinity)
-            }
-            .shadButton(state.isStreaming ? .destructive : .primary, size: .large)
-            .disabled(!state.canToggleStreaming)
-
-            if let failure = state.startFailure {
-                // Le titre de l'en-tête dit déjà « Démarrage impossible » : le bandeau dit pourquoi.
-                NoticeBanner(
-                    severity: .critical, title: failure.message, detail: nil,
-                    actionTitle: failure.settingsPane == nil ? nil : "Ouvrir les Réglages",
-                    action: { failure.settingsPane?.open() }
-                )
-            }
-            if let alert = state.captureAlert {
-                NoticeBanner(
-                    severity: alert.severity, title: alert.title, detail: alert.detail,
-                    actionTitle: alert.settingsPane == nil ? nil : "Ouvrir les Réglages",
-                    action: { alert.settingsPane?.open() }
-                )
-            }
+            // La largeur du mot le plus long : le titre à côté ne se décale pas au changement d'état.
+            .frame(minWidth: 64)
         }
-        .padding(contentPadding)
+        .buttonStyle(PanelCommandButtonStyle(tint: isStopSide ? nil : .accentColor))
+        .disabled(!state.canToggleStreaming)
+        .fixedSize()
+        .accessibilityLabel(isStopSide ? "Arrêter la diffusion" : "Lancer la diffusion")
     }
 
-    private var primaryActionTitle: String {
-        switch state.streamingPhase {
-        case .idle: "Diffuser"
-        case .starting: "Démarrage…"
-        case .running: "Arrêter"
-        case .stopping: "Arrêt…"
+    @ViewBuilder
+    private var notices: some View {
+        if let failure = state.startFailure {
+            // Le titre de l'en-tête dit déjà « Démarrage impossible » : l'alerte dit pourquoi.
+            PanelNotice(
+                severity: .critical, title: failure.message,
+                actionTitle: failure.settingsPane == nil ? nil : "Ouvrir les Réglages…",
+                action: { failure.settingsPane?.open() }
+            )
         }
-    }
-
-    private func tint(for status: MenuBarStatus) -> Color {
-        switch status {
-        case .idle: Theme.mutedForeground
-        case .connecting: Theme.warning
-        case .streaming: Theme.success
-        case .trouble: Theme.destructive
+        if let alert = state.captureAlert {
+            PanelNotice(
+                severity: alert.severity, title: alert.title, detail: alert.detail,
+                actionTitle: alert.settingsPane == nil ? nil : "Ouvrir les Réglages…",
+                action: { alert.settingsPane?.open() }
+            )
         }
     }
 
     // MARK: - Les enceintes
 
     private var speakers: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Text("Enceintes").shadLabel()
-                Spacer()
-                Button {
-                    Task { await state.refreshOutputs() }
-                } label: {
-                    if state.isBrowsing {
-                        Text("Recherche…")
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                            .accessibilityLabel("Rechercher")
-                    }
-                }
-                .buttonStyle(.plain)
-                .font(Theme.Font.tiny)
-                .foregroundStyle(Theme.mutedForeground)
-                .disabled(state.isBrowsing)
-                .help("Rechercher sur le réseau local")
-            }
-
+        VStack(alignment: .leading, spacing: 2) {
+            speakersTitle
             if state.outputs.isEmpty {
                 emptySpeakers
             } else if state.outputs.count > maximumRowsWithoutScrolling {
-                ScrollView { speakerRows }.frame(height: 280)
+                ScrollView { speakerRows }.frame(height: 256)
             } else {
                 speakerRows
             }
         }
-        .padding(contentPadding)
+        .padding(.bottom, 8)
+    }
+
+    private var speakersTitle: some View {
+        HStack(spacing: 6) {
+            PanelSectionTitle(title: "Enceintes")
+            Spacer()
+            // Le même cadre avec ou sans le témoin : la recherche revient régulièrement, et la ligne
+            // ne doit pas tressauter à chaque fois. Liste vide, c'est elle qui dit qu'on cherche.
+            Group {
+                if state.isBrowsing {
+                    if !state.outputs.isEmpty { ProgressView().controlSize(.mini) }
+                } else {
+                    Button {
+                        Task { await state.refreshOutputs() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 20, height: 20)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Rechercher sur le réseau local")
+                    .accessibilityLabel("Rechercher les enceintes")
+                }
+            }
+            .frame(width: 20, height: 20)
+        }
+        .padding(.horizontal, PanelMetrics.margin)
     }
 
     private var speakerRows: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            ForEach(state.outputs) { output in
-                SpeakerRow(output: output)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(PanelSpeakerOrder.sorted(state.outputs)) { output in
+                PanelSpeakerRow(
+                    output: output, isAudible: state.captureAlert == nil,
+                    previewHovering: previewOptions.hoveredSpeakerID == output.id
+                )
             }
         }
+        .padding(.horizontal, PanelMetrics.rowInset)
     }
 
     private var emptySpeakers: some View {
-        VStack(spacing: 7) {
-            // `hifispeaker.slash` n'existe pas : un nom inconnu n'affiche rien, sans la moindre erreur.
-            Image(systemName: state.isBrowsing ? "antenna.radiowaves.left.and.right" : "hifispeaker")
-                .font(.system(size: 22))
-                .foregroundStyle(Theme.mutedForeground)
+        VStack(spacing: 4) {
             if state.isBrowsing || !state.hasCompletedDiscovery {
-                Text("Recherche des enceintes…").font(Theme.Font.medium)
+                ProgressView()
+                    .controlSize(.small)
+                    .padding(.bottom, 6)
+                Text("Recherche des enceintes…")
+                    .font(.system(size: 13, weight: .medium))
                 Text("Elles apparaîtront ici dès qu'elles répondront.")
-                    .shadMuted()
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             } else {
-                Text("Aucune enceinte trouvée").font(Theme.Font.medium)
+                // `hifispeaker.slash` n'existe pas : un nom inconnu n'affiche rien, sans la moindre erreur.
+                Image(systemName: "hifispeaker")
+                    .font(.system(size: 20, weight: .light))
+                    .foregroundStyle(.tertiary)
+                    .padding(.bottom, 4)
+                Text("Aucune enceinte trouvée")
+                    .font(.system(size: 13, weight: .medium))
                 if let notice = state.discoveryNotice {
                     Text(notice)
-                        .shadMuted()
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                HStack(spacing: 6) {
+                HStack(spacing: 12) {
                     Button("Rechercher") { Task { await state.refreshOutputs() } }
-                        .shadButton(.outline, size: .small)
-                    Button("Réseau local") { SystemSettingsPane.localNetwork.open() }
-                        .shadButton(.ghost, size: .small)
+                    Button("Réseau local…") { SystemSettingsPane.localNetwork.open() }
                 }
-                .padding(.top, 2)
+                .buttonStyle(.link)
+                .font(.system(size: 11, weight: .medium))
+                .padding(.top, 6)
             }
         }
         .frame(maxWidth: .infinity)
+        .padding(.horizontal, PanelMetrics.margin + 8)
         .padding(.vertical, 12)
     }
 
-    // MARK: - Volume et source
+    // MARK: - Écoute
 
-    private var controls: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    /// Visible à partir de deux lieux : avec un seul, il n'y aurait rien à choisir.
+    @ViewBuilder
+    private var listeningPlace: some View {
+        let places = state.roomLayout.listeners
+        if places.count >= 2, let active = state.roomLayout.listener {
+            PanelSeparator()
             HStack(spacing: 8) {
-                Button {
-                    state.isMuted.toggle()
-                } label: {
-                    Image(systemName: state.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                        .font(.system(size: 13))
-                        .frame(width: 20, alignment: .leading)
-                        .foregroundStyle(state.isMuted ? Theme.destructive : Theme.foreground)
-                        .contentShape(Rectangle())
+                Text("Écoute").font(.system(size: 13))
+                Spacer(minLength: 4)
+                Picker(
+                    "Lieu d'écoute",
+                    selection: Binding(
+                        get: { active.id },
+                        set: { state.selectListeningPlace(id: $0) }
+                    )
+                ) {
+                    ForEach(places) { place in
+                        Text(place.name.isEmpty ? place.kind.label : place.name).tag(place.id)
+                    }
                 }
-                .buttonStyle(.plain)
-                .help(state.isMuted ? "Rétablir le son" : "Silence")
-                .accessibilityLabel("Silence")
-                .accessibilityValue(state.isMuted ? "activé" : "désactivé")
-
-                ShadSlider(value: $state.masterVolumeDB, range: BridgeSettings.Limits.masterDB)
-                    .opacity(state.isMuted ? 0.4 : 1)
-                    .accessibilityLabel("Volume master")
-
-                Text(state.isMuted ? "silence" : String(format: "%.0f dB", state.masterVolumeDB))
-                    .font(Theme.Font.small.monospacedDigit())
-                    .foregroundStyle(Theme.foreground)
-                    .frame(width: 48, alignment: .trailing)
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
             }
+            .padding(.horizontal, PanelMetrics.margin)
+            .padding(.vertical, 8)
+            .help("Recale les enceintes pour ce lieu, sans couper le son.")
+        }
+    }
 
-            listeningPlacePicker
+    // MARK: - Options, en retrait
 
+    private var options: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(PanelMotion.standard(reduceMotion: reduceMotion)) {
+                    isOptionsExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Options")
+                    Spacer(minLength: 4)
+                    if !isOptionsExpanded {
+                        Text(state.selectedSource.label)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isOptionsExpanded ? 90 : 0))
+                }
+            }
+            .buttonStyle(PanelMenuRowStyle())
+            .accessibilityLabel("Options")
+            .accessibilityValue(isOptionsExpanded ? "dépliées" : "repliées")
+            .padding(.horizontal, PanelMetrics.rowInset)
+
+            if isOptionsExpanded {
+                optionRows
+                    .padding(.horizontal, PanelMetrics.margin)
+                    .padding(.vertical, 4)
+                    .transition(.opacity)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var optionRows: some View {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Text("Source").shadMuted()
+                Text("Source").font(.system(size: 12))
                 Spacer(minLength: 4)
                 Menu {
                     Picker("Source", selection: sourceSelection) {
@@ -311,46 +439,42 @@ struct MenuBarPanelContent: View {
                     .labelsHidden()
                 } label: {
                     Text(state.selectedSource.label)
-                        .font(Theme.Font.small)
+                        .font(.system(size: 12))
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 .help("Pendant une diffusion, changer de source la relance.")
             }
 
-            HStack(spacing: 8) {
-                Text("Couper le son du Mac").shadMuted()
-                Spacer(minLength: 4)
-                ShadSwitch(isOn: $state.muteLocalOutput)
-                    .accessibilityLabel("Couper le son du Mac")
-            }
-            .disabled(state.selectedSource.tapMode == nil)
-            .opacity(state.selectedSource.tapMode == nil ? 0.5 : 1)
-            .help(
-                "Ne s'applique qu'à la capture du son système ou d'une application. "
-                    + "Pendant une diffusion, le changer la relance."
-            )
-        }
-        .padding(contentPadding)
-    }
-
-    /// Visible à partir de deux lieux : avec un seul, il n'y aurait rien à choisir.
-    @ViewBuilder
-    private var listeningPlacePicker: some View {
-        let places = state.roomLayout.listeners
-        if places.count >= 2, let active = state.roomLayout.listener {
-            HStack(spacing: 8) {
-                Text("Écoute").shadMuted()
-                Spacer(minLength: 4)
-                ShadTabs(
-                    selection: Binding(
-                        get: { active.id },
-                        set: { state.selectListeningPlace(id: $0) }
-                    ),
-                    items: places.map { ($0.id, $0.name.isEmpty ? $0.kind.label : $0.name) }
+            PanelOptionToggle(title: "Couper le son du Mac", isOn: $state.muteLocalOutput)
+                .disabled(state.selectedSource.tapMode == nil)
+                .help(
+                    "Ne s'applique qu'à la capture du son système ou d'une application. "
+                        + "Pendant une diffusion, le changer la relance."
                 )
+
+            PanelOptionToggle(
+                title: "Démarrer à l'ouverture de session",
+                isOn: Binding(
+                    get: { loginItem.isOn },
+                    set: { loginItem.setEnabled($0) }
+                )
+            )
+
+            if let message = loginItem.message {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(message)
+                        .font(.system(size: 11))
+                        .foregroundStyle(PanelPalette.warningText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if loginItem.needsApproval {
+                        Spacer(minLength: 0)
+                        Button("Ouvrir…") { loginItem.openSystemSettings() }
+                            .buttonStyle(.link)
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                }
             }
-            .help("Recale les enceintes pour ce lieu, sans couper le son.")
         }
     }
 
@@ -366,98 +490,13 @@ struct MenuBarPanelContent: View {
     // MARK: - Pied
 
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text("Démarrer à l'ouverture de session").shadMuted()
-                Spacer(minLength: 4)
-                ShadSwitch(
-                    isOn: Binding(
-                        get: { loginItem.isOn },
-                        set: { loginItem.setEnabled($0) }
-                    )
-                )
-                .accessibilityLabel("Démarrer à l'ouverture de session")
-            }
-            if let message = loginItem.message {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(message)
-                        .font(Theme.Font.tiny)
-                        .foregroundStyle(Theme.warning)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if loginItem.needsApproval {
-                        Spacer(minLength: 0)
-                        Button("Ouvrir") { loginItem.openSystemSettings() }
-                            .buttonStyle(.plain)
-                            .font(Theme.Font.tiny.weight(.medium))
-                            .foregroundStyle(Theme.info)
-                    }
-                }
-            }
-            HStack(spacing: 8) {
-                Button {
-                    actions.openMainWindow()
-                } label: {
-                    Label("Plan et réglages", systemImage: "macwindow")
-                }
-                .shadButton(.outline, size: .small)
-                Spacer()
-                Button("Quitter", action: actions.quit)
-                    .shadButton(.ghost, size: .small)
-            }
+        VStack(alignment: .leading, spacing: 0) {
+            Button("Plan et réglages…", action: actions.openMainWindow)
+            Button("Quitter", action: actions.quit)
         }
-        .padding(contentPadding)
-    }
-}
-
-/// Une enceinte dans le panneau : on coche, et ça joue dessus.
-private struct SpeakerRow: View {
-    @Bindable var output: OutputState
-
-    /// Aligne messages et curseur sur le nom, sous la case et la pastille.
-    private let textInset: CGFloat = 31
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Button {
-                output.isEnabled.toggle()
-            } label: {
-                HStack(spacing: 8) {
-                    ShadCheckboxMark(isOn: output.isEnabled)
-                    OutputStatusDot(state: output.connection)
-                    Text(output.displayName)
-                        .font(Theme.Font.medium)
-                        .foregroundStyle(output.isEnabled ? Theme.foreground : Theme.mutedForeground)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Diffuser vers \(output.displayName)")
-            .accessibilityValue(output.isEnabled ? "cochée" : "décochée")
-
-            if let line = output.statusLine {
-                OutputStatusMessage(text: line.text, tone: line.tone)
-                    .padding(.leading, textInset)
-            }
-
-            if output.isEnabled {
-                HStack(spacing: 8) {
-                    ShadSlider(
-                        value: $output.trimDB, range: BridgeSettings.Limits.trimDB, step: 0.5,
-                        isCompact: true
-                    )
-                    .accessibilityLabel("Volume de \(output.displayName)")
-                    Text(String(format: "%+.1f dB", output.trimDB))
-                        .font(Theme.Font.tiny.monospacedDigit())
-                        .foregroundStyle(Theme.mutedForeground)
-                        .frame(width: 48, alignment: .trailing)
-                }
-                .padding(.leading, textInset)
-                .help("Correction de volume de cette enceinte, en plus du volume master")
-            }
-        }
+        .buttonStyle(PanelMenuRowStyle())
+        .padding(.horizontal, PanelMetrics.rowInset)
+        .padding(.vertical, 4)
     }
 }
 

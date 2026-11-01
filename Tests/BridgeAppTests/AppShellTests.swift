@@ -447,13 +447,46 @@ struct BridgeStatusSummaryTests {
         #expect(result.title == "Plus aucune enceinte")
     }
 
-    /// Une barre monochrome : si deux états partageaient un symbole, seule la couleur les
-    /// distinguerait, et elle n'y passe pas.
-    @Test("Chaque état a son symbole, et ce symbole existe sur ce système")
-    func symbols() {
-        let names = MenuBarStatus.allCases.map(\.symbolName)
-        #expect(Set(names).count == names.count)
-        for name in names + Self.panelSymbols {
+    /// Une barre monochrome : si deux états partageaient une forme, seule la couleur les
+    /// distinguerait, et elle n'y passe pas. On compare les pixels plutôt que les chemins : c'est
+    /// ce que l'œil reçoit qui compte.
+    @Test("Chaque état a son glyphe, et ces glyphes diffèrent vraiment une fois rendus")
+    func glyphs() throws {
+        let bitmaps = try MenuBarStatus.allCases.map { status -> [UInt8] in
+            let image = MenuBarGlyphImage.image(for: status.glyph)
+            #expect(image.isTemplate)
+            #expect(image.size == BridgeGlyph.canvas)
+            return try Self.alphaChannel(of: image)
+        }
+        for (index, bitmap) in bitmaps.enumerated() {
+            #expect(bitmap.contains { $0 > 0 }, "glyphe vide : \(MenuBarStatus.allCases[index])")
+            for other in bitmaps[(index + 1)...] { #expect(bitmap != other) }
+        }
+    }
+
+    private static func alphaChannel(of image: NSImage) throws -> [UInt8] {
+        let size = 40
+        let rep = try #require(
+            NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size, bitsPerSample: 8,
+                samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                bytesPerRow: 0, bitsPerPixel: 0
+            )
+        )
+        let context = try #require(NSGraphicsContext(bitmapImageRep: rep))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        image.draw(in: CGRect(x: 0, y: 0, width: size, height: size))
+        NSGraphicsContext.restoreGraphicsState()
+        return (0..<size * size).compactMap { index in
+            rep.colorAt(x: index % size, y: index / size).map { UInt8($0.alphaComponent * 255) }
+        }
+    }
+
+    /// Un `Image(systemName:)` au nom inconnu n'affiche rien, sans la moindre erreur.
+    @Test("Tous les symboles système du panneau existent sur ce système")
+    func panelSymbolsExist() {
+        for name in Self.panelSymbols + SpeakerSymbol.all {
             #expect(
                 NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil,
                 "symbole inconnu : \(name)"
@@ -461,12 +494,45 @@ struct BridgeStatusSummaryTests {
         }
     }
 
-    /// Un `Image(systemName:)` au nom inconnu n'affiche rien, sans la moindre erreur.
     private static let panelSymbols = [
-        "play.fill", "stop.fill", "arrow.clockwise", "antenna.radiowaves.left.and.right",
-        "hifispeaker", "speaker.slash.fill", "speaker.wave.2.fill", "macwindow", "checkmark",
+        "play.fill", "stop.fill", "arrow.clockwise", "hifispeaker", "speaker.slash.fill",
+        "speaker.wave.3.fill", "checkmark", "waveform", "chevron.right",
         "info.circle.fill", "exclamationmark.circle.fill", "exclamationmark.triangle.fill",
     ]
+
+    @Test("Le symbole d'une enceinte suit le nom, puis ce que le protocole laisse supposer")
+    func speakerSymbols() {
+        func symbol(
+            _ name: String, _ proto: OutputProtocol, _ unavailability: OutputUnavailability? = nil
+        ) -> String {
+            SpeakerSymbol.name(displayName: name, proto: proto, unavailability: unavailability)
+        }
+        #expect(symbol("Salon", .airplay2) == "homepod.fill")
+        #expect(symbol("HomePod de Baptiste", .raop) == "homepod.fill")
+        #expect(symbol("Geneva", .raop) == "hifispeaker.fill")
+        #expect(symbol("Apple TV Salon", .raop, .pairingRequired) == "appletv.fill")
+        #expect(symbol("Salle de bain", .airplay2, .pairingRequired) == "appletv.fill")
+        #expect(symbol("Enceinte inconnue", .raop) == "hifispeaker.fill")
+    }
+
+    @Test("Le panneau montre d'abord ce qui peut jouer, sans toucher à l'ordre du reste")
+    func speakerOrder() {
+        func output(_ name: String, _ unavailability: OutputUnavailability? = nil) -> OutputState {
+            OutputState(
+                id: name, displayName: name, host: "h", port: 1, proto: .raop,
+                unavailability: unavailability
+            )
+        }
+        let apple = output("Apple TV", .pairingRequired)
+        let streamingAnyway = output("Diffuse quand même", .pairingRequired)
+        streamingAnyway.connection = .streaming
+        let list = [apple, output("Geneva"), streamingAnyway, output("Salon")]
+
+        #expect(
+            PanelSpeakerOrder.sorted(list).map(\.displayName)
+                == ["Geneva", "Diffuse quand même", "Salon", "Apple TV"]
+        )
+    }
 }
 
 @Suite("Coquille — source")

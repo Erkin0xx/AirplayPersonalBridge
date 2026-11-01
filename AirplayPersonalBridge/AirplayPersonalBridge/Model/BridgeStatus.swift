@@ -151,7 +151,7 @@ struct StartFailure: Equatable {
 
 /// L'état de l'icône de la barre de menus.
 ///
-/// La barre de menus est monochrome : c'est le **symbole** qui porte la différence, jamais une
+/// La barre de menus est monochrome : c'est la **forme** qui porte la différence, jamais une
 /// couleur.
 enum MenuBarStatus: Equatable, CaseIterable {
     case idle
@@ -159,12 +159,12 @@ enum MenuBarStatus: Equatable, CaseIterable {
     case streaming
     case trouble
 
-    var symbolName: String {
+    var glyph: BridgeGlyph.Variant {
         switch self {
-        case .idle: "airplayaudio"
-        case .connecting: "dot.radiowaves.left.and.right"
-        case .streaming: "airplayaudio.circle.fill"
-        case .trouble: "exclamationmark.triangle.fill"
+        case .idle: .idle
+        case .connecting: .connecting
+        case .streaming: .streaming
+        case .trouble: .trouble
         }
     }
 
