@@ -101,9 +101,9 @@ l'ancien calcul.
    diffusion : elle doit s'aligner.
 3. Le lieu sélectionné compense la distance de chaque enceinte, en plus du réglage manuel. Valeurs du
    plan (distance, compensation) : à table, Geneva 1,86 m et 2,2 ms, HomePod gauche 2,62 m et 0 ms,
-   droit 2,21 m et 1,2 ms ; au canapé, Geneva 3,71 m et 0 ms, HomePod gauche 1,75 m et 5,7 ms, droit
+   droit 2,20 m et 1,2 ms ; au canapé, Geneva 3,71 m et 0 ms, HomePod gauche 1,75 m et 5,7 ms, droit
    2,07 m et 4,8 ms. Ces écarts sont sous le seuil de perception : vérifie par la mesure qu'ils
-   améliorent le calage, et si changer de lieu en pleine diffusion ne produit aucune coupure audible.
+   améliorent le calage, et que changer de lieu en pleine diffusion ne produit aucune coupure audible.
    Si la paire devient une seule session en phase 3, sa compensation est la moyenne des deux HomePod.
 4. Écoute finale par Baptiste, sur une musique avec des attaques nettes. Il dit s'il entend un écho.
 
