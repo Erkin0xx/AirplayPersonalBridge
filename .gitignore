@@ -11,8 +11,7 @@ build/
 .swiftpm/
 # Le .xcodeproj de l'app (jalon 5) est versionné : seuls les réglages propres à
 # l'utilisateur (schémas perso, état des fenêtres, breakpoints) sont écartés.
-*.xcodeproj/xcuserdata/
-*.xcworkspace/xcuserdata/
+xcuserdata/
 DerivedData/
 
 # Artefacts de test audio (dumps de capture, captures réseau)
@@ -23,6 +22,20 @@ DerivedData/
 # Credentials de pairing AirPlay 2 (jalon 3) — ne jamais committer
 credentials/
 *.credentials
+
+# Matériel de signature : il vit sous credentials/signing/, déjà ignoré. Ces motifs rattrapent
+# une copie égarée ailleurs, que le `git add -A` du hook de fin de tour pousserait sur GitHub.
+*.p12
+*.key
+*.pem
+*.keychain
+*.keychain-db
+
+# Claude Code : worktrees d'agents (`git add -A` les ajouterait comme dépôts imbriqués),
+# réglages locaux, et interrupteur du hook de fin de tour.
+.claude/worktrees/
+.claude/settings.local.json
+.claude/skip-auto-commit
 
 # macOS
 .DS_Store

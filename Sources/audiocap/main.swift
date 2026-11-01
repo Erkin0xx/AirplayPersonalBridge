@@ -12,26 +12,11 @@ import Foundation
 // ni micro : c'est le mode qui permet de tester la chaîne avec `swift run`, sans reconstruire le
 // bundle et donc sans révoquer l'autorisation.
 
-/// Sortie du CLI, dupliquée dans un fichier.
-///
-/// Lancé via `open` (indispensable pour que TCC attribue l'autorisation au bundle), le
-/// process n'hérite ni du terminal ni des variables d'environnement : stdout et stderr
-/// partent dans le vide. Le wrapper `./audiocap` lit donc ce fichier à la place.
-enum CLIOutput {
-    static let path = "/tmp/audiocap-output.txt"
-    nonisolated(unsafe) private static var handle: FileHandle? = {
-        FileManager.default.createFile(atPath: path, contents: nil)
-        return FileHandle(forWritingAtPath: path)
-    }()
+/// Sortie du CLI, sur stderr. Le wrapper `./audiocap` la récupère via `open --stderr`
+/// (voir `CLIRuntime`).
+func note(_ text: String) { FileHandle.standardError.write(Data("\(text)\n".utf8)) }
 
-    static func write(_ text: String) {
-        let line = Data("\(text)\n".utf8)
-        FileHandle.standardError.write(line)
-        handle?.write(line)
-    }
-}
-
-func note(_ text: String) { CLIOutput.write(text) }
+CLIRuntime.start()
 
 enum Mode: String {
     case global, app, input, tone
@@ -493,8 +478,8 @@ func runRequestedOutputs(source: BridgeEngine.Source) async throws -> Bool {
 
     let interval = progressInterval(for: duration)
     let deadline = Date().addingTimeInterval(duration)
-    while Date() < deadline {
-        try await Task.sleep(for: .seconds(interval))
+    while Date() < deadline, !CLIInterruption.requested {
+        try await interruptibleSleep(seconds: interval)
         for output in await engine.outputs {
             let statistics = output.statistics
             let residual = output.residualErrorSeconds
@@ -612,7 +597,7 @@ do {
     var meter = LevelMeter()
     let writer = try WAVWriter(url: outputURL, format: format)
     let deadline = Date().addingTimeInterval(duration)
-    while Date() < deadline {
+    while Date() < deadline, !CLIInterruption.requested {
         try await Task.sleep(for: .milliseconds(50))
         try sink.drain(into: writer, meter: &meter)
     }

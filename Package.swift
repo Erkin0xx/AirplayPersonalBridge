@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import PackageDescription
 
 // Structure imposée par le CDC section 11 : une bibliothèque cœur sans aucune dépendance
@@ -7,12 +7,13 @@ import PackageDescription
 let package = Package(
     name: "AirPlayMultiOutput",
     platforms: [
-        // Process Tap (AudioHardwareCreateProcessTap) : macOS 14.2+. Le mode entrée
-        // physique (AVAudioEngine) n'a pas cette contrainte, mais la cible du package
-        // s'aligne sur le plus exigeant des trois modes de capture (CDC 4.2).
-        // SwiftPM ne connaît que les versions majeures/mineures ici : .v14 correspond à
-        // 14.0, d'où l'attribut @available(macOS 14.2) sur ProcessTapCapture lui-même.
-        .macOS(.v15)
+        // macOS 26 : c'est le plancher réel, imposé par libcrypto.a (bouteille Homebrew
+        // compilée pour cette version, liée statiquement plus bas). Annoncer moins ferait
+        // émettre à l'éditeur de liens un avertissement par objet de l'archive, 838 à chaque
+        // lien, pour promettre une compatibilité que le binaire n'a pas.
+        // Valeur à garder alignée sur MACOSX_DEPLOYMENT_TARGET de la cible Xcode et sur
+        // LSMinimumSystemVersion de Resources/audiocap-Info.plist.
+        .macOS(.v26)
     ],
     products: [
         // Le cœur exposé comme bibliothèque, pour que l'app SwiftUI du jalon 5 puisse le
@@ -58,9 +59,14 @@ let package = Package(
         ),
 
         // ChaCha20-Poly1305 AEAD conforme RFC 7539 (grigorig/chachapoly, licence MIT).
+        // Le renommage évite un conflit au lien statique avec libcrypto.a, dont l'objet
+        // poly1305-armv8.o exporte aussi `poly1305_init` (aucun autre symbole en commun,
+        // vérifié par `nm`) : la macro laisse le code vendu intact. Aucun appel Swift ne
+        // passe par ce symbole, seul chachapoly.c s'en sert.
         .target(
             name: "CChachaPoly",
-            path: "Sources/CCrypto/CChachaPoly"
+            path: "Sources/CCrypto/CChachaPoly",
+            cSettings: [.define("poly1305_init", to: "cchachapoly_poly1305_init")]
         ),
 
         // SRP-6a (cocagne/csrp, licence MIT). Seule des quatre à avoir une dépendance
@@ -69,6 +75,13 @@ let package = Package(
         // ce que le CDC 4.4 proscrit — d'où le lien vers l'OpenSSL de Homebrew.
         // Les API SHA*_Init/Update/Final sont dépréciées dans OpenSSL 3 mais toujours
         // fonctionnelles ; l'avertissement est réduit au silence pour garder un build propre.
+        //
+        // Lien STATIQUE, par le chemin complet de l'archive : `-lcrypto` choisirait la
+        // .dylib, et une app liée à /opt/homebrew ne démarre plus après un `brew upgrade`
+        // ou un retrait de Homebrew. OpenSSL reste requis à la compilation, plus à
+        // l'exécution (`scripts/install-app.sh` vérifie avec `otool -L` qu'aucune
+        // référence à /opt/homebrew ne subsiste).
+        //
         .target(
             name: "CSRP",
             path: "Sources/CCrypto/CSRP",
@@ -79,8 +92,7 @@ let package = Package(
                 ])
             ],
             linkerSettings: [
-                .unsafeFlags(["-L/opt/homebrew/opt/openssl@3/lib"]),
-                .linkedLibrary("crypto"),
+                .unsafeFlags(["/opt/homebrew/opt/openssl@3/lib/libcrypto.a"]),
             ]
         ),
 
@@ -102,6 +114,24 @@ let package = Package(
             name: "audiocap",
             dependencies: ["AudioCore"],
             path: "Sources/audiocap"
+        ),
+        // L'app elle-même (plan de la pièce, état, vues), compilée ici à partir des mêmes
+        // fichiers que la cible Xcode : `swift build` vérifie l'interface sans passer par
+        // xcodebuild, et `swift test` couvre sa logique sans lancer l'app. Seul le point
+        // d'entrée `@main` reste propre à Xcode. L'isolation par défaut reproduit le réglage
+        // de la cible Xcode, sans quoi ces fichiers ne compileraient pas de la même façon.
+        .target(
+            name: "BridgeApp",
+            dependencies: ["AudioCore"],
+            path: "AirplayPersonalBridge/AirplayPersonalBridge",
+            exclude: ["Assets.xcassets", "AirplayPersonalBridgeApp.swift"],
+            swiftSettings: [.defaultIsolation(MainActor.self)]
+        ),
+        .testTarget(
+            name: "BridgeAppTests",
+            dependencies: ["BridgeApp", "AudioCore"],
+            path: "Tests/BridgeAppTests",
+            swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
         .testTarget(
             name: "AudioCoreTests",

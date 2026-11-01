@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Construit `audiocap` puis l'empaquette en .app minimal signé ad-hoc.
+# Construit `audiocap` puis l'empaquette en .app minimal, signé avec l'identité stable de
+# scripts/setup-signing.sh, ou en ad-hoc si elle n'a pas encore été créée.
 #
 # Pourquoi un bundle alors que le CDC (section 11) dit que les jalons 1 à 4 se valident au
 # terminal : un exécutable SwiftPM nu n'a ni Info.plist, ni identité de code stable. macOS
@@ -33,12 +34,20 @@ mkdir -p "${APP}/Contents/MacOS"
 cp "${REPO_ROOT}/Resources/audiocap-Info.plist" "${APP}/Contents/Info.plist"
 cp "$BIN" "${APP}/Contents/MacOS/audiocap"
 
-# Signature ad-hoc : suffisante pour que TCC attribue une identité stable au binaire et
-# retienne l'autorisation d'une exécution à l'autre. Une vraie signature Developer ID ne
-# devient nécessaire qu'à la distribution (jalon 5).
-log "Signature ad-hoc..."
-codesign --force --sign - --identifier fr.baptiste.airplaymultioutput.audiocap "$APP"
-codesign --display --verbose=2 "$APP" 2>&1 | grep -E 'Identifier|Signature' || true
+# TCC rattache l'autorisation à l'exigence désignée du binaire. Avec l'identité stable, elle
+# survit à ce rebuild. En ad-hoc, l'exigence est le CDHash : ce rebuild révoque l'autorisation.
+# Signature uniquement via setup-signing.sh : lui seul garantit le déverrouillage du trousseau
+# juste avant, sans lequel codesign ouvrirait une fenêtre de mot de passe.
+SIGNING_SCRIPT="${REPO_ROOT}/scripts/setup-signing.sh"
+if "$SIGNING_SCRIPT" --print-identity >/dev/null; then
+  log "Signature avec l'identité stable..."
+  "$SIGNING_SCRIPT" --codesign --force --identifier fr.baptiste.airplaymultioutput.audiocap "$APP"
+else
+  log "Signature ad-hoc (autorisation à redonner à chaque rebuild ; pour l'éviter : scripts/setup-signing.sh)..."
+  codesign --force --sign - --identifier fr.baptiste.airplaymultioutput.audiocap "$APP"
+fi
+codesign --display --verbose=2 "$APP" 2>&1 | grep -E 'Identifier|Signature|Authority' || true
+codesign --display -r- "$APP" 2>/dev/null | grep '^designated' || true
 
 # Sans cet enregistrement, TCC ne connaît pas l'identifiant du bundle et ne peut lui
 # attribuer aucune autorisation : `tccutil` répond "No such bundle identifier", et la
@@ -48,4 +57,5 @@ LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchSe
 "$LSREGISTER" -f "$APP"
 
 log "Bundle prêt."
-echo "Lancer :  ${APP}/Contents/MacOS/audiocap <durée_s> <sortie.wav>"
+# Par le wrapper, jamais par le binaire interne : celui-ci perdrait l'autorisation TCC.
+echo "Lancer :  ./audiocap <durée_s> <sortie.wav>"
