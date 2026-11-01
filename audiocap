@@ -9,6 +9,16 @@
 # directement depuis le shell n'en hérite pas et le Process Tap ne renvoie que du silence,
 # sans jamais signaler d'erreur. `open` fait passer le lancement par LaunchServices, qui
 # attribue correctement l'identité.
+#
+# Le prix de `open` : le process lancé n'est plus rattaché à ce terminal. Ce script rétablit
+# ce qu'un programme ordinaire aurait tout seul :
+#   - la sortie, affichée au fil de l'eau (`open --stderr`, lue par `tail -f`) ;
+#   - le code de sortie du binaire, que `open -W` ne rend pas (fichier `status`) ;
+#   - Ctrl-C, qui sinon ne tuerait que `open` et laisserait la capture et la diffusion tourner
+#     sans personne pour les arrêter (signal relayé au pid du fichier `pid`).
+#
+# Codes de sortie : ceux du binaire (0 succès, 1 erreur, 2 silence numérique ou mauvais usage,
+# 3 autorisation refusée), 130 après un Ctrl-C, 70 si le binaire meurt sans rendre de code.
 
 set -euo pipefail
 
@@ -20,16 +30,61 @@ if [ ! -d "$APP" ]; then
   exit 1
 fi
 
-# `open` ne relaie ni stdout ni stderr du process lancé. Le CLI écrit donc sa sortie dans
-# un fichier que ce wrapper affiche ensuite, pour rester utilisable au terminal.
-# Chemin fixe, connu du binaire (`AudioCLIOutput.path`) : `open` ne transmet pas non plus
-# les variables d'environnement au process lancé.
-OUT="/tmp/audiocap-output.txt"
-rm -f "$OUT"
+# Dossier privé (mktemp : droits 700, nom imprévisible), jamais un chemin fixe dans /tmp : deux
+# lancements s'y marcheraient dessus, et n'importe quel utilisateur pourrait le préparer d'avance.
+RUN_DIR="$(mktemp -d -t audiocap)"
+OUTPUT="${RUN_DIR}/output.txt"
+: > "$OUTPUT"
 
-# `-W` attend la fin du process ; `--args` transmet les arguments au binaire.
-open -W "$APP" --args "$@"
-status=$?
+TAIL_PID=""
+cleanup() {
+  if [ -n "$TAIL_PID" ]; then
+    kill "$TAIL_PID" 2>/dev/null || true
+    wait "$TAIL_PID" 2>/dev/null || true
+  fi
+  rm -rf "$RUN_DIR"
+}
+trap cleanup EXIT
 
-[ -f "$OUT" ] && cat "$OUT"
-exit $status
+# Relaie un signal au binaire ; le premier demande un arrêt propre, le second le force (voir
+# CLIInterruption). Le pid peut manquer si Ctrl-C arrive pendant le lancement : le second
+# Ctrl-C le trouvera.
+forward_signal() {
+  if [ -f "${RUN_DIR}/pid" ]; then
+    kill -INT "$(cat "${RUN_DIR}/pid")" 2>/dev/null || true
+  fi
+}
+trap forward_signal INT TERM HUP
+
+# Affiche la sortie au fil de l'eau : `open` écrit dans le fichier, pas dans ce terminal.
+tail -f "$OUTPUT" &
+TAIL_PID=$!
+
+# `-W` attend la fin du process, `-n` garantit une instance neuve (sans lui, une instance déjà en
+# cours serait réutilisée en ignorant les arguments), `--args` transmet les arguments au binaire.
+# En arrière-plan : `wait` rend alors la main aux signaux, et un job d'arrière-plan d'un script
+# ignore SIGINT, si bien que Ctrl-C laisse `open` attendre la fin réelle du binaire.
+# Les messages de `open` lui-même sont mis de côté : il se plaint (« Unable to block on
+# application ») dès qu'un binaire se termine avant qu'il ait pu l'observer, ce qui est normal
+# pour `--help`. Ils ne servent que si le lancement a vraiment échoué, voir plus bas.
+open -W -n \
+  --stdout "$OUTPUT" --stderr "$OUTPUT" \
+  --env "AUDIOCAP_RUN_DIR=${RUN_DIR}" --env "AUDIOCAP_WORKING_DIR=${PWD}" \
+  "$APP" --args "$@" 2> "${RUN_DIR}/open-errors.txt" &
+OPEN_PID=$!
+
+# `wait` rend la main à chaque signal reçu, avant la fin de `open` : d'où la boucle. Le statut
+# `|| true` : ni un signal ni un échec de `open` ne doivent interrompre le script à cet endroit.
+while kill -0 "$OPEN_PID" 2>/dev/null; do
+  wait "$OPEN_PID" || true
+done
+
+# Laisse à `tail` le temps d'afficher les dernières lignes avant que cleanup ne l'arrête.
+sleep 0.2
+
+if [ -f "${RUN_DIR}/status" ]; then
+  exit "$(cat "${RUN_DIR}/status")"
+fi
+cat "${RUN_DIR}/open-errors.txt" >&2
+echo "audiocap s'est terminé sans rendre de code de sortie (plantage ? voir Console.app)." >&2
+exit 70

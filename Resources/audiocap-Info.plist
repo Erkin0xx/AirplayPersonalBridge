@@ -14,8 +14,9 @@
 	<string>0.1</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<!-- Aligné sur Package.swift : le binaire est lié avec une cible de déploiement 15.0. -->
 	<key>LSMinimumSystemVersion</key>
-	<string>14.2</string>
+	<string>15.0</string>
 	<!-- Deux bascules de confidentialité distinctes selon le mode de capture (CDC 4.2) :
 	     enregistrement audio système pour les modes Process Tap (global / application),
 	     micro classique pour le mode entrée physique. -->
@@ -23,5 +24,14 @@
 	<string>Capture le son système pour le diffuser vers les enceintes AirPlay.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Capture l'entrée audio physique (ligne/micro) pour la diffuser vers les enceintes AirPlay.</string>
+	<!-- Lancé par `open`, le bundle est responsable de ses accès réseau local, comme l'app :
+	     mêmes déclarations que AirplayPersonalBridge/Info.plist. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Découvre les enceintes AirPlay sur le réseau local et leur envoie le flux audio.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_raop._tcp</string>
+		<string>_airplay._tcp</string>
+	</array>
 </dict>
 </plist>

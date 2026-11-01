@@ -9,6 +9,10 @@ import SwiftUI
 
 @main
 struct AirplayPersonalBridgeApp: App {
+    init() {
+        TerminationSignal.install()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

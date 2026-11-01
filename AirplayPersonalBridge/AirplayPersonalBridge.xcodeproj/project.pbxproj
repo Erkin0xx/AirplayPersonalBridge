@@ -264,6 +264,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "AirPlay Personal Bridge";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Découvre les enceintes AirPlay sur le réseau local et leur envoie le flux audio.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Capture l'entrée audio physique (ligne/micro) pour la diffuser vers les enceintes AirPlay.";
@@ -272,7 +273,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = fr.baptiste.airplaymultioutput.AirplayPersonalBridge;
+				PRODUCT_BUNDLE_IDENTIFIER = fr.baptiste.airplaymultioutput.AirplayPersonalBridge.debug;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -295,6 +296,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "AirPlay Personal Bridge";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Découvre les enceintes AirPlay sur le réseau local et leur envoie le flux audio.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Capture l'entrée audio physique (ligne/micro) pour la diffuser vers les enceintes AirPlay.";

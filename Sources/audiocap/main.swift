@@ -10,26 +10,11 @@ import Foundation
 // À lancer via ./audiocap (wrapper `open`), jamais par le binaire interne : l'autorisation
 // TCC est attribuée au bundle, pas au binaire nu.
 
-/// Sortie du CLI, dupliquée dans un fichier.
-///
-/// Lancé via `open` (indispensable pour que TCC attribue l'autorisation au bundle), le
-/// process n'hérite ni du terminal ni des variables d'environnement : stdout et stderr
-/// partent dans le vide. Le wrapper `./audiocap` lit donc ce fichier à la place.
-enum CLIOutput {
-    static let path = "/tmp/audiocap-output.txt"
-    nonisolated(unsafe) private static var handle: FileHandle? = {
-        FileManager.default.createFile(atPath: path, contents: nil)
-        return FileHandle(forWritingAtPath: path)
-    }()
+/// Sortie du CLI, sur stderr. Le wrapper `./audiocap` la récupère via `open --stderr`
+/// (voir `CLIRuntime`).
+func note(_ text: String) { FileHandle.standardError.write(Data("\(text)\n".utf8)) }
 
-    static func write(_ text: String) {
-        let line = Data("\(text)\n".utf8)
-        FileHandle.standardError.write(line)
-        handle?.write(line)
-    }
-}
-
-func note(_ text: String) { CLIOutput.write(text) }
+CLIRuntime.start()
 
 enum Mode: String {
     case global, app, input
@@ -441,8 +426,8 @@ func streamToRAOP(
 
     let interval = progressInterval(for: duration)
     let deadline = Date().addingTimeInterval(duration)
-    while Date() < deadline {
-        try await Task.sleep(for: .seconds(interval))
+    while Date() < deadline, !CLIInterruption.requested {
+        try await interruptibleSleep(seconds: interval)
         let statistics = await sender.statistics
         let sync = sender.synchronizer.snapshot()
         let residual = sync.residualErrorSeconds.map { String(format: "%+.2f ms", $0 * 1000) }
@@ -519,8 +504,8 @@ func streamToAirPlay2(
 
     let interval = progressInterval(for: duration)
     let deadline = Date().addingTimeInterval(duration)
-    while Date() < deadline {
-        try await Task.sleep(for: .seconds(interval))
+    while Date() < deadline, !CLIInterruption.requested {
+        try await interruptibleSleep(seconds: interval)
         let statistics = await sender.statistics
         let sync = sender.synchronizer.snapshot()
         let residual = sync.residualErrorSeconds.map { String(format: "%+.2f ms", $0 * 1000) }
@@ -733,7 +718,7 @@ do {
 
         let writer = try WAVWriter(url: outputURL, format: format)
         let deadline = Date().addingTimeInterval(duration)
-        while Date() < deadline {
+        while Date() < deadline, !CLIInterruption.requested {
             try await Task.sleep(for: .milliseconds(50))
             try activeSink.drain(into: writer, meter: &meter)
         }
@@ -789,7 +774,7 @@ do {
 
         let writer = try WAVWriter(url: outputURL, format: format)
         let deadline = Date().addingTimeInterval(duration)
-        while Date() < deadline {
+        while Date() < deadline, !CLIInterruption.requested {
             try await Task.sleep(for: .milliseconds(50))
             try activeSink.drain(into: writer, meter: &meter)
         }
