@@ -1,4 +1,5 @@
 import AVFoundation
+import CommonCrypto
 import Foundation
 import Testing
 
@@ -12,32 +13,33 @@ import Testing
 /// erreur d'un bit produit un symptôme diffus (audio bruité, récepteur qui décroche) plutôt
 /// qu'une erreur franche.
 struct ALACEncoderTests {
-    /// Longueur attendue d'une trame non compressée : en-tête de 20 bits, 32 bits par
+    /// Longueur attendue d'une trame non compressée : en-tête de 23 bits, 32 bits par
     /// trame stéréo, marqueur de 3 bits, le tout aligné sur l'octet.
     @Test func trameNonCompresseeALaBonneLongueur() {
         let encoder = ALACEncoder(framesPerPacket: 352, channelCount: 2)
         let samples = [Int16](repeating: 0, count: 352 * 2)
         let frame = encoder.encode(samples, frameCount: 352)
 
-        let bits = 20 + 352 * 2 * 16 + 3
+        let bits = 23 + 352 * 2 * 16 + 3
         #expect(frame.count == (bits + 7) / 8)
     }
 
-    /// L'en-tête doit annoncer une trame non compressée, sans champ de taille explicite.
+    /// L'en-tête doit annoncer une trame stéréo non compressée, sans champ de taille explicite.
     ///
-    /// L'ordre des champs suit le décodeur de shairport-sync (`alac.c`, cas « 2 channels ») :
-    /// 4 bits puis 12 bits d'inutilisé, `hasSize`, `uncompressedBytes` sur 2 bits,
-    /// `isNotCompressed`. Soit **20 bits**, non alignés sur l'octet, d'où la relecture par
-    /// flux de bits.
+    /// L'ordre des champs suit `alac_decode_frame` (`alac.c` de shairport-sync) : 3 bits de
+    /// canaux lus avant le `switch`, puis 4 et 12 bits d'inutilisé, `hasSize`,
+    /// `uncompressedBytes` sur 2 bits, `isNotCompressed`. Soit **23 bits**, non alignés sur
+    /// l'octet, d'où la relecture par flux de bits.
     ///
-    /// Ce test est la contrepartie du défaut trouvé contre le mock : avec un en-tête de
-    /// 11 bits, `isNotCompressed` était lu à 0 par le récepteur, qui partait décoder une
-    /// trame compressée inexistante.
+    /// Ce test est la contrepartie du défaut trouvé contre le mock : sans les 3 bits de canaux,
+    /// le décodeur lit `isNotCompressed` à la place de `hasSize`, puis une taille de 32 bits
+    /// dans les échantillons, et abandonne chaque trame (`Not enough space [...] E2`).
     @Test func enTeteAnnonceUneTrameNonCompressee() {
         let encoder = ALACEncoder(framesPerPacket: 4, channelCount: 2)
         let frame = encoder.encode([Int16](repeating: 0, count: 8), frameCount: 4)
 
         var reader = BitReader(bytes: frame)
+        #expect(reader.read(3) == 1)   // canaux − 1 : stéréo
         #expect(reader.read(4) == 0)   // inutilisé
         #expect(reader.read(12) == 0)  // inutilisé
         #expect(reader.read(1) == 0)   // hasSize : taille par défaut
@@ -56,10 +58,10 @@ struct ALACEncoderTests {
         let samples: [Int16] = [0x1234, 0x5678, -0x7FFF, 0x0102]
         let frame = encoder.encode(samples, frameCount: 2)
 
-        // L'en-tête fait 20 bits : les échantillons ne sont pas alignés sur l'octet.
+        // L'en-tête fait 23 bits : les échantillons ne sont pas alignés sur l'octet.
         // On relit donc le flux de bits plutôt que d'indexer des octets.
         var reader = BitReader(bytes: frame)
-        reader.skip(20)
+        reader.skip(23)
         for expected in samples {
             #expect(reader.read(16) == UInt32(UInt16(bitPattern: expected)))
         }
@@ -84,7 +86,7 @@ struct ALACEncoderTests {
 
         // Vérification directe : tous les échantillons relus doivent être nuls.
         var reader = BitReader(bytes: apres)
-        reader.skip(20)
+        reader.skip(23)
         for _ in 0..<(4 * 2) {
             #expect(reader.read(16) == 0)
         }
@@ -92,6 +94,23 @@ struct ALACEncoderTests {
 }
 
 struct RAOPCryptoTests {
+    /// La clé publique doit être **la** clé des bornes AirPort, à l'octet près.
+    ///
+    /// Une version antérieure portait 67 derniers octets faux. Rien ne le trahit côté sender : la
+    /// clé se charge, chiffre, et le cryptogramme a la bonne taille. Seul le récepteur échoue
+    /// (`oaep decoding error`), puis décode un flux qu'il ne sait pas déchiffrer jusqu'à en mourir.
+    /// L'empreinte est celle du modulus tiré de `super_secret_key` dans `common.c` de
+    /// shairport-sync, par `openssl rsa -noout -modulus`.
+    @Test func laClePubliqueEstCelleDesBornesAirPort() {
+        var digest = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+        RAOPCrypto.modulus.withUnsafeBytes { bytes in
+            _ = CC_SHA256(bytes.baseAddress, CC_LONG(bytes.count), &digest)
+        }
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        #expect(hex == "bcab8f192eb454017f0cad661cb3da4b58ead76d09737eb8ad9dcd9a565791d0")
+        #expect(RAOPCrypto.modulus.count == 256)
+    }
+
     /// La clé de session doit faire 16 octets (AES-128) et l'IV aussi.
     @Test func clesDeSessionALaBonneTaille() throws {
         let crypto = try RAOPCrypto()

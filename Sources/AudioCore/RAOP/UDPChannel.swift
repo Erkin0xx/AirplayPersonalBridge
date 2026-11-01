@@ -21,16 +21,36 @@ public final class UDPChannel: @unchecked Sendable {
     private let log = AudioLog.raop
     private var receiveSource: DispatchSourceRead?
     private let receiveQueue: DispatchQueue
+    /// Ne se vide que lorsque toute source de lecture a fini de s'annuler : fermer le descripteur
+    /// avant serait fermer un fichier que Dispatch surveille encore, ce que sa documentation
+    /// interdit.
+    private let sourcesDrained = DispatchGroup()
 
     /// Destination courante. Connue seulement après la réponse au `SETUP`, qui donne les
     /// ports réellement ouverts par le récepteur.
     private var destination: sockaddr_storage?
     private var destinationLength: socklen_t = 0
     private let lock = NSLock()
+    private var receiveHandler: ((Data, sockaddr_storage) -> Void)?
 
     /// Appelé pour chaque datagramme reçu, sur `receiveQueue`.
     /// Le second paramètre est l'adresse de l'émetteur.
-    public var onReceive: ((Data, sockaddr_storage) -> Void)?
+    ///
+    /// Retiré par ``stop()``. C'est ce qui libère le canal quand ce gestionnaire le retient —
+    /// un répondeur d'horloge capture naturellement le canal sur lequel il répond, et chaque
+    /// session laissait sinon un socket ouvert derrière elle.
+    public var onReceive: ((Data, sockaddr_storage) -> Void)? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return receiveHandler
+        }
+        set {
+            lock.lock()
+            receiveHandler = newValue
+            lock.unlock()
+        }
+    }
 
     /// Ouvre un socket UDP. Un `preferredPort` nul laisse le système choisir.
     ///
@@ -89,7 +109,16 @@ public final class UDPChannel: @unchecked Sendable {
 
     deinit {
         receiveSource?.cancel()
-        close(descriptor)
+        let descriptor = descriptor
+        sourcesDrained.notify(queue: .global(qos: .utility)) {
+            close(descriptor)
+        }
+    }
+
+    /// Vrai si `host` est une adresse IPv4 littérale, seule forme que ce canal sait viser.
+    public static func isIPv4Literal(_ host: String) -> Bool {
+        var address = in_addr()
+        return inet_pton(AF_INET, host, &address) == 1
     }
 
     /// Fixe la destination des envois, d'après les ports renvoyés par le `SETUP`.
@@ -163,6 +192,8 @@ public final class UDPChannel: @unchecked Sendable {
 
     /// Démarre la réception. Chaque datagramme est passé à `onReceive`.
     public func startReceiving() {
+        lock.lock()
+        defer { lock.unlock() }
         guard receiveSource == nil else { return }
         let source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: receiveQueue)
         source.setEventHandler { [weak self] in
@@ -180,13 +211,23 @@ public final class UDPChannel: @unchecked Sendable {
             guard received > 0 else { return }
             self.onReceive?(Data(buffer[0..<received]), sender)
         }
+        sourcesDrained.enter()
+        source.setCancelHandler { [sourcesDrained] in
+            sourcesDrained.leave()
+        }
         source.resume()
         receiveSource = source
     }
 
+    /// Arrête la réception et retire le gestionnaire. Le socket reste utilisable en émission
+    /// jusqu'à ce que le canal soit libéré.
     public func stop() {
-        receiveSource?.cancel()
+        lock.lock()
+        let source = receiveSource
         receiveSource = nil
+        receiveHandler = nil
+        lock.unlock()
+        source?.cancel()
     }
 }
 

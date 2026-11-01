@@ -38,6 +38,11 @@ public final class RAOPResampler: @unchecked Sendable {
         channelCount: AVAudioChannelCount = 2,
         maximumInputFrames: AVAudioFrameCount = 2_048
     ) throws {
+        // Le ring buffer ne transporte que du float32 : un autre format d'entrée serait relu
+        // comme tel sans la moindre erreur, et donnerait du bruit.
+        guard inputFormat.commonFormat == .pcmFormatFloat32 else {
+            throw RAOPResamplerError.unsupportedInputFormat(String(describing: inputFormat))
+        }
         self.inputFormat = inputFormat
         // Entier 16 bits signé, entrelacé, petit-boutiste : c'est ce qu'attend l'encodeur
         // ALAC, et ce que le SDP annonce au récepteur.
@@ -61,6 +66,12 @@ public final class RAOPResampler: @unchecked Sendable {
         // Qualité maximale : la conversion tourne hors temps réel et le coût CPU est
         // négligeable devant le confort d'écoute, qui est l'objet du projet.
         converter.sampleRateConverterQuality = AVAudioQuality.max.rawValue
+        // Sans cela, passer à moins de canaux ne garderait que les premiers au lieu de les
+        // mélanger. L'inverse (mono vers stéréo, cas d'un micro) est vérifié dans
+        // `RAOPResamplerFormatTests`.
+        if channelCount < inputFormat.channelCount {
+            converter.downmix = true
+        }
         self.converter = converter
 
         // Capacité de sortie majorée : un ratio 44,1/48 réduit le nombre de trames, mais la
@@ -172,6 +183,7 @@ public final class RAOPResampler: @unchecked Sendable {
 }
 
 public enum RAOPResamplerError: Error, CustomStringConvertible {
+    case unsupportedInputFormat(String)
     case unsupportedOutputFormat(sampleRate: Double, channels: AVAudioChannelCount)
     case converterUnavailable(from: Double, to: Double)
     case bufferAllocationFailed
@@ -179,6 +191,8 @@ public enum RAOPResamplerError: Error, CustomStringConvertible {
 
     public var description: String {
         switch self {
+        case let .unsupportedInputFormat(format):
+            return "format de capture non pris en charge, float32 attendu : \(format)"
         case let .unsupportedOutputFormat(sampleRate, channels):
             return "format de sortie RAOP impossible à décrire (\(sampleRate) Hz, \(channels) canaux)"
         case let .converterUnavailable(from, to):

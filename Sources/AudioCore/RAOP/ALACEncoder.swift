@@ -27,6 +27,7 @@ import Foundation
 ///
 /// | Champ | Bits | Valeur |
 /// |---|---|---|
+/// | canaux − 1 | 3 | `1` en stéréo |
 /// | inutilisé | 4 | `0` |
 /// | inutilisé | 12 | `0` |
 /// | `hasSize` | 1 | `0` : la trame fait la taille par défaut |
@@ -34,16 +35,17 @@ import Foundation
 /// | `isNotCompressed` | 1 | `1` |
 /// | échantillons | 32/trame | gauche puis droite, 16 bits chacun, gros-boutiste |
 ///
-/// La trame est complétée par `111` (marqueur de fin) puis alignée sur l'octet.
+/// La trame est complétée par `111` (marqueur de fin) puis alignée sur l'octet : 1 412 octets
+/// pour 352 trames stéréo.
 ///
-/// PIÈGE vérifié contre le décodeur de shairport-sync (`alac.c`, cas « 2 channels ») :
-/// l'en-tête fait **20 bits, pas 11**. Le décodeur lit 4 bits puis 12 bits d'inutilisé
-/// avant `hasSize`. Une première version écrivait `channels - 1` sur 3 bits suivis de
-/// 4 bits d'inutilisé, ce que décrivent plusieurs documentations informelles d'ALAC : ces
-/// 3 bits appartiennent en réalité au *tag d'élément* du bitstream ALAC, que RAOP ne
-/// transporte pas. Avec 9 bits manquants, tous les champs suivants sont décalés,
-/// `isNotCompressed` est lu à 0, et le décodeur part dans la branche compressée — d'où des
-/// erreurs « unhandled prediction type » et un récepteur qui finit par s'arrêter.
+/// PIÈGE vérifié contre le décodeur de shairport-sync (`alac_decode_frame`, `alac.c`) : il lit
+/// `channels = readbits(alac, 3)` **avant** son `switch`, puis 4 et 12 bits d'inutilisé. L'en-tête
+/// fait donc **23 bits**. Une version antérieure n'en écrivait que 20, faute d'avoir vu cette
+/// première lecture : tout était décalé de 3 bits, le décodeur prenait le bit `isNotCompressed`
+/// pour `hasSize`, lisait une taille de 32 bits dans les échantillons et abandonnait chaque trame
+/// (`Not enough space [...] E2`). Une trame sans ces 3 bits passe tous les tests qui la relisent
+/// avec les mêmes hypothèses que l'encodeur : c'est le mock qui l'a révélé. Sur la vraie Geneva,
+/// ces trames donnaient un ton continu, ce qui a motivé le passage au PCM (2026-08-11).
 ///
 /// Cette classe n'alloue qu'à l'init et ne connaît aucune destination réseau
 /// (invariant section 12).
@@ -68,7 +70,7 @@ public final class ALACEncoder {
         precondition(channelCount == 2, "RAOP n'est défini ici que pour du stéréo")
         self.framesPerPacket = framesPerPacket
         self.channelCount = channelCount
-        // Borne haute : en-tête (11 bits) + 32 bits par trame + marqueur, arrondi large.
+        // Borne haute : en-tête (23 bits) + 32 bits par trame + marqueur, arrondi large.
         // Allouée une fois ; `encode` n'alloue que la copie renvoyée.
         let capacity = framesPerPacket * channelCount * 2 + 16
         let pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: capacity)
@@ -93,7 +95,8 @@ public final class ALACEncoder {
         )
         var writer = BitWriter(buffer: output)
 
-        // En-tête de 20 bits : voir la note de classe sur les 4 + 12 bits d'inutilisé.
+        // En-tête de 23 bits : voir la note de classe.
+        writer.write(UInt32(channelCount - 1), bits: 3)  // canaux − 1
         writer.write(0, bits: 4)   // inutilisé
         writer.write(0, bits: 12)  // inutilisé
         writer.write(0, bits: 1)   // hasSize : trame de taille par défaut
