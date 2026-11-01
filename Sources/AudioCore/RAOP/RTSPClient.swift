@@ -60,6 +60,23 @@ public actor RTSPClient {
     /// Tampon des octets chiffrés reçus mais pas encore déchiffrables (bloc incomplet).
     private var pendingCiphertext = Data()
 
+    /// Établissement en cours, pour que ``disconnect()`` puisse le réveiller sans attendre
+    /// l'échéance : `.cancelled` n'est plus signalé une fois le gestionnaire retiré.
+    private var pendingConnect: ConnectResumeBox?
+
+    /// Lecture réseau lancée mais pas encore livrée.
+    ///
+    /// Elle survit à l'échéance d'une requête, voir ``receiveChunk(deadline:method:)``.
+    private var outstandingReceive: PendingReceive?
+
+    /// Un échange (requête puis réponse) à la fois, dans l'ordre d'arrivée.
+    ///
+    /// Un acteur ne suffit pas à le garantir : il est **réentrant**, et `send` se suspend entre
+    /// l'émission et la réponse. Deux appels concurrents — un keep-alive et un changement de
+    /// volume, typiquement — se lisaient alors la réponse l'un de l'autre.
+    private var exchangeInProgress = false
+    private var exchangeWaiters: [CheckedContinuation<Void, Never>] = []
+
     public init(host: String, port: UInt16, clientInstance: String? = nil) {
         self.host = host
         self.port = port
@@ -84,26 +101,49 @@ public actor RTSPClient {
         let connection = NWConnection(to: endpoint, using: parameters)
         self.connection = connection
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let box = ConnectResumeBox(continuation: continuation)
-            connection.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    box.succeed()
-                case let .failed(error):
-                    box.fail(RTSPError.connectionFailed(String(describing: error)))
-                case .cancelled:
-                    box.fail(RTSPError.connectionFailed("connexion annulée"))
-                default:
-                    break
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let box = ConnectResumeBox(continuation: continuation)
+                pendingConnect = box
+                connection.stateUpdateHandler = { state in
+                    switch state {
+                    case .ready:
+                        box.succeed()
+                    case let .failed(error):
+                        box.fail(RTSPError.connectionFailed(String(describing: error)))
+                    case .waiting(.posix(.ECONNREFUSED)):
+                        // Un refus ne fait pas passer `NWConnection` en échec : elle se met en
+                        // attente d'un changement de réseau, qui n'arrivera pas. Sans ce cas,
+                        // l'appelant patientait dix secondes pour un refus immédiat, et
+                        // recevait un « délai dépassé » qui n'en dit rien.
+                        //
+                        // Les autres raisons d'attente restent couvertes par l'échéance :
+                        // l'autorisation « réseau local » de macOS, par exemple, se résout
+                        // d'elle-même une fois accordée.
+                        box.fail(RTSPError.connectionFailed(
+                            "connexion refusée, le récepteur n'écoute pas"))
+                    case .cancelled:
+                        box.fail(RTSPError.connectionFailed("connexion annulée"))
+                    default:
+                        break
+                    }
+                }
+                connection.start(queue: .global(qos: .userInitiated))
+                Task {
+                    try? await Task.sleep(for: timeout)
+                    box.fail(RTSPError.connectionFailed("délai d'établissement dépassé"))
                 }
             }
-            connection.start(queue: .global(qos: .userInitiated))
-            Task {
-                try? await Task.sleep(for: timeout)
-                box.fail(RTSPError.connectionFailed("délai d'établissement dépassé"))
-            }
+        } catch {
+            // Un échec ne laisse rien derrière lui : sans cela, un second `connect` se croirait
+            // déjà connecté et rendrait la main sur une connexion morte.
+            pendingConnect = nil
+            connection.stateUpdateHandler = nil
+            connection.cancel()
+            if self.connection === connection { self.connection = nil }
+            throw error
         }
+        pendingConnect = nil
 
         if case let .hostPort(localHost, _) = connection.currentPath?.localEndpoint {
             localAddress = Self.literal(from: localHost)
@@ -146,6 +186,11 @@ public actor RTSPClient {
         connection?.stateUpdateHandler = nil
         connection?.cancel()
         connection = nil
+        // Personne ne doit attendre une échéance pour apprendre que la connexion est fermée.
+        pendingConnect?.fail(RTSPError.connectionFailed("connexion annulée"))
+        pendingConnect = nil
+        outstandingReceive?.finish(.failure(RTSPError.notConnected))
+        outstandingReceive = nil
         pendingData.removeAll(keepingCapacity: false)
         pendingCiphertext.removeAll(keepingCapacity: false)
         controlChannel = nil
@@ -172,6 +217,9 @@ public actor RTSPClient {
         _ request: RTSPRequest,
         timeout: Duration = .seconds(10)
     ) async throws -> RTSPResponse {
+        await beginExchange()
+        defer { endExchange() }
+
         guard let connection else { throw RTSPError.notConnected }
 
         var outgoing = request
@@ -211,7 +259,11 @@ public actor RTSPClient {
             })
         }
 
-        let response = try await readResponse(method: outgoing.method, timeout: timeout)
+        let response = try await readResponse(
+            method: outgoing.method,
+            timeout: timeout,
+            expectedCSeq: outgoing.usesRTSP ? sequenceNumber : nil
+        )
         log.debug("← \(response.statusCode) \(response.reasonPhrase, privacy: .public)")
         guard response.isSuccess else {
             throw RTSPError.unexpectedStatus(
@@ -221,12 +273,42 @@ public actor RTSPClient {
         return response
     }
 
+    private func beginExchange() async {
+        guard exchangeInProgress else {
+            exchangeInProgress = true
+            return
+        }
+        await withCheckedContinuation { exchangeWaiters.append($0) }
+    }
+
+    private func endExchange() {
+        if exchangeWaiters.isEmpty {
+            exchangeInProgress = false
+        } else {
+            exchangeWaiters.removeFirst().resume()
+        }
+    }
+
     /// Lit jusqu'à disposer d'une réponse complète, en conservant le surplus éventuel.
-    private func readResponse(method: String, timeout: Duration) async throws -> RTSPResponse {
+    ///
+    /// - Parameter expectedCSeq: numéro de la requête en cours. Sur le canal chiffré, une réponse
+    ///   portant un numéro **antérieur** est celle d'une requête abandonnée à son échéance : elle
+    ///   est écartée, sans quoi chaque requête suivante lirait la réponse de la précédente. Le
+    ///   canal RAOP en clair garde son appariement par ordre d'arrivée, inchangé.
+    private func readResponse(
+        method: String, timeout: Duration, expectedCSeq: Int?
+    ) async throws -> RTSPResponse {
         let deadline = ContinuousClock.now + timeout
         while true {
             if let (response, consumed) = RTSPResponse.parse(pendingData) {
                 pendingData.removeFirst(consumed)
+                if controlChannel != nil, let expectedCSeq,
+                    let received = response.headers["cseq"].flatMap(Int.init),
+                    received < expectedCSeq
+                {
+                    log.debug("Réponse tardive écartée (CSeq \(received), attendu \(expectedCSeq))")
+                    continue
+                }
                 return response
             }
             guard ContinuousClock.now < deadline else {
@@ -258,30 +340,59 @@ public actor RTSPClient {
     ///
     /// Vérifier le délai seulement **entre** deux lectures, comme le faisait la première
     /// version, ne suffit pas : le contrôle n'y revient jamais.
+    ///
+    /// ## Une échéance n'annule pas la lecture réseau
+    ///
+    /// `NWConnection.receive` n'a pas d'annulation : une lecture lancée reste armée, et elle
+    /// consommera le prochain fragment quoi qu'il arrive. La lecture est donc conservée d'un
+    /// appel à l'autre plutôt que relancée. Une version antérieure en armait une nouvelle à
+    /// chaque requête : le fragment suivant une échéance partait vers une continuation déjà
+    /// reprise et **disparaissait**. Sur le canal chiffré c'est irrécupérable — un bloc perdu
+    /// décale le compteur de nonces, et plus aucun bloc ne se déchiffre jusqu'à la fin de la
+    /// session.
     private func receiveChunk(deadline: ContinuousClock.Instant, method: String) async throws -> Data {
         guard let connection else { throw RTSPError.notConnected }
-        let box = ReceiveResumeBox()
-        return try await withCheckedThrowingContinuation { continuation in
-            box.attach(continuation)
+
+        let receive: PendingReceive
+        if let outstandingReceive {
+            receive = outstandingReceive
+        } else {
+            receive = PendingReceive()
+            outstandingReceive = receive
             connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) {
                 data, _, isComplete, error in
                 if let error {
-                    box.fail(RTSPError.connectionFailed(String(describing: error)))
+                    receive.finish(.failure(RTSPError.connectionFailed(String(describing: error))))
                 } else if let data, !data.isEmpty {
-                    box.succeed(data)
+                    receive.finish(.success(data))
                 } else if isComplete {
-                    box.fail(RTSPError.connectionFailed("flux RTSP fermé"))
+                    receive.finish(.failure(RTSPError.connectionFailed("flux RTSP fermé")))
                 } else {
-                    box.succeed(Data())
+                    receive.finish(.success(Data()))
                 }
             }
-            Task {
-                let remaining = deadline - ContinuousClock.now
-                if remaining > .zero {
-                    try? await Task.sleep(for: remaining)
+        }
+
+        var timer: Task<Void, Never>?
+        defer { timer?.cancel() }
+        do {
+            let chunk = try await withCheckedThrowingContinuation { continuation in
+                receive.wait(continuation)
+                timer = Task {
+                    let remaining = deadline - ContinuousClock.now
+                    if remaining > .zero {
+                        try? await Task.sleep(for: remaining)
+                    }
+                    guard !Task.isCancelled else { return }
+                    receive.expire(RTSPError.timedOut(method: method))
                 }
-                box.fail(RTSPError.timedOut(method: method))
             }
+            if outstandingReceive === receive { outstandingReceive = nil }
+            return chunk
+        } catch {
+            // Échéance : la lecture réseau court toujours, on la garde pour la suite.
+            if receive.isDelivered, outstandingReceive === receive { outstandingReceive = nil }
+            throw error
         }
     }
 
@@ -325,33 +436,61 @@ private final class ConnectResumeBox: @unchecked Sendable {
     }
 }
 
-/// Garantit qu'une continuation de lecture n'est reprise qu'une seule fois.
+/// Une lecture réseau et celui qui l'attend, dissociés.
 ///
-/// Deux chemins peuvent la reprendre en concurrence : le callback de `NWConnection.receive`
-/// et l'échéance de lecture. Reprendre deux fois une `CheckedContinuation` est une erreur
-/// fatale à l'exécution, d'où ce verrou.
-private final class ReceiveResumeBox: @unchecked Sendable {
+/// Trois chemins se croisent ici : le callback de `NWConnection.receive`, l'échéance de la
+/// requête, et une éventuelle requête suivante qui reprend l'attente. Reprendre deux fois une
+/// `CheckedContinuation` est une erreur fatale à l'exécution, d'où ce verrou — et un résultat
+/// arrivé alors que plus personne n'attend est **conservé**, jamais jeté (voir
+/// `RTSPClient.receiveChunk`).
+private final class PendingReceive: @unchecked Sendable {
     private let lock = NSLock()
-    private var continuation: CheckedContinuation<Data, Error>?
+    private var waiter: CheckedContinuation<Data, Error>?
+    private var outcome: Result<Data, Error>?
+    private var delivered = false
 
-    func attach(_ continuation: CheckedContinuation<Data, Error>) {
+    /// Vrai une fois le résultat réseau remis à un appelant : la lecture est alors terminée.
+    var isDelivered: Bool {
         lock.lock()
-        self.continuation = continuation
-        lock.unlock()
+        defer { lock.unlock() }
+        return delivered
     }
 
-    func succeed(_ data: Data) {
+    func wait(_ continuation: CheckedContinuation<Data, Error>) {
         lock.lock()
-        let pending = continuation
-        continuation = nil
+        guard let outcome else {
+            waiter = continuation
+            lock.unlock()
+            return
+        }
+        delivered = true
         lock.unlock()
-        pending?.resume(returning: data)
+        continuation.resume(with: outcome)
     }
 
-    func fail(_ error: Error) {
+    /// Résultat de la lecture réseau. Seul le premier compte.
+    func finish(_ result: Result<Data, Error>) {
         lock.lock()
-        let pending = continuation
-        continuation = nil
+        guard outcome == nil, !delivered else {
+            lock.unlock()
+            return
+        }
+        guard let pending = waiter else {
+            outcome = result
+            lock.unlock()
+            return
+        }
+        waiter = nil
+        delivered = true
+        lock.unlock()
+        pending.resume(with: result)
+    }
+
+    /// L'échéance réveille celui qui attend, sans toucher à la lecture réseau.
+    func expire(_ error: Error) {
+        lock.lock()
+        let pending = waiter
+        waiter = nil
         lock.unlock()
         pending?.resume(throwing: error)
     }
