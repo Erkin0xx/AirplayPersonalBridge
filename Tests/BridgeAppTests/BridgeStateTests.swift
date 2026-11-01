@@ -40,6 +40,25 @@ struct BridgeStateVolumeTests {
     }
 }
 
+@Suite("État — volume au minimum")
+struct BridgeStateMasterMinimumTests {
+    @Test("Master au minimum : silence, même avec un trim positif")
+    func masterMinimumIsSilence() async throws {
+        let harness = BridgeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.left, Devices.right])
+        let right = try #require(harness.output(Devices.rightID))
+        right.trimDB = 1.5
+        harness.state.masterVolumeDB = -60
+
+        let wire = BridgeState.receiverVolume(forGainDB: harness.state.effectiveGainDB(for: right))
+        #expect(wire == -144)
+
+        // Juste au-dessus, le trim compte de nouveau : seul le minimum absolu vaut silence.
+        harness.state.masterVolumeDB = -59
+        #expect(harness.state.effectiveGainDB(for: right) == -57.5)
+    }
+}
+
 @Suite("État — sélection des enceintes")
 struct BridgeStateSelectionTests {
     @Test("Hors diffusion, cocher ne fait que retenir la sélection")

@@ -252,8 +252,12 @@ final class BridgeState {
 
     /// Gain effectif d'une sortie, master et trim confondus. C'est cette valeur, et elle
     /// seule, que le moteur appliquera — la vue n'en calcule aucune autre.
+    ///
+    /// Un master au minimum vaut silence, quel que soit le trim : un trim positif le ferait repartir
+    /// au-dessus du seuil, et −29 dB sur le fil pour un bouton tourné à fond vers la gauche.
     func effectiveGainDB(for output: OutputState) -> Double {
-        isMuted ? Self.silenceDB : min(max(masterVolumeDB + output.trimDB, Self.silenceDB), 0)
+        guard !isMuted, masterVolumeDB > Self.silenceDB else { return Self.silenceDB }
+        return min(max(masterVolumeDB + output.trimDB, Self.silenceDB), 0)
     }
 
     // MARK: - Diffusion
