@@ -21,7 +21,9 @@ struct AirPlay2SocleIntegrationTests {
     @Test("Une session AirPlay 2 complète passe par le client RTSP et s'arrête proprement")
     func fullSession() async throws {
         let host = try #require(ProcessInfo.processInfo.environment["AIRPLAY2_MOCK_HOST"])
-        let txt = BonjourTXTQuery.lookup(fullName: "ApTV-HomePod-Mock._airplay._tcp.local.")
+        let txt = await Task {
+            BonjourTXTQuery.lookup(fullName: "ApTV-HomePod-Mock._airplay._tcp.local.")
+        }.value
         try #require(!txt.isEmpty, "le mock n'est pas annoncé")
 
         let format = try #require(captureFormat())

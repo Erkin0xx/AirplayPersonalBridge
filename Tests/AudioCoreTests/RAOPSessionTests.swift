@@ -67,7 +67,7 @@ struct RAOPSessionTests {
     func genevaWireFormat() async throws {
         let rig = try await makeRig()
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > 10 })
+        #expect(await raopEventually { rig.server.audioPackets.count > 10 })
         await rig.close()
 
         let requests = rig.server.requests
@@ -133,7 +133,7 @@ struct RAOPSessionTests {
     func alacFallback() async throws {
         let rig = try await makeRig(txt: ["et": "0", "cn": "1"])
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { !rig.server.audioPackets.isEmpty })
+        #expect(await raopEventually { !rig.server.audioPackets.isEmpty })
         await rig.close()
 
         let sdp = try #require(rig.server.requests.first?.bodyText)
@@ -155,7 +155,7 @@ struct RAOPSessionTests {
     func audioStream() async throws {
         let rig = try await makeRig()
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > 60 })
+        #expect(await raopEventually { rig.server.audioPackets.count > 60 })
         let packets = rig.server.audioPackets
         await rig.close()
 
@@ -174,12 +174,12 @@ struct RAOPSessionTests {
     func retransmission() async throws {
         let rig = try await makeRig()
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > 30 })
+        #expect(await raopEventually { rig.server.audioPackets.count > 30 })
 
         let sent = rig.server.audioPackets
         let wanted = Array(sent[10..<14])
         try rig.server.requestRetransmission(first: wanted[0].sequence, count: 4)
-        #expect(await eventually(within: .seconds(2)) { rig.server.retransmissions.count == 4 })
+        #expect(await raopEventually(within: .seconds(2)) { rig.server.retransmissions.count == 4 })
 
         let responses = rig.server.retransmissions
         for (response, original) in zip(responses, wanted) {
@@ -199,10 +199,10 @@ struct RAOPSessionTests {
     func retransmissionWhenEncrypted() async throws {
         let rig = try await makeRig(txt: ["et": "1", "cn": "0"])
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > 20 })
+        #expect(await raopEventually { rig.server.audioPackets.count > 20 })
         let original = rig.server.audioPackets[5]
         try rig.server.requestRetransmission(first: original.sequence, count: 1)
-        #expect(await eventually(within: .seconds(2)) { rig.server.retransmissions.count == 1 })
+        #expect(await raopEventually(within: .seconds(2)) { rig.server.retransmissions.count == 1 })
         #expect(rig.server.retransmissions.first.map { Data($0.dropFirst(4)) } == original.raw)
         await rig.close()
     }
@@ -211,12 +211,12 @@ struct RAOPSessionTests {
     func unknownPacketIsNotAnswered() async throws {
         let rig = try await makeRig()
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > 5 })
+        #expect(await raopEventually { rig.server.audioPackets.count > 5 })
         let first = try #require(rig.server.audioPackets.first)
 
         // Bien avant le premier paquet de la session.
         try rig.server.requestRetransmission(first: first.sequence &- 100, count: 3)
-        #expect(await eventually { await rig.sender.statistics.retransmitMisses == 3 })
+        #expect(await raopEventually { await rig.sender.statistics.retransmitMisses == 3 })
         #expect(rig.server.retransmissions.isEmpty)
         await rig.close()
     }
@@ -225,11 +225,11 @@ struct RAOPSessionTests {
     func hugeRequestIsBounded() async throws {
         let rig = try await makeRig()
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > 5 })
+        #expect(await raopEventually { rig.server.audioPackets.count > 5 })
         let first = try #require(rig.server.audioPackets.first)
 
         try rig.server.requestRetransmission(first: first.sequence, count: UInt16.max)
-        #expect(await eventually { await rig.sender.statistics.retransmitRequests == 1 })
+        #expect(await raopEventually { await rig.sender.statistics.retransmitRequests == 1 })
         let statistics = await rig.sender.statistics
         // Les paquets déjà émis, et rien de plus : l'historique ne contient que 512 cases.
         let accounted = statistics.packetsRetransmitted + statistics.retransmitMisses
@@ -242,7 +242,7 @@ struct RAOPSessionTests {
     func burstDoesNotDelayAudio() async throws {
         let rig = try await makeRig()
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > 200 })
+        #expect(await raopEventually { rig.server.audioPackets.count > 200 })
 
         let before = rig.server.audioPackets.count
         let first = try #require(rig.server.audioPackets.first?.sequence)
@@ -278,20 +278,20 @@ struct RAOPSessionTests {
     func reconnectionClearsHistory() async throws {
         let rig = try await makeRig()
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > 20 })
+        #expect(await raopEventually { rig.server.audioPackets.count > 20 })
         let oldPacket = rig.server.audioPackets[5]
 
         rig.server.closeConnections()
-        #expect(await eventually(within: .seconds(5)) {
+        #expect(await raopEventually(within: .seconds(5)) {
             await rig.sender.statistics.reconnections == 1 && rig.server.requests.filter {
                 $0.method == "RECORD"
             }.count == 2
         })
         let packetsBefore = rig.server.audioPackets.count
-        #expect(await eventually { rig.server.audioPackets.count > packetsBefore + 5 })
+        #expect(await raopEventually { rig.server.audioPackets.count > packetsBefore + 5 })
 
         try rig.server.requestRetransmission(first: oldPacket.sequence, count: 1)
-        #expect(await eventually { await rig.sender.statistics.retransmitMisses == 1 })
+        #expect(await raopEventually { await rig.sender.statistics.retransmitMisses == 1 })
         #expect(rig.server.retransmissions.isEmpty)
         await rig.close()
     }
@@ -302,7 +302,7 @@ struct RAOPSessionTests {
         // Un port de destination nul fait échouer chaque `sendto`, sans toucher au canal de contrôle.
         rig.server.announcedAudioPort = 0
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { await rig.sender.statistics.errors >= 10 })
+        #expect(await raopEventually { await rig.sender.statistics.errors >= 10 })
 
         let record = try #require(rig.server.requests.first { $0.method == "RECORD" })
         let info = try #require(record.headers["rtp-info"])
@@ -310,7 +310,7 @@ struct RAOPSessionTests {
             info.split(separator: ";").first.flatMap { UInt16($0.dropFirst("seq=".count)) }
         )
         try rig.server.requestRetransmission(first: firstSequence, count: 5)
-        #expect(await eventually(within: .seconds(2)) { rig.server.retransmissions.count == 5 })
+        #expect(await raopEventually(within: .seconds(2)) { rig.server.retransmissions.count == 5 })
 
         // Sans avancer, tous les échecs auraient écrasé la même case : seul le dernier resterait,
         // et l'audio suivant partirait sous le même numéro et la même estampille.
@@ -331,7 +331,7 @@ struct RAOPSessionTests {
     func keepAlive() async throws {
         let rig = try await makeRig(keepAliveInterval: .milliseconds(100))
         try await rig.sender.start(volume: -20)
-        #expect(await eventually {
+        #expect(await raopEventually {
             rig.server.requests.filter { $0.uri == "/feedback" }.count >= 4
         })
         let statistics = await rig.sender.statistics
@@ -352,7 +352,7 @@ struct RAOPSessionTests {
             keepAliveInterval: .milliseconds(50)
         )
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > 50 })
+        #expect(await raopEventually { rig.server.audioPackets.count > 50 })
 
         #expect(rig.server.requests.filter { $0.uri == "/feedback" }.count == 1)
         let state = await rig.sender.state
@@ -385,7 +385,7 @@ struct RAOPSessionTests {
             keepAliveInterval: .milliseconds(50)
         )
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { await rig.sender.statistics.keepAliveFailures >= 3 })
+        #expect(await raopEventually { await rig.sender.statistics.keepAliveFailures >= 3 })
 
         let state = await rig.sender.state
         let statistics = await rig.sender.statistics
@@ -429,11 +429,11 @@ struct RAOPSessionTests {
     func busyAtReconnectIsNotHammered() async throws {
         let rig = try await makeRig()
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > 5 })
+        #expect(await raopEventually { rig.server.audioPackets.count > 5 })
 
         rig.server.setScript { _ in .status(453, "Not Enough Bandwidth") }
         rig.server.closeConnections()
-        #expect(await eventually { await rig.sender.state == .reconnecting })
+        #expect(await raopEventually { await rig.sender.state == .reconnecting })
 
         // Première tentative à +1 s, puis pas avant 10 s.
         try await Task.sleep(for: .milliseconds(2_500))
@@ -470,11 +470,11 @@ struct RAOPSessionTests {
 
         let rig = try await makeRig()
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > 5 })
+        #expect(await raopEventually { rig.server.audioPackets.count > 5 })
 
         rig.server.setScript { _ in .status(401, "Unauthorized") }
         rig.server.closeConnections()
-        #expect(await eventually { await rig.sender.state == .failed })
+        #expect(await raopEventually { await rig.sender.state == .failed })
         let message = await rig.sender.lastErrorMessage
         #expect(message?.contains("mot de passe") == true)
 
@@ -488,11 +488,11 @@ struct RAOPSessionTests {
     func finTriggersReconnection() async throws {
         let rig = try await makeRig()
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > 10 })
+        #expect(await raopEventually { rig.server.audioPackets.count > 10 })
         let before = rig.server.audioPackets.count
 
         rig.server.closeConnections()
-        #expect(await eventually(within: .seconds(5)) {
+        #expect(await raopEventually(within: .seconds(5)) {
             await rig.sender.state == .streaming
                 && rig.server.audioPackets.count > before + 10
                 && rig.server.requests.filter { $0.method == "RECORD" }.count == 2
@@ -510,7 +510,7 @@ struct RAOPSessionTests {
         let rig = try await makeRig(reconnects: false)
         try await rig.sender.start(volume: -20)
         rig.server.closeConnections()
-        #expect(await eventually { await rig.sender.state == .failed })
+        #expect(await raopEventually { await rig.sender.state == .failed })
         await rig.close()
     }
 
@@ -520,7 +520,7 @@ struct RAOPSessionTests {
             script: { $0.method == "SET_PARAMETER" ? .status(400, "Bad Request") : .standard }
         )
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > 10 })
+        #expect(await raopEventually { rig.server.audioPackets.count > 10 })
         let state = await rig.sender.state
         #expect(state == .streaming)
         await rig.close()
@@ -530,13 +530,13 @@ struct RAOPSessionTests {
     func volumeDuringReconnectionIsApplied() async throws {
         let rig = try await makeRig()
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > 5 })
+        #expect(await raopEventually { rig.server.audioPackets.count > 5 })
 
         rig.server.closeConnections()
-        #expect(await eventually { await rig.sender.state == .reconnecting })
+        #expect(await raopEventually { await rig.sender.state == .reconnecting })
         try await rig.sender.setVolume(-7)
 
-        #expect(await eventually(within: .seconds(5)) {
+        #expect(await raopEventually(within: .seconds(5)) {
             rig.server.requests.last { $0.method == "SET_PARAMETER" }?.bodyText.contains("-7.0")
                 == true
         })
@@ -570,7 +570,7 @@ struct RAOPSessionTests {
 
         // Une marge, parce que les autres suites tournent en parallèle. Le répondeur d'horloge
         // retenait son canal : 50 sessions laissaient 50 sockets ouverts.
-        #expect(await eventually(within: .seconds(3)) { openDescriptors() < baseline + 25 })
+        #expect(await raopEventually(within: .seconds(3)) { openDescriptors() < baseline + 25 })
     }
 
     @Test("Un récepteur sans IPv4 est refusé avant tout échange")
@@ -591,7 +591,7 @@ struct RAOPSessionTests {
     func stopDuringNegotiation() async throws {
         let rig = try await makeRig(script: { _ in .silence })
         let starting = Task { try await rig.sender.start(volume: -20) }
-        #expect(await eventually { !rig.server.requests.isEmpty })
+        #expect(await raopEventually { !rig.server.requests.isEmpty })
 
         let start = ContinuousClock.now
         await rig.sender.stop()
@@ -612,7 +612,7 @@ struct RAOPSessionTests {
     func cancellationDuringNegotiation() async throws {
         let rig = try await makeRig(script: { _ in .silence })
         let starting = Task { try await rig.sender.start(volume: -20) }
-        #expect(await eventually { !rig.server.requests.isEmpty })
+        #expect(await raopEventually { !rig.server.requests.isEmpty })
 
         let start = ContinuousClock.now
         starting.cancel()
@@ -628,7 +628,7 @@ struct RAOPSessionTests {
     func stopFromCancelledTaskStillTearsDown() async throws {
         let rig = try await makeRig()
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > 5 })
+        #expect(await raopEventually { rig.server.audioPackets.count > 5 })
 
         // C'est exactement ainsi que `BridgeEngine` arrête une sortie.
         let sender = rig.sender
@@ -658,12 +658,12 @@ struct RAOPSessionTests {
     func stopDuringLongLoss() async throws {
         let rig = try await makeRig()
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > 5 })
+        #expect(await raopEventually { rig.server.audioPackets.count > 5 })
 
         rig.server.refuseNewConnections()
-        #expect(await eventually { await rig.sender.state == .reconnecting })
+        #expect(await raopEventually { await rig.sender.state == .reconnecting })
         // Laisse passer une tentative, pour s'arrêter en plein milieu du repli.
-        #expect(await eventually(within: .seconds(4)) {
+        #expect(await raopEventually(within: .seconds(4)) {
             await rig.sender.statistics.reconnectionAttempts >= 1
         })
 
@@ -680,12 +680,12 @@ struct RAOPSessionTests {
     func restartAfterStop() async throws {
         let rig = try await makeRig()
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > 5 })
+        #expect(await raopEventually { rig.server.audioPackets.count > 5 })
         await rig.sender.stop()
 
         let before = rig.server.audioPackets.count
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > before + 5 })
+        #expect(await raopEventually { rig.server.audioPackets.count > before + 5 })
         #expect(rig.server.audioPackets[before].marker)
         await rig.close()
     }
@@ -699,7 +699,7 @@ struct RAOPSessionTests {
             let rig = try await makeRig(hz: 40, amplitude: 0.05)
             await rig.sender.setBassBoost(decibels: boost)
             try await rig.sender.start(volume: -20)
-            #expect(await eventually { rig.server.audioPackets.count > 110 })
+            #expect(await raopEventually { rig.server.audioPackets.count > 110 })
             let settled = rig.server.audioPackets.suffix(50)
             await rig.close()
             return rms(settled.flatMap { samples(ofL16: $0.payload) })
@@ -715,21 +715,21 @@ struct RAOPSessionTests {
     func bassBoostIsLiveAndSurvivesReconnection() async throws {
         let rig = try await makeRig(hz: 40, amplitude: 0.05)
         try await rig.sender.start(volume: -20)
-        #expect(await eventually { rig.server.audioPackets.count > 80 })
+        #expect(await raopEventually { rig.server.audioPackets.count > 80 })
         let flat = rms(rig.server.audioPackets.suffix(40).flatMap { samples(ofL16: $0.payload) })
 
         await rig.sender.setBassBoost(decibels: 12)
         let before = rig.server.audioPackets.count
-        #expect(await eventually { rig.server.audioPackets.count > before + 60 })
+        #expect(await raopEventually { rig.server.audioPackets.count > before + 60 })
         let boosted = rms(rig.server.audioPackets.suffix(40).flatMap { samples(ofL16: $0.payload) })
         #expect(20 * log10(boosted / flat) > 9)
 
         rig.server.closeConnections()
-        #expect(await eventually(within: .seconds(5)) {
+        #expect(await raopEventually(within: .seconds(5)) {
             rig.server.requests.filter { $0.method == "RECORD" }.count == 2
         })
         let resumed = rig.server.audioPackets.count
-        #expect(await eventually { rig.server.audioPackets.count > resumed + 60 })
+        #expect(await raopEventually { rig.server.audioPackets.count > resumed + 60 })
         let after = rms(rig.server.audioPackets.suffix(40).flatMap { samples(ofL16: $0.payload) })
         #expect(20 * log10(after / flat) > 9)
 
@@ -774,7 +774,7 @@ struct RAOPSessionTests {
         )
         let rig = try await makeRig(format: format, hz: 1_000, amplitude: 0.25)
         try await rig.sender.start(volume: -20)
-        #expect(await eventually(within: .seconds(4)) { rig.server.audioPackets.count > 110 })
+        #expect(await raopEventually(within: .seconds(4)) { rig.server.audioPackets.count > 110 })
         let settled = Array(rig.server.audioPackets.suffix(80))
         await rig.close()
 

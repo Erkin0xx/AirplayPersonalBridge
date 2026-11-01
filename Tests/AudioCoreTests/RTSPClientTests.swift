@@ -178,7 +178,7 @@ struct RTSPClientTests {
 
         // `NWConnection` reste `.ready` sur un FIN tant qu'aucune lecture ne le constate : avant
         // la lecture permanente, ce signal ne venait jamais.
-        #expect(await eventually(within: .seconds(3)) { lost.value })
+        #expect(await raopEventually(within: .seconds(3)) { lost.value })
 
         await #expect(throws: RTSPError.self) {
             try await client.send(RTSPRequest(method: "OPTIONS", uri: "*"), timeout: .seconds(1))
@@ -475,7 +475,7 @@ struct UDPChannelTests {
         receiver.startReceiving()
 
         try sender.send(Data([1, 2, 3]))
-        #expect(await eventually(within: .seconds(2)) { count.value == 1 })
+        #expect(await raopEventually(within: .seconds(2)) { count.value == 1 })
 
         receiver.stop()
         try sender.send(Data([4]))

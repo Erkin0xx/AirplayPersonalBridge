@@ -457,7 +457,7 @@ final class ToneFeeder: @unchecked Sendable {
 }
 
 /// Attend qu'une condition devienne vraie. Rend faux à l'échéance, pour un échec lisible.
-func eventually(
+func raopEventually(
     within limit: Duration = .seconds(5),
     _ condition: @Sendable () async -> Bool
 ) async -> Bool {
