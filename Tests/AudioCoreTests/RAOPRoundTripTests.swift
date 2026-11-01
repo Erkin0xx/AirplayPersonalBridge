@@ -30,7 +30,7 @@ struct RAOPRoundTripTests {
         let crypto = try RAOPCrypto()
 
         var payload = encoder.encode(pcm, frameCount: frames)
-        #expect(payload.count == 1_411, "trame ALAC de 352 trames stéréo non compressées")
+        #expect(payload.count == 1_412, "trame ALAC de 352 trames stéréo non compressées")
         try crypto.encryptAudioInPlace(&payload)
 
         // Ce que ferait le récepteur.
@@ -127,13 +127,14 @@ struct RAOPRoundTripTests {
     /// Décode une trame ALAC **non compressée**. Renvoie `nil` si la trame annonce un autre
     /// mode, ce que l'encodeur du projet ne produit jamais.
     ///
-    /// L'ordre de lecture reproduit **exactement** celui du décodeur de shairport-sync
-    /// (`alac.c`, cas « 2 channels ») : 4 bits, puis 12 bits d'inutilisé, puis `hasSize`,
-    /// `uncompressedBytes` et `isNotCompressed`. C'est ce qui rend ce test capable
-    /// d'attraper un en-tête mal dimensionné — un décodeur de test qui reprendrait les
-    /// hypothèses de l'encodeur validerait n'importe quoi.
+    /// L'ordre de lecture reproduit **exactement** celui de `alac_decode_frame` (`alac.c` de
+    /// shairport-sync) : 3 bits de canaux, 4 puis 12 bits d'inutilisé, puis `hasSize`,
+    /// `uncompressedBytes` et `isNotCompressed`. C'est ce qui rend ce test capable d'attraper un
+    /// en-tête mal dimensionné — un décodeur de test qui reprendrait les hypothèses de
+    /// l'encodeur validerait n'importe quoi, et c'est arrivé : voir `ALACEncoder`.
     private static func decodeUncompressedALAC(_ frame: [UInt8], channels: Int) -> [Int16]? {
         var reader = TestBitReader(bytes: frame)
+        guard reader.read(3) == UInt32(channels - 1) else { return nil }
         _ = reader.read(4)                       // inutilisé
         _ = reader.read(12)                      // inutilisé
         let hasSize = reader.read(1)
@@ -143,7 +144,7 @@ struct RAOPRoundTripTests {
 
         // La trame se termine par le marqueur de 3 bits puis l'alignement : le nombre
         // d'échantillons se déduit des bits restants.
-        let sampleBits = (frame.count * 8) - 20 - 3
+        let sampleBits = (frame.count * 8) - 23 - 3
         let count = sampleBits / 16
         var samples: [Int16] = []
         samples.reserveCapacity(count)
