@@ -76,6 +76,13 @@ changements n'ont jamais vu le vrai matériel, et chacun peut casser ce qui marc
   d'événements refuse ; IPv4 pour le `SETUP` ; volume sous −30 traduit en −144.
 - **Découverte** : adresse sans connexion TCP, et combien de temps un appareil éteint reste listé.
 
+Ce qui peut couper un son qui marchait, à regarder en premier : côté Geneva, le code de réponse au
+`/feedback` et son délai, un FIN ou RST reçu sur RTSP (il déclenche désormais une renégociation, alors
+que l'ancien code l'ignorait), des sondes keepalive sans ACK, et les paires `0x55`/`0xD6`. Côté HomePod
+le RTSP est chiffré et illisible en capture : lis les journaux (`log show`, sous-système du projet).
+Les HomePod annoncent-ils une `Audio-Latency` au `RECORD` ? Rien n'a jamais lu cette réponse : si
+c'est le cas, elle compte dans le calage de la phase 2.
+
 Si un ajout est refusé ou gêne : rends-le conditionnel plutôt que de le retirer d'office, en suivant
 ce que fait pyatv (`tools/pyatv313/`).
 
@@ -84,8 +91,13 @@ ce que fait pyatv (`tools/pyatv313/`).
 **Le calcul d'ancrage a changé sans jamais avoir été entendu** : l'instant annoncé valait
 « maintenant + 1 s − négociation », il vaut « maintenant » (commit c41b2ac). Le commit 0cf8a31
 compense la latence annoncée par la Geneva (4 096 trames) et n'a pas été confirmé à l'oreille non
-plus. Si un écart apparaît, le point d'entrée est `timelineSkew` : y retirer `dropped` rétablit
-l'ancien calcul.
+plus, d'autant que l'ancien écart suivait surtout la différence de durée de négociation. Si un écart
+apparaît, commence par la capture : sur chaque paquet `0xD4`, NTP − instant de la trame doit valoir
+≈ −0,1 s sur la Geneva et ≈ 0 sur les HomePod, champ 3 − champ 1 = 88 200, et ΔNTP = Δrtp / 44 100,
+sans saut. **Ne reviens pas à l'ancien calcul en retirant seulement `dropped` de `timelineSkew`** :
+l'horloge démarre désormais à la capture (commit 4a10071), et un HomePod négocié après 5 s annoncerait
+alors un instant passé de 4 s, ses trames arrivant trop tard. Ce retour exige aussi de ramener l'origine
+de l'horloge au premier sender.
 
 1. **Mesure acoustique, pour ne pas dépendre de la seule oreille.** Un sous-agent écrit une source
    de clics (salve courte toutes les 2 s, drapeau CLI à côté de `--tone`) et un script qui repère
