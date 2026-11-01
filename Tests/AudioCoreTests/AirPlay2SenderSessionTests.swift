@@ -335,7 +335,7 @@ struct AirPlay2SenderSessionTests {
         defer { harness.feeder.stop() }
 
         await harness.sender.setKeepAlivePolicy(
-            .init(interval: .milliseconds(10), timeout: .milliseconds(100), silenceThreshold: 2))
+            .init(interval: .milliseconds(10), timeout: .milliseconds(100)))
         try await harness.sender.start(volume: -20)
         try await Task.sleep(for: .seconds(1))
 
@@ -344,9 +344,9 @@ struct AirPlay2SenderSessionTests {
         await harness.sender.stop()
     }
 
-    /// Un récepteur qui répondait puis se tait est parti sans fermer : c'est le seul indice d'un
-    /// appareil éteint, l'UDP ne signalant rien.
-    @Test("Un récepteur qui cesse de répondre est réputé perdu")
+    /// Trois silences valaient perte, donc `TEARDOWN` et nouveau pair-setup, sur un son qui marchait
+    /// peut-être très bien. Chez pyatv ce message est « best effort », et la perte réelle a son signal.
+    @Test("Un récepteur qui répondait puis se tait n'est pas condamné pour autant")
     func feedbackSilence() async throws {
         let receiver = try await makeReceiver()
         defer { receiver.stop() }
@@ -357,10 +357,46 @@ struct AirPlay2SenderSessionTests {
         defer { harness.feeder.stop() }
 
         await harness.sender.setKeepAlivePolicy(
-            .init(interval: .milliseconds(50), timeout: .milliseconds(150), silenceThreshold: 2))
+            .init(interval: .milliseconds(20), timeout: .milliseconds(100)))
         try await harness.sender.start(volume: -20)
 
-        #expect(await waitUntil { receiver.sessionCount >= 2 })
+        #expect(await waitUntil { await harness.sender.statistics.feedbackUnanswered >= 5 })
+        #expect(await harness.sender.statistics.feedbackSent >= 1)
+        #expect(await harness.sender.state == .streaming)
+        #expect(await harness.sender.statistics.reconnections == 0)
+        #expect(receiver.sessionCount == 1)
+        #expect(!receiver.requests(inSession: 0).contains { $0.method == "TEARDOWN" })
+        #expect(receiver.requests().filter { $0.uri == "/pair-setup" }.count == 2)
+        // Le relevé remonte jusqu'à l'affichage, et le son n'a pas cessé de partir.
+        #expect(await harness.sender.currentOutputStatistics().feedbackUnanswered ?? 0 >= 5)
+        let packets = receiver.audioPackets(inSession: 0).count
+        #expect(await waitUntil { receiver.audioPackets(inSession: 0).count > packets })
+        await harness.sender.stop()
+    }
+
+    /// Une coupure de courant ne se simule pas sur la boucle locale, le noyau y acquitte les sondes :
+    /// le keepalive lui-même se vérifie sur ses réglages (`RTSPClientTests.tcpOptions`). Ce test en
+    /// couvre la suite, ce que devient sa fin de connexion une fois le silence devenu inoffensif.
+    @Test("Une rupture de la connexion reste une perte, même après des feedback sans réponse")
+    func ruptureApresSilence() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        receiver.script = { request, occurrence in
+            request.uri == "/feedback" && occurrence >= 1 ? .silent : .normal
+        }
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        await harness.sender.setKeepAlivePolicy(
+            .init(interval: .milliseconds(20), timeout: .milliseconds(100)))
+        try await harness.sender.start(volume: -20)
+        #expect(await waitUntil { await harness.sender.statistics.feedbackUnanswered >= 3 })
+
+        receiver.dropControlConnection(inSession: 0)
+
+        #expect(await waitUntil { receiver.audioPackets(inSession: 1).count >= 5 })
+        #expect(await harness.sender.state == .streaming)
+        #expect(await harness.sender.statistics.reconnections == 1)
         await harness.sender.stop()
     }
 

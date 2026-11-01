@@ -263,9 +263,9 @@ public actor AirPlay2Session {
     /// aussi la cadence d'iOS. Sur le fil c'est sa requête à l'identique : RTSP/1.0, `CSeq`, et les
     /// trois en-têtes d'identification du contrôleur, sans `Content-Length`.
     ///
-    /// - Parameter timeout: court, car ce n'est pas seulement une politesse. C'est le seul
-    ///   échange régulier sur la connexion RTSP : il révèle une connexion fermée côté récepteur,
-    ///   que rien d'autre ne lirait, et l'absence de réponse d'un récepteur éteint sans adieu.
+    /// - Parameter timeout: court, pour ne pas retenir les autres requêtes, qui passent après lui sur
+    ///   la même connexion. Une réponse qui ne vient pas n'a pas d'autre conséquence : voir
+    ///   `AirPlay2Sender.runKeepAlive`.
     public func sendFeedback(timeout: Duration = .seconds(4)) async throws {
         let request = RTSPRequest(
             method: "POST",

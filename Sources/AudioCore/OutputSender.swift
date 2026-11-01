@@ -69,6 +69,9 @@ public struct OutputStatistics: Sendable, Equatable {
     public var retransmitRequests: Int?
     /// AirPlay 2 : `audioBufferSize` brut, unité non établie (voir `AirPlay2Statistics`).
     public var receiverBufferSize: Int?
+    /// AirPlay 2 : `POST /feedback` restés sans réponse dans leur délai. Sans conséquence, c'est un
+    /// simple relevé.
+    public var feedbackUnanswered: Int?
     /// AirPlay 2 : canal d'événements ouvert.
     public var eventChannelConnected: Bool?
 
@@ -146,6 +149,7 @@ extension AirPlay2Sender: OutputSender {
         result.retransmitRequests = source.retransmitRequests
         result.receiverBufferSize = source.receiverBufferSize
         result.eventChannelConnected = source.eventChannelConnected
+        result.feedbackUnanswered = source.feedbackUnanswered
         return result
     }
 }

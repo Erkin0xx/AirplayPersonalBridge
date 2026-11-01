@@ -125,11 +125,9 @@ public actor AirPlay2Sender {
         var interval: Duration = .seconds(2)
         /// Échéance d'un `feedback`.
         var timeout: Duration = .seconds(4)
-        /// `feedback` consécutifs sans réponse au-delà desquels le récepteur est réputé parti.
-        var silenceThreshold = 3
     }
 
-    /// Permet aux tests de vérifier la détection de silence sans attendre vingt secondes.
+    /// Permet aux tests d'observer le maintien de session sans attendre plusieurs secondes.
     func setKeepAlivePolicy(_ policy: KeepAlivePolicy) {
         keepAlivePolicy = policy
     }
@@ -628,38 +626,32 @@ public actor AirPlay2Sender {
     /// `POST /feedback` périodique, sans jamais entrelacer avec une autre requête : `RTSPClient`
     /// sérialise ses échanges.
     ///
-    /// Trois issues, et une seule condamne la session :
+    /// Trois issues, et seule la rupture condamne la session. pyatv traite ce message en « best
+    /// effort » et n'en tire aucune conclusion : un message facultatif ne doit pas pouvoir couper un
+    /// son qui marche.
     ///
-    /// - **refus** (`4xx`, `5xx`) : le récepteur a répondu, il est donc là. pyatv traite ce
-    ///   message en « best effort », et un keep-alive refusé ne vaut pas une panne ;
-    /// - **rupture** de la connexion : perte franche. C'est même le seul moyen de voir une
-    ///   fermeture côté récepteur, personne ne lisant cette connexion entre deux requêtes ;
-    /// - **silence** : plusieurs échéances de suite, chez un récepteur qui répondait jusque-là,
-    ///   signifient qu'il est parti sans fermer — éteint, ou sorti du réseau. Un récepteur qui
-    ///   n'a *jamais* répondu n'est pas pénalisé : il ne gère peut-être pas ce message.
+    /// - **refus** (`4xx`, `5xx`) : le récepteur a répondu, il est donc là ;
+    /// - **silence** : compté et journalisé, rien de plus. Un récepteur éteint sans adieu n'y échappe
+    ///   pas pour autant : le keepalive TCP de `RTSPClient` (5 s, puis 3 sondes à 2 s) coupe la
+    ///   connexion en 11 s au pire, le compte courant depuis la dernière réception et non depuis le
+    ///   dernier envoi, si bien qu'un `/feedback` en souffrance ne le retarde pas. C'est alors
+    ///   ``RTSPClient/onConnectionLost(_:)`` qui signale la perte, branché à la négociation.
+    /// - **rupture** de la connexion : perte franche, que le signal ci-dessus aura souvent déjà vue.
     private func runKeepAlive(session: AirPlay2Session, generation: Int) async {
         let policy = keepAlivePolicy
-        var hasAnswered = false
-        var silentRounds = 0
 
         while !Task.isCancelled && generation == sessionGeneration {
             do {
                 try await session.sendFeedback(timeout: policy.timeout)
-                hasAnswered = true
-                silentRounds = 0
                 statistics.feedbackSent += 1
             } catch RTSPError.unexpectedStatus(_, let code, _) {
-                hasAnswered = true
-                silentRounds = 0
                 statistics.feedbackRefused += 1
                 log.debug("feedback refusé (\(code)), sans conséquence")
             } catch RTSPError.timedOut {
-                silentRounds += 1
-                log.debug("feedback sans réponse (\(silentRounds) de suite)")
-                if hasAnswered && silentRounds >= policy.silenceThreshold {
-                    noteSessionLost(generation: generation, reason: "le récepteur ne répond plus")
-                    return
-                }
+                statistics.feedbackUnanswered += 1
+                log.info(
+                    "feedback sans réponse (\(self.statistics.feedbackUnanswered) en tout), sans conséquence"
+                )
             } catch {
                 guard !Task.isCancelled else { return }
                 noteSessionLost(
@@ -958,9 +950,11 @@ public struct AirPlay2Statistics: Sendable {
     /// Paquets renvoyés en réponse, et paquets demandés qu'on n'avait plus.
     public var retransmittedPackets = 0
     public var retransmitMisses = 0
-    /// `POST /feedback` acceptés et refusés par le récepteur.
+    /// `POST /feedback` acceptés, refusés, et restés sans réponse dans leur délai. Ces derniers ne
+    /// sont qu'un relevé : voir `runKeepAlive`.
     public var feedbackSent = 0
     public var feedbackRefused = 0
+    public var feedbackUnanswered = 0
     /// Requêtes du récepteur reçues sur le canal d'événements, déchiffrées et acquittées.
     public var eventMessages = 0
     /// Dernier échec, sous sa forme affichable. Survit à une reconnexion réussie : il dit ce qui
