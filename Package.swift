@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import PackageDescription
 
 // Structure imposée par le CDC section 11 : une bibliothèque cœur sans aucune dépendance
@@ -102,6 +102,22 @@ let package = Package(
             name: "audiocap",
             dependencies: ["AudioCore"],
             path: "Sources/audiocap"
+        ),
+        // Logique de l'app (plan de la pièce, état de l'interface), compilée ici à partir des
+        // mêmes fichiers que la cible Xcode, pour que `swift test` la couvre sans lancer
+        // l'app. L'isolation par défaut reproduit le réglage de la cible Xcode : sinon ces
+        // fichiers ne compileraient pas de la même façon des deux côtés.
+        .target(
+            name: "BridgeAppModel",
+            dependencies: ["AudioCore"],
+            path: "AirplayPersonalBridge/AirplayPersonalBridge/Model",
+            swiftSettings: [.defaultIsolation(MainActor.self)]
+        ),
+        .testTarget(
+            name: "BridgeAppModelTests",
+            dependencies: ["BridgeAppModel", "AudioCore"],
+            path: "Tests/BridgeAppModelTests",
+            swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
         .testTarget(
             name: "AudioCoreTests",

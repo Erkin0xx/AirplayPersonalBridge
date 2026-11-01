@@ -11,8 +11,7 @@ build/
 .swiftpm/
 # Le .xcodeproj de l'app (jalon 5) est versionné : seuls les réglages propres à
 # l'utilisateur (schémas perso, état des fenêtres, breakpoints) sont écartés.
-*.xcodeproj/xcuserdata/
-*.xcworkspace/xcuserdata/
+xcuserdata/
 DerivedData/
 
 # Artefacts de test audio (dumps de capture, captures réseau)
