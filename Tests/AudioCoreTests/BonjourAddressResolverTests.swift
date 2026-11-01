@@ -462,9 +462,16 @@ private final class CountingListener: @unchecked Sendable {
 
     var accepted: Int { lock.withLock { count } }
 
+    /// Sur un port **hors de la plage éphémère** (`LateTCPPort`), et pas sur `.any`. Le noyau peut
+    /// redonner à une écoute le numéro qui servait de port source à la connexion témoin du test
+    /// précédent. Or, dans un même process, une `NWConnection` vers ce numéro reprend comme source
+    /// le port de l'ancienne écoute : elle retombe sur le `TIME_WAIT` de cette ancienne connexion,
+    /// et `connectx` rend `EADDRINUSE` pendant 30 s, `restart()` n'y changeant rien. Le témoin
+    /// échouait alors, par séries, dès que d'autres process consommaient des ports en parallèle.
     init() async throws {
         let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        let free = NWEndpoint.Port(rawValue: try LateTCPPort().port) ?? .any
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: free)
         listener = try NWListener(using: parameters)
         listener.newConnectionHandler = { [weak self] connection in
             self?.lock.withLock { self?.count += 1 }
@@ -474,8 +481,14 @@ private final class CountingListener: @unchecked Sendable {
         port = await withCheckedContinuation { continuation in
             let once = OneShotRelease()
             listener.stateUpdateHandler = { [listener] state in
-                if case .ready = state, once.fire() {
-                    continuation.resume(returning: listener.port?.rawValue ?? 0)
+                switch state {
+                case .ready:
+                    if once.fire() { continuation.resume(returning: listener.port?.rawValue ?? 0) }
+                case .failed:
+                    // Un port pris entre-temps : 0 fait échouer le test, là où il resterait bloqué.
+                    if once.fire() { continuation.resume(returning: 0) }
+                default:
+                    break
                 }
             }
             listener.start(queue: queue)
