@@ -40,9 +40,10 @@ import Foundation
 /// invraisemblables sont donc rejetés et comptés à part — annoncer un décalage de 3 995 s
 /// parce que l'estampille valait zéro serait bien pire que d'annoncer « pas de mesure ».
 ///
-/// Le flux de requêtes reste, lui, un **signal de vie** du récepteur, indépendamment de son
-/// contenu : leur interruption prolongée est le premier indice d'une perte de session, et
-/// c'est ce qui déclenche la reconnexion automatique.
+/// Le flux de requêtes **n'est pas un critère de perte de session** : shairport-sync interroge
+/// densément pendant ~35 s puis se tait alors que tout va bien (`CLAUDE.md`, jalon 4). Son âge
+/// est exposé pour le diagnostic, rien de plus ; le signal franc reste la rupture de la
+/// connexion RTSP côté RAOP et celle du canal d'événements côté AirPlay 2.
 public final class TimingEstimator: @unchecked Sendable {
     /// Nombre d'écarts conservés. À une requête toutes les 3 s, 32 échantillons couvrent
     /// environ 1 min 30 — assez pour lisser la gigue sans traîner une mesure périmée.
@@ -51,9 +52,8 @@ public final class TimingEstimator: @unchecked Sendable {
     /// Écart maximal admis entre l'horloge du récepteur et la nôtre, en secondes.
     ///
     /// Une heure : largement au-delà de toute dérive ou de tout décalage de fuseau plausible
-    /// entre deux appareils d'un même réseau local, et largement en deçà des 2 209 s… pardon,
-    /// des 2 208 988 800 s que produit une estampille laissée à zéro. Le tri est donc franc,
-    /// sans zone grise.
+    /// entre deux appareils d'un même réseau local, et largement en deçà des 2 208 988 800 s
+    /// que produit une estampille laissée à zéro. Le tri est donc franc, sans zone grise.
     private static let plausibleOffsetLimit: TimeInterval = 3_600
 
     private var deltas: [TimeInterval] = []
@@ -117,8 +117,7 @@ public struct TimingSnapshot: Sendable, Equatable {
     public let offsetSeconds: TimeInterval?
     /// Étendue des écarts sur la fenêtre : gigue du canal de timing.
     public let spreadSeconds: TimeInterval?
-    /// Nombre total de requêtes reçues depuis le début de la session. C'est **ce compteur**,
-    /// et non le décalage, qui fait office de signal de vie.
+    /// Nombre total de requêtes reçues depuis le début de la session.
     public let sampleCount: Int
     /// Requêtes reçues sans estampille exploitable (typiquement à zéro). Un compteur égal à
     /// `sampleCount` signifie que ce récepteur n'horodate pas ses requêtes : la mesure de

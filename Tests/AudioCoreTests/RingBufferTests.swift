@@ -85,6 +85,55 @@ struct RingBufferTests {
         #expect(ring.droppedFrames == 8)
     }
 
+    /// La graduation compte tout ce que la capture a produit, refus compris : c'est la condition
+    /// pour que deux tampons d'une même capture parlent de la même trame.
+    @Test func refusedFramesAdvanceTheTimeline() {
+        let ring = AudioRingBuffer(capacityFrames: 4, channelCount: channels)
+        var input = [Float](repeating: 2, count: 10 * channels)
+        _ = input.withUnsafeBufferPointer { ring.write(from: $0.baseAddress!, frameCount: 10) }
+        #expect(ring.totalFramesWritten == 10)
+        #expect(ring.droppedFrames == 6)
+
+        var output = [Float](repeating: 0, count: 4 * channels)
+        _ = output.withUnsafeMutableBufferPointer { ring.read(into: $0.baseAddress!, frameCount: 4) }
+        // Tampon vide : le consommateur est exactement au bout de ce qui a été produit.
+        #expect(ring.totalFramesRead == 10)
+        #expect(ring.availableFrames == 0)
+    }
+
+    @Test func timelineStartsWhereTheRingWasPlaced() {
+        let ring = AudioRingBuffer(capacityFrames: 8, channelCount: channels)
+        ring.placeOnTimeline(at: 1_000)
+        #expect(ring.totalFramesWritten == 1_000)
+        #expect(ring.totalFramesRead == 1_000)
+
+        var input = [Float](repeating: 2, count: 3 * channels)
+        _ = input.withUnsafeBufferPointer { ring.write(from: $0.baseAddress!, frameCount: 3) }
+        #expect(ring.totalFramesWritten == 1_003)
+        #expect(ring.totalFramesRead == 1_000)
+        #expect(ring.availableFrames == 3)
+    }
+
+    @Test func resetForReuseForgetsThePreviousLife() {
+        let ring = AudioRingBuffer(capacityFrames: 4, channelCount: channels)
+        ring.placeOnTimeline(at: 500)
+        var input = [Float](repeating: 2, count: 10 * channels)
+        _ = input.withUnsafeBufferPointer { ring.write(from: $0.baseAddress!, frameCount: 10) }
+
+        ring.resetForReuse()
+        #expect(ring.availableFrames == 0)
+        #expect(ring.droppedFrames == 0)
+        #expect(ring.totalFramesWritten == 0)
+        #expect(ring.totalFramesRead == 0)
+
+        // Et il se réemploie : l'écriture repart du début, sans reliquat.
+        var fresh: [Float] = [7, 8]
+        _ = fresh.withUnsafeBufferPointer { ring.write(from: $0.baseAddress!, frameCount: 1) }
+        var output = [Float](repeating: 0, count: channels)
+        _ = output.withUnsafeMutableBufferPointer { ring.read(into: $0.baseAddress!, frameCount: 1) }
+        #expect(output == [7, 8])
+    }
+
     @Test func partialReadLeavesRemainderAvailable() {
         let ring = AudioRingBuffer(capacityFrames: 16, channelCount: channels)
         var input = [Float](repeating: 3, count: 10 * channels)

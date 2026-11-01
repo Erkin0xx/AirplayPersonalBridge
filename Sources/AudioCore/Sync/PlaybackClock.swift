@@ -81,6 +81,25 @@ public final class SharedPlaybackClock: PlaybackClockProtocol, @unchecked Sendab
         )
     }
 
+    /// Reporte l'origine de l'horloge après une interruption de la capture.
+    ///
+    /// La graduation ne compte que les trames produites : quand la capture s'interrompt, elle
+    /// s'immobilise pendant que l'heure avance, et les instants annoncés prennent autant de
+    /// retard sur le réel. Passé les 2 s de marge, les trames arriveraient après l'heure qu'on
+    /// leur annonce et le récepteur les jetterait. Cela survient à la reconstruction du tap, et
+    /// surtout avant le premier son : le tap ne livre aucun bloc tant que rien ne joue
+    /// (`kAudioAggregateDeviceTapAutoStartKey`).
+    ///
+    /// **Ce n'est pas le réancrage que ``startIfNeeded(framesAlreadyWritten:)`` interdit** :
+    /// l'horloge étant commune, le report vaut pour toutes les sorties au même instant et ne
+    /// change rien à leur alignement mutuel.
+    public func shiftOrigin(bySeconds seconds: TimeInterval) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let epoch = captureEpoch else { return }
+        captureEpoch = epoch + seconds
+    }
+
     public var hasStarted: Bool {
         lock.lock()
         defer { lock.unlock() }

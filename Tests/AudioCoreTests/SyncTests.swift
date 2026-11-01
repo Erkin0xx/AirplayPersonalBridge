@@ -440,6 +440,110 @@ struct OutputSynchronizerTests {
         #expect(abs((delayed - neutral) - 0.030) < 1e-6)
     }
 
+    /// Positif = plus tard : c'est ce que promettent l'interface (curseur -200…+200 ms) et l'aide
+    /// du CLI. Le sens inverse doit marcher aussi, c'est le seul moyen d'avancer une sortie en
+    /// retard.
+    @Test("Un décalage négatif avance l'ancrage")
+    func negativeManualOffsetAdvancesAnchor() {
+        let synchronizer = OutputSynchronizer(
+            label: "test", clock: makeClock(), outputSampleRate: outputRate
+        )
+        synchronizer.beginStreaming(atCaptureFrame: 0)
+        guard let neutral = synchronizer.syncAnchorUnixTime(latencyFrames: 88_200) else {
+            Issue.record("ancrage indisponible")
+            return
+        }
+        synchronizer.manualOffsetSeconds = -0.2
+        guard let advanced = synchronizer.syncAnchorUnixTime(latencyFrames: 88_200) else {
+            Issue.record("ancrage indisponible")
+            return
+        }
+        #expect(abs((advanced - neutral) + 0.2) < 1e-6)
+    }
+
+    /// Le calcul introduit au commit 0cf8a31, sans test jusqu'ici. La Geneva annonce
+    /// `Audio-Latency: 4096` : pour qu'elle restitue en même temps qu'un récepteur qui n'annonce
+    /// rien, son ancrage doit partir 92,88 ms plus tôt.
+    @Test("La latence interne annoncée par le récepteur avance l'ancrage d'autant")
+    func receiverLatencyAdvancesAnchor() {
+        let clock = makeClock()
+        let geneva = OutputSynchronizer(label: "g", clock: clock, outputSampleRate: outputRate)
+        let homePod = OutputSynchronizer(label: "h", clock: clock, outputSampleRate: outputRate)
+        geneva.beginStreaming(atCaptureFrame: 48_000)
+        homePod.beginStreaming(atCaptureFrame: 48_000)
+        geneva.declaredReceiverLatencyFrames = 4_096
+
+        guard let genevaAnchor = geneva.syncAnchorUnixTime(latencyFrames: 88_200),
+            let homePodAnchor = homePod.syncAnchorUnixTime(latencyFrames: 88_200)
+        else {
+            Issue.record("ancrage indisponible")
+            return
+        }
+        #expect(abs((homePodAnchor - genevaAnchor) - 4_096.0 / outputRate) < 1e-6)
+        #expect(abs((homePodAnchor - genevaAnchor) - 0.09288) < 1e-4)
+    }
+
+    /// Reconnexion : la session repart sur des tampons neufs, avec un délai de pipeline qui n'a
+    /// plus rien à voir avec l'ancien. Garder l'ancienne consigne déclencherait une correction
+    /// d'un écart qui n'est pas de la dérive.
+    @Test("Une nouvelle session réobserve sa consigne")
+    func reconnectionResettsTarget() {
+        let synchronizer = OutputSynchronizer(
+            label: "test", clock: makeClock(), outputSampleRate: outputRate
+        )
+        synchronizer.beginStreaming(atCaptureFrame: 0)
+        settle(synchronizer, delayFrames: 4_410)
+        #expect(synchronizer.snapshot().targetDelaySeconds != nil)
+
+        synchronizer.beginStreaming(atCaptureFrame: 1_000_000)
+        let snapshot = synchronizer.snapshot()
+        #expect(snapshot.targetDelaySeconds == nil)
+        #expect(snapshot.residualErrorSeconds == nil)
+        #expect(synchronizer.observe(pipelineDelayOutputFrames: 20_000) == .none)
+        #expect(synchronizer.currentCaptureFrame == 1_000_000)
+    }
+
+    @Test("Le réglage manuel et la latence annoncée survivent à une reconnexion")
+    func reconnectionKeepsSettings() {
+        let synchronizer = OutputSynchronizer(
+            label: "test", clock: makeClock(), outputSampleRate: outputRate
+        )
+        synchronizer.manualOffsetSeconds = 0.05
+        synchronizer.declaredReceiverLatencyFrames = 4_096
+        synchronizer.beginStreaming(atCaptureFrame: 0)
+        synchronizer.beginStreaming(atCaptureFrame: 48_000)
+        #expect(synchronizer.manualOffsetSeconds == 0.05)
+        #expect(synchronizer.declaredReceiverLatencyFrames == 4_096)
+    }
+
+    /// Un sender bloqué plus d'une seconde fait déborder son tampon : le flux saute en avant sur
+    /// la graduation sans que le compte des trames consommées le voie.
+    @Test("Un débordement en cours de session déplace la position du flux")
+    func refusedFramesMoveStreamPosition() {
+        let synchronizer = OutputSynchronizer(
+            label: "test", clock: makeClock(), outputSampleRate: outputRate
+        )
+        synchronizer.beginStreaming(atCaptureFrame: 96_000)
+        // Ce qui précède la session est déjà compté dans la position de départ.
+        synchronizer.noteRefusedCaptureFrames(total: 200_000)
+        #expect(synchronizer.currentCaptureFrame == 96_000)
+
+        synchronizer.noteRefusedCaptureFrames(total: 248_000)
+        #expect(synchronizer.currentCaptureFrame == 144_000)
+        guard let anchor = synchronizer.syncAnchorUnixTime(latencyFrames: 0) else {
+            Issue.record("ancrage indisponible")
+            return
+        }
+        // L'ancrage suit : la trame n° 144 000, soit 3 s après l'origine, plus les 2 s de marge.
+        #expect(abs(anchor - (1_000_000 + 3 + 2)) < 1e-6)
+
+        // Une reconnexion repart d'une position juste : le trou est oublié avec elle.
+        synchronizer.beginStreaming(atCaptureFrame: 500_000)
+        #expect(synchronizer.currentCaptureFrame == 500_000)
+        synchronizer.noteRefusedCaptureFrames(total: 300_000)
+        #expect(synchronizer.currentCaptureFrame == 500_000)
+    }
+
     /// Une correction déplace le flux d'une trame : le compte doit le refléter, sinon
     /// l'ancrage dériverait d'une trame à chaque correction.
     @Test("Une trame corrigée déplace la position du flux d'une trame")
@@ -508,5 +612,123 @@ struct CaptureTimelineTests {
         #expect(first.totalFramesRead == 512)
         #expect(second.totalFramesRead == 0)
         #expect(second.availableFrames == 1_536)
+    }
+
+    /// **La démonstration du défaut.** Un tampon sans consommateur déborde en une seconde, soit
+    /// avant la fin de toute négociation. Quand seules les trames acceptées avançaient le
+    /// compteur, chaque sortie s'arrêtait à 48 000 quelle que soit la durée de sa négociation :
+    /// la graduation n'était plus commune, contrairement à ce que tout le calage suppose.
+    @Test("Le débordement d'un pipeline ne le fait pas sortir de la graduation")
+    func overflowDoesNotLeaveTheTimeline() {
+        let quick = AudioRingBuffer(capacityFrames: 48_000, channelCount: 2)
+        let slow = AudioRingBuffer(capacityFrames: 48_000, channelCount: 2)
+        var scratch = [Float](repeating: 0, count: 96_000)
+        let block = [Float](repeating: 0.25, count: 96_000)
+
+        func capture(seconds: Int) {
+            block.withUnsafeBufferPointer { buffer in
+                guard let base = buffer.baseAddress else { return }
+                for _ in 0..<seconds {
+                    quick.write(from: base, frameCount: 48_000)
+                    slow.write(from: base, frameCount: 48_000)
+                }
+            }
+        }
+        func drain(_ ring: AudioRingBuffer) {
+            scratch.withUnsafeMutableBufferPointer { buffer in
+                guard let base = buffer.baseAddress else { return }
+                while ring.availableFrames > 0 {
+                    ring.read(into: base, frameCount: 48_000)
+                }
+            }
+        }
+
+        // Négociation de 2 s pour l'une, de 5 s pour l'autre ; les deux ont déjà débordé quand
+        // elles écartent leur arriéré.
+        capture(seconds: 2)
+        drain(quick)
+        #expect(quick.totalFramesRead == 96_000)
+
+        capture(seconds: 3)
+        drain(slow)
+        #expect(slow.totalFramesRead == 240_000)
+        #expect(quick.totalFramesWritten == slow.totalFramesWritten)
+
+        drain(quick)
+        #expect(quick.totalFramesRead == slow.totalFramesRead)
+    }
+
+    /// Ce que ce défaut donnait côté calage : deux sorties à la négociation inégale annonçaient
+    /// le même instant pour des trames captées à 3 s d'intervalle, et un récepteur qui honore
+    /// l'ancrage jouait donc avec 3 s d'écart. Ici, la même trame doit donner le même instant.
+    @Test("Deux sorties à la négociation inégale s'ancrent sur le même instant")
+    func unequalNegotiationsStayAligned() {
+        let clock = FixedClock(captureSampleRate: 48_000, playoutDelaySeconds: 2, epoch: 1_000_000)
+        let outputRate: Double = 44_100
+        let quick = AudioRingBuffer(capacityFrames: 48_000, channelCount: 2)
+        let slow = AudioRingBuffer(capacityFrames: 48_000, channelCount: 2)
+        var scratch = [Float](repeating: 0, count: 96_000)
+        let block = [Float](repeating: 0.25, count: 96_000)
+
+        func capture(seconds: Int) {
+            block.withUnsafeBufferPointer { buffer in
+                guard let base = buffer.baseAddress else { return }
+                for _ in 0..<seconds {
+                    quick.write(from: base, frameCount: 48_000)
+                    slow.write(from: base, frameCount: 48_000)
+                }
+            }
+        }
+        func drain(_ ring: AudioRingBuffer) {
+            scratch.withUnsafeMutableBufferPointer { buffer in
+                guard let base = buffer.baseAddress else { return }
+                while ring.availableFrames > 0 {
+                    ring.read(into: base, frameCount: 48_000)
+                }
+            }
+        }
+
+        let first = OutputSynchronizer(label: "a", clock: clock, outputSampleRate: outputRate)
+        let second = OutputSynchronizer(label: "b", clock: clock, outputSampleRate: outputRate)
+
+        capture(seconds: 2)
+        drain(quick)
+        first.beginStreaming(atCaptureFrame: quick.totalFramesRead)
+
+        // La première émet en temps réel pendant que la seconde négocie encore 3 s.
+        capture(seconds: 3)
+        drain(quick)
+        first.didConsume(outputFrames: 3 * 44_100)
+
+        drain(slow)
+        second.beginStreaming(atCaptureFrame: slow.totalFramesRead)
+
+        guard let firstAnchor = first.syncAnchorUnixTime(latencyFrames: 88_200),
+            let secondAnchor = second.syncAnchorUnixTime(latencyFrames: 88_200)
+        else {
+            Issue.record("ancrage indisponible")
+            return
+        }
+        #expect(abs(firstAnchor - secondAnchor) < 1 / outputRate)
+    }
+
+    /// L'horloge se reporte pour tout le monde : l'alignement mutuel n'en dépend pas.
+    @Test("Reporter l'origine décale d'autant, et ne pose rien tant qu'elle n'est pas démarrée")
+    func shiftingOriginMovesEveryFrame() {
+        let clock = SharedPlaybackClock(captureSampleRate: 48_000, playoutDelaySeconds: 2)
+        clock.shiftOrigin(bySeconds: 5)
+        #expect(clock.hasStarted == false)
+
+        clock.startIfNeeded()
+        guard let before = clock.presentationUnixTime(forCaptureFrame: 96_000) else {
+            Issue.record("horloge non démarrée")
+            return
+        }
+        clock.shiftOrigin(bySeconds: 1.5)
+        guard let after = clock.presentationUnixTime(forCaptureFrame: 96_000) else {
+            Issue.record("horloge non démarrée")
+            return
+        }
+        #expect(abs((after - before) - 1.5) < 1e-6)
     }
 }

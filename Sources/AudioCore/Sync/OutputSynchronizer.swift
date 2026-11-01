@@ -91,6 +91,10 @@ public final class OutputSynchronizer: @unchecked Sendable {
     /// comprises** : c'est cette valeur, et non le nombre de paquets, qui situe le flux sur
     /// l'horloge de capture — une trame supprimée avance bien le flux d'une trame.
     private var consumedOutputFrames: Double = 0
+    /// Trames de capture perdues par débordement du ring buffer depuis `beginStreaming`. Voir
+    /// ``noteRefusedCaptureFrames(total:)``.
+    private var captureGapFrames: Double = 0
+    private var refusedFramesBaseline: Int?
 
     private var smoothedDelayFrames: Double?
     private var targetDelayFrames: Double?
@@ -156,6 +160,8 @@ public final class OutputSynchronizer: @unchecked Sendable {
         defer { lock.unlock() }
         startCaptureFrame = Double(captureFrame)
         consumedOutputFrames = 0
+        captureGapFrames = 0
+        refusedFramesBaseline = nil
         smoothedDelayFrames = nil
         targetDelayFrames = nil
         settleAccumulator = 0
@@ -236,6 +242,26 @@ public final class OutputSynchronizer: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Prend acte du compteur de refus du ring buffer de cette sortie.
+    ///
+    /// Le compte des trames consommées suppose un flux sans trou. Or un sender bloqué plus d'une
+    /// seconde fait déborder son tampon : le flux saute alors en avant sur la graduation de
+    /// capture sans que rien dans `didConsume` ne le voie, et l'ancrage de cette sortie resterait
+    /// en retard d'autant, indéfiniment, sur celui des autres.
+    ///
+    /// - Parameter total: `AudioRingBuffer.droppedFrames`. Le premier appel après
+    ///   `beginStreaming` sert de référence : ce qui le précède est déjà compté dans la position
+    ///   de départ.
+    public func noteRefusedCaptureFrames(total: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let baseline = refusedFramesBaseline else {
+            refusedFramesBaseline = total
+            return
+        }
+        captureGapFrames = Double(total - baseline)
+    }
+
     // MARK: - Ancrage
 
     /// Trame de capture correspondant au **prochain** paquet à émettre.
@@ -243,7 +269,8 @@ public final class OutputSynchronizer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard let start = startCaptureFrame else { return nil }
-        return start + consumedOutputFrames * (clock.captureSampleRate / outputSampleRate)
+        return start + captureGapFrames
+            + consumedOutputFrames * (clock.captureSampleRate / outputSampleRate)
     }
 
     /// Instant NTP à annoncer dans le paquet de synchronisation.
@@ -269,11 +296,12 @@ public final class OutputSynchronizer: @unchecked Sendable {
         lock.lock()
         let start = startCaptureFrame
         let consumed = consumedOutputFrames
+        let gap = captureGapFrames
         let offset = manualOffset
         let internalLatency = receiverLatencyFrames
         lock.unlock()
         guard let start else { return nil }
-        let captureFrame = start + consumed * (clock.captureSampleRate / outputSampleRate)
+        let captureFrame = start + gap + consumed * (clock.captureSampleRate / outputSampleRate)
         guard let presentation = clock.presentationUnixTime(forCaptureFrame: captureFrame) else {
             return nil
         }

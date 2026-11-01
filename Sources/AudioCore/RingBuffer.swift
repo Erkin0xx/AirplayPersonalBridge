@@ -32,6 +32,10 @@ public final class AudioRingBuffer: @unchecked Sendable {
     private let writeIndex = ManagedAtomic<Int>(0)
     private let readIndex = ManagedAtomic<Int>(0)
     private let dropped = ManagedAtomic<Int>(0)
+    /// Position sur la graduation de capture à laquelle ce tampon a été mis en service : zéro
+    /// pour un tampon alimenté depuis le premier échantillon, la position courante pour une
+    /// sortie ajoutée en pleine diffusion. Voir ``totalFramesWritten``.
+    private let timelineOrigin = ManagedAtomic<Int>(0)
 
     /// - Parameters:
     ///   - capacityFrames: nombre de trames tamponnées. Dimensionner largement au-dessus
@@ -62,21 +66,65 @@ public final class AudioRingBuffer: @unchecked Sendable {
         return write - read
     }
 
-    /// Nombre total de trames **écrites** depuis la création du tampon, sans repli modulo.
+    /// Position du producteur sur la **graduation de capture** : toutes les trames que la
+    /// capture a produites depuis son démarrage, qu'elles soient entrées dans ce tampon ou non.
     ///
-    /// C'est l'horloge de capture exprimée en trames : le producteur étant unique et commun
-    /// à tous les pipelines de sortie, deux ring buffers alimentés par la même capture
-    /// portent la **même** valeur au même instant. C'est ce qui donne aux deux sorties une
-    /// référence temporelle commune sans qu'aucune ne connaisse l'existence de l'autre
-    /// (invariant section 12) : elles lisent toutes deux la même graduation, pas l'état de
-    /// leur voisine.
-    public var totalFramesWritten: Int { writeIndex.load(ordering: .acquiring) }
+    /// C'est l'horloge de capture exprimée en trames. Le producteur étant unique et commun à
+    /// tous les pipelines de sortie, deux ring buffers alimentés par la même capture portent
+    /// la **même** valeur au même instant. C'est ce qui donne aux sorties une référence
+    /// temporelle commune sans qu'aucune ne connaisse l'existence de l'autre (invariant
+    /// section 12) : elles lisent toutes la même graduation, pas l'état de leur voisine.
+    ///
+    /// **Les trames refusées y comptent**, et ce n'est pas un détail. Un tampon sans
+    /// consommateur déborde au bout d'une seconde, soit bien avant la fin d'une négociation :
+    /// si seules les trames acceptées avançaient ce compteur, chaque sortie s'arrêterait à la
+    /// même valeur quelle que soit la durée de sa négociation, et deux sorties annonceraient
+    /// le même instant de restitution pour des trames captées à des moments différents —
+    /// l'écart valant la différence entre leurs durées de négociation (voir `SyncTests`).
+    public var totalFramesWritten: Int {
+        writeIndex.load(ordering: .acquiring) + timelineSkew
+    }
 
-    /// Nombre total de trames **lues** depuis la création, sans repli modulo.
+    /// Position du consommateur sur la même graduation : celle de la prochaine trame à lire.
     ///
-    /// Permet au consommateur de situer l'échantillon qu'il vient d'extraire sur l'horloge
-    /// de capture ci-dessus, donc de dater ce qu'il émet.
-    public var totalFramesRead: Int { readIndex.load(ordering: .relaxed) }
+    /// Permet au consommateur de situer ce qu'il extrait sur l'horloge de capture, donc de
+    /// dater ce qu'il émet.
+    ///
+    /// **Exacte dès que le tampon a été vidé**, ce qui est le cas au seul moment où elle sert :
+    /// un sender écarte l'arriéré avant de s'ancrer. Entre un débordement et la fin de la
+    /// lecture de l'arriéré qui le précède, elle est majorée de la taille du débordement : le
+    /// suivre exactement demanderait de mémoriser chaque trou, donc une structure de taille
+    /// variable sur le chemin temps réel.
+    public var totalFramesRead: Int {
+        readIndex.load(ordering: .relaxed) + timelineSkew
+    }
+
+    /// Trames de la graduation qui ne sont jamais entrées dans ce tampon : celles d'avant sa
+    /// mise en service et celles refusées. Constante en régime établi, si bien que la lecture
+    /// non atomique avec l'index ne peut pas donner une valeur à cheval sur deux blocs.
+    private var timelineSkew: Int {
+        timelineOrigin.load(ordering: .acquiring) + dropped.load(ordering: .acquiring)
+    }
+
+    /// Situe la trame qui sera écrite ensuite sur la graduation de capture.
+    ///
+    /// Appelée par le producteur au moment où il commence à alimenter ce tampon, ce qui la
+    /// rend exacte au bloc près. Sans allocation, sans verrou.
+    func placeOnTimeline(at position: Int) {
+        timelineOrigin.store(position, ordering: .releasing)
+    }
+
+    /// Remet le tampon à neuf pour une nouvelle sortie.
+    ///
+    /// **Ni producteur ni consommateur ne doivent l'utiliser pendant l'appel** : c'est le seul
+    /// point de ce type qui n'est pas sûr en concurrence, et `CaptureFanout` n'y recourt qu'une
+    /// fois le producteur assuré de ne plus écrire ici et l'ancien consommateur terminé.
+    func resetForReuse() {
+        writeIndex.store(0, ordering: .relaxed)
+        readIndex.store(0, ordering: .relaxed)
+        dropped.store(0, ordering: .relaxed)
+        timelineOrigin.store(0, ordering: .relaxed)
+    }
 
     /// Trames refusées depuis la création, faute de place.
     ///
