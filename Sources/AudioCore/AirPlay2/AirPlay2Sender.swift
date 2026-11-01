@@ -14,7 +14,7 @@ public enum AirPlay2SenderState: String, Sendable {
 }
 
 /// Sender AirPlay 2 (CDC 4.4) : pair-setup SRP, canal de contrôle chiffré, RTSP pour la
-/// négociation, RTP pour le transport, ALAC pour l'encodage.
+/// négociation, RTP pour le transport, PCM chiffré pour la charge utile.
 ///
 /// ## Position dans l'architecture (invariants section 12)
 ///
@@ -34,7 +34,8 @@ public enum AirPlay2SenderState: String, Sendable {
 ///
 /// `POST /pair-setup` (M1→M4, SRP transitoire) → chiffrement du canal → `SETUP` (session,
 /// rend `eventPort`) → `SETUP` (flux, rend `dataPort`/`controlPort`) →
-/// `SET_PARAMETER` (volume) → `RECORD` → paquets RTP → `TEARDOWN`.
+/// `SET_PARAMETER` (volume) → `RECORD` → paquets RTP et `POST /feedback` périodique →
+/// `TEARDOWN`.
 ///
 /// Ordre vérifié contre le mock, et recoupé avec une session pyatv de référence vers ce même
 /// récepteur. Le CDC 4.4 désigne `airplay.c` d'OwnTone comme référence de comportement :
@@ -52,8 +53,20 @@ public actor AirPlay2Sender {
     private static let latencyFrames: UInt32 = 88_200
     /// Période des annonces de synchro, en paquets audio (~1 s).
     private static let syncInterval = 126
-    /// Erreurs d'émission consécutives au-delà desquelles la session est réputée perdue.
-    private static let lostSessionErrorThreshold = 20
+    /// Erreurs d'émission consécutives au-delà desquelles la session est réputée perdue : ~2 s.
+    ///
+    /// Une valeur plus faible (20, soit 160 ms) transformait le moindre accroc Wi-Fi en
+    /// reconnexion complète, audible pendant plusieurs secondes, alors que le paquet raté reste
+    /// dans l'historique et que le tampon du récepteur lui laisse le temps de le réclamer.
+    private static let lostSessionErrorThreshold = 250
+    /// Durée de `TEARDOWN` qu'on s'accorde à l'arrêt, puis à la reconnexion : au-delà, on ferme
+    /// sans attendre. Un récepteur muet ne doit jamais retenir l'arrêt de la diffusion.
+    private static let stopTeardownLimit: Duration = .milliseconds(2_500)
+    private static let lossTeardownLimit: Duration = .seconds(1)
+    /// Une session qui a tenu au moins ce temps était saine : la suivante repart du délai de
+    /// reconnexion le plus court. En deçà, le délai continue de croître, pour qu'un récepteur qui
+    /// accepte puis coupe aussitôt ne parte pas en boucle serrée.
+    private static let stableSessionDuration: Duration = .seconds(30)
 
     public private(set) var state: AirPlay2SenderState = .idle
 
@@ -95,6 +108,31 @@ public actor AirPlay2Sender {
     private let credentials: HapCredentials?
     private var sessionLost = false
     private var consecutiveSendErrors = 0
+    /// Numéro de la session courante. Un signal de perte peut arriver en retard, par une tâche
+    /// en vol : il ne doit jamais condamner la session qui a remplacé la sienne.
+    private var sessionGeneration = 0
+    /// `stop()` appelé pendant que `start()` négocie.
+    private var stopRequestedDuringStart = false
+    /// Paquets émis, pour répondre aux demandes de retransmission.
+    private let retransmitter = AirPlay2Retransmitter()
+    /// Maintien de session (`POST /feedback`).
+    private var keepAliveTask: Task<Void, Never>?
+    private var keepAlivePolicy = KeepAlivePolicy()
+
+    /// Réglages du maintien de session.
+    struct KeepAlivePolicy: Sendable {
+        /// Cadence : celle de pyatv et d'iOS.
+        var interval: Duration = .seconds(2)
+        /// Échéance d'un `feedback`.
+        var timeout: Duration = .seconds(4)
+        /// `feedback` consécutifs sans réponse au-delà desquels le récepteur est réputé parti.
+        var silenceThreshold = 3
+    }
+
+    /// Permet aux tests de vérifier la détection de silence sans attendre vingt secondes.
+    func setKeepAlivePolicy(_ policy: KeepAlivePolicy) {
+        keepAlivePolicy = policy
+    }
 
     /// Échantillons convertis en attente de constituer un paquet complet de 352 trames.
     /// Propre au sender : c'est cette copie que tout le traitement manipule.
@@ -149,20 +187,36 @@ public actor AirPlay2Sender {
     // MARK: - Session
 
     /// Établit la session (pairing compris) et démarre la diffusion.
+    ///
+    /// - Throws: un ``AirPlay2SenderError`` dont la description est faite pour l'affichage, ou
+    ///   `CancellationError` si la tâche a été annulée ou `stop()` appelé entre-temps.
     public func start(volume: Float = -20) async throws {
-        guard state == .idle else { return }
+        guard state == .idle || state == .failed else { return }
         state = .connecting
         currentVolume = volume
+        stopRequestedDuringStart = false
 
         do {
-            try await negotiate(volume: volume)
+            try await negotiateCancellably(volume: volume)
         } catch {
+            await teardown()
+            if Task.isCancelled || stopRequestedDuringStart {
+                state = .idle
+                throw CancellationError()
+            }
             state = .failed
             log.error(
                 "Établissement de la session AirPlay 2 en échec : \(String(describing: error), privacy: .public)"
             )
+            let failure = readable(error)
+            statistics.lastFailure = failure.description
+            throw failure
+        }
+        // L'arrêt a pu tomber juste après le dernier échange de la négociation.
+        if Task.isCancelled || stopRequestedDuringStart {
             await teardown()
-            throw error
+            state = .idle
+            throw CancellationError()
         }
 
         beginStreaming(firstSession: true)
@@ -195,7 +249,6 @@ public actor AirPlay2Sender {
         }
         packetsInSession = 0
         consecutiveSendErrors = 0
-        sessionLost = false
         synchronizer.beginStreaming(atCaptureFrame: ring.totalFramesRead)
     }
 
@@ -206,34 +259,64 @@ public actor AirPlay2Sender {
     /// (invariant section 12). La reconnexion refait **tout** le chemin, pair-setup compris :
     /// les clés de session et le chiffrement du canal ne survivent pas à une coupure.
     private func supervise() async {
+        var backoff: Duration = .seconds(1)
         while !Task.isCancelled {
+            let sessionStart = ContinuousClock.now
             await streamLoop()
-            guard !Task.isCancelled, sessionLost, reconnects else { break }
+            guard !Task.isCancelled, sessionLost else { return }
+
+            // Sans reconnexion, l'état doit le dire : rester en `.streaming` sur une session
+            // morte ferait croire à une sortie qui joue.
+            guard reconnects else {
+                await tearDownSessionBestEffort(limit: Self.lossTeardownLimit)
+                await teardown()
+                state = .failed
+                statistics.lastFailure =
+                    AirPlay2SenderError.connectionLost(receiver: device.serviceName).description
+                return
+            }
 
             state = .reconnecting
             statistics.reconnections += 1
             log.error("Session AirPlay 2 perdue — tentative de rétablissement")
+            // La perte d'un seul canal laisse souvent la connexion de contrôle vivante. Fermer
+            // proprement évite que le récepteur nous croie encore là, et refuse en `453` la
+            // session qu'on s'apprête à rouvrir.
+            await tearDownSessionBestEffort(limit: Self.lossTeardownLimit)
             await teardown()
+            guard !Task.isCancelled else { return }
 
-            var backoff: Duration = .seconds(1)
+            backoff =
+                ContinuousClock.now - sessionStart >= Self.stableSessionDuration
+                ? .seconds(1) : min(backoff * 2, .seconds(15))
+
             var reconnected = false
             while !Task.isCancelled && !reconnected {
                 do {
                     try await Task.sleep(for: backoff)
-                    try await negotiate(volume: currentVolume)
+                    try await negotiateCancellably(volume: currentVolume)
                     reconnected = true
-                } catch is CancellationError {
-                    return
                 } catch {
+                    // `stop()` ferme lui-même : refermer ici pourrait atteindre la session
+                    // d'un `start()` suivant.
+                    if Task.isCancelled { return }
+                    let failure = readable(error)
                     statistics.reconnectionAttempts += 1
+                    statistics.lastFailure = failure.description
                     log.error(
                         "Reconnexion AirPlay 2 en échec : \(String(describing: error), privacy: .public)"
                     )
                     await teardown()
-                    backoff = min(backoff * 2, .seconds(15))
+                    // Sans geste de l'utilisateur, réessayer un appairage refusé ne mènera nulle
+                    // part, et un Apple TV finit par sanctionner les tentatives répétées.
+                    if failure.isPermanent {
+                        state = .failed
+                        return
+                    }
+                    backoff = min(max(backoff * 2, failure.minimumRetryDelay), .seconds(15))
                 }
             }
-            guard reconnected, !Task.isCancelled else { break }
+            guard reconnected, !Task.isCancelled else { return }
             beginStreaming(firstSession: false)
             state = .streaming
             log.info("Session AirPlay 2 rétablie")
@@ -241,29 +324,117 @@ public actor AirPlay2Sender {
     }
 
     /// Arrête la diffusion et libère la session.
+    ///
+    /// Ne reste jamais bloqué : le `TEARDOWN` a droit à un délai borné, après quoi la connexion
+    /// est fermée sans attendre sa réponse. Appelable depuis une tâche déjà annulée — le moteur
+    /// le fait — d'où les tâches non structurées, qui n'héritent pas de cette annulation.
     public func stop() async {
-        streamTask?.cancel()
+        if state == .connecting { stopRequestedDuringStart = true }
+        let supervision = streamTask
         streamTask = nil
-        if state == .streaming || state == .reconnecting, let session {
-            await session.teardown()
+        supervision?.cancel()
+        keepAliveTask?.cancel()
+        keepAliveTask = nil
+
+        if state == .streaming || state == .reconnecting {
+            await tearDownSessionBestEffort(limit: Self.stopTeardownLimit)
         }
         await teardown()
+        if let supervision {
+            // La supervision en cours se débloque d'elle-même, la connexion étant fermée. L'attendre
+            // évite qu'une négociation interrompue n'écrive dans l'état d'un `start()` suivant.
+            await Self.waitForCompletion(of: supervision, atMost: .seconds(1))
+            await teardown()
+        }
         state = .idle
         log.info("Diffusion AirPlay 2 arrêtée (\(self.packetsSent) paquets émis)")
     }
 
+    /// Envoie un `TEARDOWN` sans jamais attendre plus que `limit`.
+    private func tearDownSessionBestEffort(limit: Duration) async {
+        guard let session else { return }
+        let teardown = Task { await session.teardown() }
+        await Self.waitForCompletion(of: teardown, atMost: limit)
+    }
+
+    /// Attend une tâche, mais pas plus que `limit`. La tâche n'est pas annulée pour autant.
+    private static func waitForCompletion(
+        of task: Task<Void, Never>, atMost limit: Duration
+    ) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let resumed = ManagedFlag()
+            Task {
+                await task.value
+                if resumed.claim() { continuation.resume() }
+            }
+            Task {
+                try? await Task.sleep(for: limit)
+                if resumed.claim() { continuation.resume() }
+            }
+        }
+    }
+
     /// Règle le volume en cours de session.
+    ///
+    /// La consigne est retenue même hors session : c'est elle qu'une reconnexion réapplique.
+    /// Sans cela, une perte réseau ramenait la sortie au volume de son démarrage.
     public func setVolume(_ volume: Float) async throws {
+        currentVolume = volume
         guard let session else { return }
         try await session.setVolume(volume)
     }
 
+    private func readable(_ error: Error) -> AirPlay2SenderError {
+        AirPlay2SenderError(
+            classifying: error,
+            receiver: device.serviceName,
+            address: "\(device.host):\(device.port)",
+            hasCredentials: credentials != nil
+        )
+    }
+
     // MARK: - Négociation
 
+    /// Négocie, en interrompant l'échange dès que la tâche est annulée.
+    ///
+    /// Les attentes réseau ne réagissent pas d'elles-mêmes à l'annulation : sans ce gestionnaire,
+    /// arrêter une sortie en cours de connexion restait bloqué jusqu'à l'échéance de l'étape en
+    /// cours, soit jusqu'à dix secondes.
+    private func negotiateCancellably(volume: Float) async throws {
+        try await withTaskCancellationHandler {
+            try await negotiate(volume: volume)
+        } onCancel: { [weak self] in
+            Task { await self?.abortNegotiation() }
+        }
+    }
+
+    private func abortNegotiation() async {
+        eventChannel?.close()
+        await rtsp?.disconnect()
+    }
+
     private func negotiate(volume: Float) async throws {
+        sessionGeneration &+= 1
+        let generation = sessionGeneration
+        sessionLost = false
+
         let client = RTSPClient(host: device.host, port: device.port)
         rtsp = client
-        try await client.connect()
+        try Task.checkCancellation()
+        do {
+            try await client.connect()
+        } catch {
+            throw AirPlay2SenderError.connectionFailure(
+                error, receiver: device.serviceName, address: "\(device.host):\(device.port)"
+            )
+        }
+
+        // Second signal de perte, à côté du canal d'événements (voir ``noteSessionLost``).
+        await client.onConnectionLost { [weak self] in
+            Task {
+                await self?.noteSessionLost(generation: generation, reason: "connexion RTSP rompue")
+            }
+        }
 
         // 1. Pairing. Deux chemins, et c'est la présence de credentials qui tranche :
         //    un appairage système déjà acquis se rejoue par `pair-verify`, sans code à
@@ -329,15 +500,26 @@ public actor AirPlay2Sender {
         // nous-mêmes dans les paquets de synchronisation.
         statistics.receiverBufferSize = endpoints.audioBufferSize
 
-        // Canal d'événements : récupéré dès le jalon 3, exploité seulement ici. Il sert de
-        // signal de vie — le canal audio étant en UDP, rien d'autre ne signale un récepteur
-        // disparu. Son indisponibilité n'empêche pas de diffuser.
+        // Canal d'événements : signal de vie et répondeur aux requêtes du récepteur, sous les
+        // clés dérivées du même secret que le canal de contrôle. Son indisponibilité n'empêche
+        // pas de diffuser.
         if endpoints.eventPort != 0 {
-            let events = AirPlay2EventChannel(host: device.host, port: endpoints.eventPort)
-            let connected = await events.connect { [weak self] in
-                Task { await self?.noteEventChannelLost() }
-            }
+            let events = AirPlay2EventChannel(
+                host: device.host,
+                port: endpoints.eventPort,
+                sessionSecret: keys.sharedSecret,
+                onMessage: { [weak self] _ in
+                    Task { await self?.noteEventMessage() }
+                }
+            )
+            // Stocké avant l'attente : une annulation doit pouvoir le fermer pendant celle-ci.
             eventChannel = events
+            let connected = await events.connect { [weak self] in
+                Task {
+                    await self?.noteSessionLost(
+                        generation: generation, reason: "canal d'événements rompu")
+                }
+            }
             statistics.eventChannelConnected = connected
         }
 
@@ -354,6 +536,7 @@ public actor AirPlay2Sender {
 
         try await session.setVolume(volume)
         try await session.record(startSequence: sequenceNumber, startTimestamp: rtpTimestamp)
+        startKeepAlive(session: session, generation: generation)
 
         log.info(
             "Session AirPlay 2 négociée : data=\(endpoints.dataPort) control=\(endpoints.controlPort) event=\(endpoints.eventPort)"
@@ -417,22 +600,77 @@ public actor AirPlay2Sender {
         }
     }
 
-    /// La rupture du canal d'événements vaut perte de session.
+    /// Une rupture du canal d'événements ou de la connexion RTSP vaut perte de session.
     ///
-    /// C'est le seul signal franc dont dispose AirPlay 2 : le flux audio étant en UDP, un
+    /// Ce sont les signaux francs dont dispose AirPlay 2 : le flux audio étant en UDP, un
     /// récepteur disparu ne provoque aucune erreur d'émission — les datagrammes partiraient
-    /// indéfiniment dans le vide.
-    private func noteEventChannelLost() {
-        guard state == .streaming else { return }
-        log.error("Canal d'événements rompu — session réputée perdue")
+    /// indéfiniment dans le vide. Un signal peut arriver pendant la négociation (la boucle de
+    /// diffusion sort alors aussitôt), ou en retard d'une session : le numéro l'écarte.
+    private func noteSessionLost(generation: Int, reason: String) {
+        guard generation == sessionGeneration, !sessionLost else { return }
+        log.error("Session AirPlay 2 réputée perdue : \(reason, privacy: .public)")
         sessionLost = true
     }
 
-    /// Observe le canal de contrôle : demandes de retransmission du récepteur.
+    private func noteEventMessage() {
+        statistics.eventMessages += 1
+    }
+
+    /// Démarre le maintien de session, une fois le `RECORD` accepté.
+    private func startKeepAlive(session: AirPlay2Session, generation: Int) {
+        keepAliveTask?.cancel()
+        keepAliveTask = Task { [weak self] in
+            await self?.runKeepAlive(session: session, generation: generation)
+        }
+    }
+
+    /// `POST /feedback` périodique, sans jamais entrelacer avec une autre requête : `RTSPClient`
+    /// sérialise ses échanges.
     ///
-    /// La retransmission elle-même n'est pas implémentée (hors périmètre du jalon) ; les
-    /// demandes sont comptées, car leur apparition est le premier signe d'un flux qui perd
-    /// des paquets — donc d'un problème de cadencement ou de réseau.
+    /// Trois issues, et une seule condamne la session :
+    ///
+    /// - **refus** (`4xx`, `5xx`) : le récepteur a répondu, il est donc là. pyatv traite ce
+    ///   message en « best effort », et un keep-alive refusé ne vaut pas une panne ;
+    /// - **rupture** de la connexion : perte franche. C'est même le seul moyen de voir une
+    ///   fermeture côté récepteur, personne ne lisant cette connexion entre deux requêtes ;
+    /// - **silence** : plusieurs échéances de suite, chez un récepteur qui répondait jusque-là,
+    ///   signifient qu'il est parti sans fermer — éteint, ou sorti du réseau. Un récepteur qui
+    ///   n'a *jamais* répondu n'est pas pénalisé : il ne gère peut-être pas ce message.
+    private func runKeepAlive(session: AirPlay2Session, generation: Int) async {
+        let policy = keepAlivePolicy
+        var hasAnswered = false
+        var silentRounds = 0
+
+        while !Task.isCancelled && generation == sessionGeneration {
+            do {
+                try await session.sendFeedback(timeout: policy.timeout)
+                hasAnswered = true
+                silentRounds = 0
+                statistics.feedbackSent += 1
+            } catch RTSPError.unexpectedStatus(_, let code, _) {
+                hasAnswered = true
+                silentRounds = 0
+                statistics.feedbackRefused += 1
+                log.debug("feedback refusé (\(code)), sans conséquence")
+            } catch RTSPError.timedOut {
+                silentRounds += 1
+                log.debug("feedback sans réponse (\(silentRounds) de suite)")
+                if hasAnswered && silentRounds >= policy.silenceThreshold {
+                    noteSessionLost(generation: generation, reason: "le récepteur ne répond plus")
+                    return
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                noteSessionLost(
+                    generation: generation,
+                    reason: "keep-alive en échec : \(String(describing: error))"
+                )
+                return
+            }
+            try? await Task.sleep(for: policy.interval)
+        }
+    }
+
     /// Répond aux requêtes d'horloge du récepteur.
     ///
     /// Format identique à RAOP — RTCP type 0x52, 32 octets, estampille d'origine aux octets
@@ -442,8 +680,13 @@ public actor AirPlay2Sender {
     ///
     /// Contrairement à shairport-sync, qui envoie ses requêtes intégralement à zéro, le
     /// HomePod **horodate** les siennes : la mesure passive du décalage d'horloge y fonctionne.
+    ///
+    /// `timing` capturé faiblement : le canal détient cette fermeture, une référence forte en
+    /// retour ferait un cycle qui ne libère jamais le socket. Il continuerait alors de répondre
+    /// après l'arrêt, un descripteur de plus perdu à chaque reconnexion.
     private nonisolated func installTimingResponder(on timing: UDPChannel) {
-        timing.onReceive = { [weak self] data, source in
+        timing.onReceive = { [weak self, weak timing] data, source in
+            guard let timing else { return }
             let receiveTime = NTPTime.now()
             guard data.count >= 32,
                 data[data.startIndex + 1] & 0x7F == RTPPayloadType.timingRequest.rawValue
@@ -465,17 +708,29 @@ public actor AirPlay2Sender {
         }
     }
 
+    /// Observe le canal de contrôle et répond aux demandes de retransmission.
+    ///
+    /// La réponse part de cette file, vers l'expéditeur de la demande comme chez pyatv, sans
+    /// repasser par l'acteur : une rafale de demandes ne retarde donc jamais le flux.
     private nonisolated func installControlObserver(on control: UDPChannel) {
-        control.onReceive = { [weak self] data, _ in
-            guard data.count >= 2,
-                  data[data.startIndex + 1] & 0x7F == RTPPayloadType.retransmitRequest.rawValue
-            else { return }
-            Task { await self?.countRetransmitRequest() }
+        let retransmitter = self.retransmitter
+        control.onReceive = { [weak self, weak control] data, source in
+            guard let control, let request = RTPRetransmitRequest(datagram: data) else { return }
+            let (responses, missing) = retransmitter.responses(for: request)
+            var served = 0
+            for response in responses where (try? control.send(response, to: source)) != nil {
+                served += 1
+            }
+            Task { [served] in
+                await self?.noteRetransmitRequest(served: served, missing: missing)
+            }
         }
     }
 
-    private func countRetransmitRequest() {
+    private func noteRetransmitRequest(served: Int, missing: Int) {
         statistics.retransmitRequests += 1
+        statistics.retransmittedPackets += served
+        statistics.retransmitMisses += missing
     }
 
     /// Vide le ring buffer sans rien émettre, pour repartir du direct.
@@ -528,11 +783,11 @@ public actor AirPlay2Sender {
     /// (constaté contre un HomePod le 2026-08-11, corrigé d'après `pyatv/protocols/raop/
     /// protocols/airplayv2.py`) :
     ///
-    /// 1. **La charge utile est du PCM brut little-endian**, pas de l'ALAC. C'est ce que
-    ///    déclare le `SETUP` (`ct: 1`, `audioFormat` = PCM 44100/16/2), et déclarer un format
-    ///    puis en envoyer un autre ne produit aucun message d'erreur. L'ordre est
-    ///    **big-endian**, comme le L16 de RAOP : en little-endian le HomePod restitue un
-    ///    bruit blanc à pleine échelle — signe que le déchiffrement, lui, réussit.
+    /// 1. **La charge utile est du PCM brut**, pas de l'ALAC. C'est ce que déclare le `SETUP`
+    ///    (`ct: 1`, `audioFormat` = PCM 44100/16/2), et déclarer un format puis en envoyer un
+    ///    autre ne produit aucun message d'erreur. L'ordre est **big-endian**, comme le L16 de
+    ///    RAOP : en little-endian le HomePod restitue un bruit blanc à pleine échelle — signe
+    ///    que le déchiffrement, lui, réussit.
     /// 2. **Les données associées sont les octets 4 à 12 de l'en-tête RTP** (horodatage et
     ///    SSRC), pas l'en-tête entier.
     /// 3. **Le nonce de 8 octets est ajouté à la fin du paquet**, après l'étiquette : c'est
@@ -595,17 +850,27 @@ public actor AirPlay2Sender {
 
         let associated = header.subdata(in: 4..<12)
         let sealed = try cipher.seal(payload, nonce: nonce, additionalData: associated)
-        try audio.send(header + sealed + nonce.suffix(8))
+        let packet = header + sealed + nonce.suffix(8)
+
+        // Retenu tel quel pour une éventuelle retransmission, y compris si l'émission échoue : ce
+        // paquet est alors une perte comme une autre, que le récepteur réclamera. Son nonce le
+        // suit, il reste déchiffrable sans rien recalculer.
+        retransmitter.record(sequence: sequenceNumber, packet: packet)
+        let emission = Result { try audio.send(packet) }
 
         if packetsInSession % Self.syncInterval == 0 {
             sendSync(isFirst: packetsInSession == 0, anchorUnixTime: anchor)
         }
 
+        // Les compteurs avancent même en cas d'échec. Les échantillons sont déjà consommés et le
+        // synchroniseur en a tenu compte : ne pas avancer l'horodatage décalerait tout le flux de
+        // 8 ms par paquet raté, et réutiliser le nonce sur un autre contenu casserait l'AEAD.
         sequenceNumber &+= 1
         rtpTimestamp &+= UInt32(Self.framesPerPacket)
         packetsSent += 1
         packetsInSession += 1
         statistics.packetsSent = packetsSent
+        try emission.get()
     }
 
     /// Annonce de synchronisation NTP sur le canal de contrôle.
@@ -649,12 +914,17 @@ public actor AirPlay2Sender {
 
     /// Ferme les ressources réseau. Idempotent : appelable après un échec partiel.
     private func teardown() async {
+        keepAliveTask?.cancel()
+        keepAliveTask = nil
         audioChannel?.stop()
         audioChannel = nil
         controlChannel?.stop()
         controlChannel = nil
+        timingChannel?.stop()
+        timingChannel = nil
         eventChannel?.close()
         eventChannel = nil
+        retransmitter.reset()
         await rtsp?.disconnect()
         rtsp = nil
         session = nil
@@ -684,6 +954,17 @@ public struct AirPlay2Statistics: Sendable {
     public var framesRemoved = 0
     /// Demandes de retransmission reçues du récepteur : indicateur de pertes de paquets.
     public var retransmitRequests = 0
+    /// Paquets renvoyés en réponse, et paquets demandés qu'on n'avait plus.
+    public var retransmittedPackets = 0
+    public var retransmitMisses = 0
+    /// `POST /feedback` acceptés et refusés par le récepteur.
+    public var feedbackSent = 0
+    public var feedbackRefused = 0
+    /// Requêtes du récepteur reçues sur le canal d'événements, déchiffrées et acquittées.
+    public var eventMessages = 0
+    /// Dernier échec, sous sa forme affichable. Survit à une reconnexion réussie : il dit ce qui
+    /// s'est passé, pas l'état courant, que porte `AirPlay2Sender.state`.
+    public var lastFailure: String?
     /// Valeur brute d'`audioBufferSize` annoncée par le récepteur, unité non établie.
     public var receiverBufferSize = 0
     /// Canal d'événements effectivement ouvert.

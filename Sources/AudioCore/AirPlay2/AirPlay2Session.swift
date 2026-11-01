@@ -42,10 +42,8 @@ public actor AirPlay2Session {
 
     /// Format audio négocié, tel qu'AirPlay 2 le code en bits.
     ///
-    /// Valeurs relevées dans `AirplayAudFmt` du récepteur. Le projet demande
-    /// `ALAC_44100_16_2`, ce qui permet de réutiliser tel quel l'encodeur ALAC et le
-    /// rééchantillonneur du jalon 2 — la capture livrant du 48 kHz, la conversion vers
-    /// 44,1 kHz reste nécessaire dans les deux cas.
+    /// Valeurs relevées dans `AirplayAudFmt` du récepteur. Le projet demande le PCM 44,1 kHz,
+    /// comme pyatv : la capture livrant du 48 kHz, la conversion reste nécessaire.
     public enum AudioFormat: UInt32 {
         case alac44100_16_2 = 0x0004_0000  // 1 << 18
         case pcm44100_16_2 = 0x0000_0800  // 1 << 11
@@ -258,12 +256,49 @@ public actor AirPlay2Session {
         log.info("RECORD accepté (seq=\(startSequence) rtptime=\(startTimestamp))")
     }
 
+    /// Maintien de session : `POST /feedback`, sans corps.
+    ///
+    /// pyatv en émet un toutes les 2 s dès avant le `RECORD` (`airplayv2.py`,
+    /// `_feedback_task_loop`), « pour que l'appareil distant ne ferme pas la connexion », et c'est
+    /// aussi la cadence d'iOS. Sur le fil c'est sa requête à l'identique : RTSP/1.0, `CSeq`, et les
+    /// trois en-têtes d'identification du contrôleur, sans `Content-Length`.
+    ///
+    /// - Parameter timeout: court, car ce n'est pas seulement une politesse. C'est le seul
+    ///   échange régulier sur la connexion RTSP : il révèle une connexion fermée côté récepteur,
+    ///   que rien d'autre ne lirait, et l'absence de réponse d'un récepteur éteint sans adieu.
+    public func sendFeedback(timeout: Duration = .seconds(4)) async throws {
+        let request = RTSPRequest(
+            method: "POST",
+            uri: "/feedback",
+            headers: [
+                ("User-Agent", "AirPlay/550.10"),
+                ("DACP-ID", dacpIdentifier),
+                ("Active-Remote", activeRemote),
+                ("Client-Instance", dacpIdentifier),
+            ]
+        )
+        _ = try await client.send(request, timeout: timeout)
+    }
+
+    /// Valeur de volume réellement émise, pour une consigne quelconque.
+    ///
+    /// Le protocole ne connaît que `-30…0` et `-144` pour le silence. Sous `-30`, pyatv considère
+    /// le son coupé (`dbfs_to_pct`), d'où le même choix ici : monter à `-30` jouerait plus fort
+    /// que ce qui est demandé. Une consigne `NaN` coupe aussi — c'est la seule valeur sûre pour un
+    /// réglage de volume indéterminé. Les valeurs infimes sont ramenées à `0` : Swift les
+    /// écrirait `-5e-05`, une notation qu'aucun récepteur n'a la garantie de lire.
+    static func wireVolume(_ decibels: Float) -> Float {
+        guard !decibels.isNaN, decibels >= -30 else { return -144 }
+        if decibels > -0.001 { return 0 }
+        return decibels
+    }
+
     /// Règle le volume, en décibels.
     ///
     /// Échelle AirPlay : `-144` coupe le son, `-30` à `0` couvre la plage utile. Identique
     /// à RAOP, y compris le format texte du corps.
     public func setVolume(_ decibels: Float) async throws {
-        let body = Data("volume: \(decibels)\r\n".utf8)
+        let body = Data("volume: \(Self.wireVolume(decibels))\r\n".utf8)
         let request = RTSPRequest(
             method: "SET_PARAMETER",
             uri: sessionURI,
