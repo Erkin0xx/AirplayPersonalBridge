@@ -4,21 +4,20 @@
 //
 
 import AppKit
+import AudioCore
+import OSLog
 import SwiftUI
 import UniformTypeIdentifiers
-
-/// Un élément sélectionnable du plan. Murs et meubles partagent la même sélection : on
-/// s'attend à pouvoir attraper les deux ensemble et tout effacer d'un coup.
-enum PlanElement: Hashable {
-    case object(UUID)
-    case wall(UUID)
-}
 
 /// L'éditeur de plan (CDC section 9, niveau « 2D vu du dessus », l'option retenue).
 ///
 /// On trace des murs, on y pose des meubles, et chaque objet porte une hauteur. Ça reste
-/// délibérément loin d'un logiciel d'architecture : pas de portes, pas de fenêtres, pas de
-/// catalogue. Seul ce qui influe sur le trajet du son jusqu'aux oreilles a sa place ici.
+/// délibérément loin d'un logiciel d'architecture : pas de catalogue, pas de cotation. Seul
+/// le trajet du son jusqu'aux oreilles entre dans un calcul. Portes, fenêtres et tapis n'y
+/// participent pas : ce sont des repères, qui servent à reconnaître sa pièce d'un coup d'œil.
+///
+/// Cette vue porte l'édition et l'état d'interface ; le dessin vit dans `PlanRenderer`, ce
+/// qui permet de le rendre hors de l'app.
 ///
 /// **La vue ne se recadre jamais toute seule.** Une première version rejouait
 /// `PlanTransform.fitting` à chaque modification : le plan sautait sous le curseur à chaque
@@ -50,6 +49,10 @@ struct RoomPlanView: View {
     @State private var viewSize: CGSize = .zero
 
     @State private var drag: DragMode?
+    /// Le plan tel qu'il était au début du glissé en cours. Il n'entre dans la pile
+    /// d'annulation qu'à la fin, et seulement si le geste a vraiment déplacé quelque chose.
+    @State private var planBeforeDrag: RoomLayout?
+    @State private var history = PlanHistory()
 
     private enum DragMode {
         case move(id: UUID, offset: CGSize)
@@ -91,10 +94,23 @@ struct RoomPlanView: View {
     private let angleStep: Double = 15
     /// Rayon d'accrochage, en points d'écran : constant à l'œil quel que soit le zoom.
     private let snapRadius: Double = 14
+    /// En deçà de cette course, en points d'écran, un geste est un clic et ne déplace rien.
+    private let clickTolerance: Double = 4
     private let scaleRange: ClosedRange<Double> = 12...400
+
+    private static let log = Logger(subsystem: AudioLog.subsystem, category: "plan")
 
     private var transform: PlanTransform {
         PlanTransform(scale: scale, origin: origin ?? .zero)
+    }
+
+    private var renderer: PlanRenderer {
+        PlanRenderer(
+            layout: state.roomLayout, transform: transform, outputIDs: state.outputs.map(\.id),
+            selection: selection, hoveredObject: hoveredObject, hoveredVertex: hoveredVertex,
+            showsAllLabels: showsAllLabels, showsVertexHandles: tool == .select,
+            backgroundImage: backgroundImage
+        )
     }
 
     var body: some View {
@@ -107,6 +123,9 @@ struct RoomPlanView: View {
         }
         .background(Theme.background)
         .onDeleteCommand(perform: deleteSelection)
+        // Changer d'objet clôt les retouches en cours : les réglages d'un autre meuble sont
+        // un nouveau pas d'annulation, pas la suite du précédent.
+        .onChange(of: selection) { _, _ in history.endGroup() }
     }
 
     // MARK: - Zone de dessin
@@ -114,13 +133,9 @@ struct RoomPlanView: View {
     private var planArea: some View {
         Canvas { context, size in
             guard origin != nil else { return }
-            drawBackground(&context)
-            drawGrid(&context, size: size)
+            renderer.draw(in: &context, size: size)
             drawCalibration(&context)
-            drawWalls(&context)
             drawPendingWall(&context)
-            drawDistanceLines(&context)
-            for object in state.roomLayout.objects { draw(object, in: &context) }
         }
         .background(Theme.background)
         .contentShape(Rectangle())
@@ -139,7 +154,10 @@ struct RoomPlanView: View {
                 let model = transform.toModel(location)
                 hoverPoint = snapPoint(model, from: pendingWall.last)
                 hoveredVertex = tool == .select ? nearestWallVertex(to: model) : nil
-                hoveredObject = tool == .select ? object(at: model)?.id : nil
+                hoveredObject = nil
+                if tool == .select, case let .object(id) = element(at: model) {
+                    hoveredObject = id
+                }
             } else {
                 hoverPoint = nil
                 hoveredVertex = nil
@@ -234,7 +252,11 @@ struct RoomPlanView: View {
             HStack {
                 ShadTabs(
                     selection: $tool,
-                    items: Tool.allCases.map { ($0, $0.rawValue) }
+                    // Calibrer sans image de fond faisait tracer une mesure, saisir une
+                    // longueur, puis ne produisait aucun effet.
+                    items: Tool.allCases
+                        .filter { $0 != .calibrate || state.roomLayout.background != nil }
+                        .map { ($0, $0.rawValue) }
                 )
                 .onChange(of: tool) { _, _ in commitPendingWall() }
 
@@ -243,6 +265,8 @@ struct RoomPlanView: View {
                 if tool == .walls && pendingWall.count >= 2 {
                     Button("Terminer") { commitPendingWall() }
                         .shadButton(.outline, size: .small)
+                }
+                if tool == .walls && pendingWall.count >= 3 {
                     Button("Fermer") { commitPendingWall(closing: true) }
                         .shadButton(.primary, size: .small)
                 }
@@ -256,7 +280,25 @@ struct RoomPlanView: View {
                         .shadButton(.destructive, size: .small)
                 }
 
+                Button(action: undo) {
+                    Image(systemName: "arrow.uturn.backward").font(.system(size: 11))
+                }
+                .shadButton(.ghost, size: .small)
+                .keyboardShortcut("z", modifiers: .command)
+                .disabled(!canUndo)
+                .help("Annuler (⌘Z)")
+
+                Button(action: redo) {
+                    Image(systemName: "arrow.uturn.forward").font(.system(size: 11))
+                }
+                .shadButton(.ghost, size: .small)
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(!history.canRedo)
+                .help("Rétablir (⇧⌘Z)")
+
                 Menu {
+                    Button("Charger le plan du salon", action: loadSalonPlan)
+                    Divider()
                     Button("Pivoter le plan 90° à droite") { rotatePlan(clockwise: true) }
                     Button("Pivoter le plan 90° à gauche") { rotatePlan(clockwise: false) }
                     Divider()
@@ -265,6 +307,7 @@ struct RoomPlanView: View {
                     Button("Importer un plan en fond…") { showsImporter = true }
                     if state.roomLayout.background != nil {
                         Button("Retirer le plan de fond", role: .destructive) {
+                            history.record(state.roomLayout)
                             state.roomLayout.background = nil
                             backgroundImage = nil
                             if tool == .calibrate { tool = .select }
@@ -273,13 +316,16 @@ struct RoomPlanView: View {
                     }
                     Divider()
                     Button("Effacer les murs", role: .destructive) {
+                        history.record(state.roomLayout)
                         state.roomLayout.walls.removeAll()
                         selection = selection.filter { if case .wall = $0 { false } else { true } }
                         state.persistRoomLayout()
                     }
                     Button("Tout effacer", role: .destructive) {
+                        history.record(state.roomLayout)
                         state.roomLayout = RoomLayout()
                         selection = []
+                        if tool == .calibrate { tool = .select }
                         state.persistRoomLayout()
                     }
                 } label: {
@@ -310,7 +356,10 @@ struct RoomPlanView: View {
                 ShadSlider(
                     value: Binding(
                         get: { background.opacity },
-                        set: { state.roomLayout.background?.opacity = $0 }
+                        set: {
+                            history.record(state.roomLayout, group: "opacité du fond")
+                            state.roomLayout.background?.opacity = $0
+                        }
                     ),
                     range: 0.05...1
                 )
@@ -320,6 +369,7 @@ struct RoomPlanView: View {
                 Toggle(isOn: Binding(
                     get: { background.isLocked },
                     set: {
+                        history.record(state.roomLayout)
                         state.roomLayout.background?.isLocked = $0
                         state.persistRoomLayout()
                     }
@@ -405,46 +455,76 @@ struct RoomPlanView: View {
         // Le nouvel objet apparaît au centre de ce qu'on regarde, pas à l'origine du
         // modèle : sur un plan qu'on a déplacé, un objet posé en (0,0) atterrit hors écran.
         let object = preset.makeObject(at: gridSnapped(transform.toModel(center)), name: name)
+        history.record(state.roomLayout)
         state.roomLayout.objects.append(object)
         selection = [.object(object.id)]
         tool = .select
         state.persistRoomLayout()
     }
 
-    // MARK: - Dessin
+    // MARK: - Annulation
 
-    /// L'image de fond, sous la grille pour que les cotes restent lisibles par-dessus.
-    private func drawBackground(_ context: inout GraphicsContext) {
-        guard let background = state.roomLayout.background, let image = backgroundImage else {
+    /// Un tracé de mur en cours s'annule point par point, avant de toucher au plan : c'est ce
+    /// qu'on attend de ⌘Z au milieu d'un tracé, où le dernier geste est le dernier point posé.
+    private var canUndo: Bool { !pendingWall.isEmpty || history.canUndo }
+
+    private func undo() {
+        if !pendingWall.isEmpty {
+            pendingWall.removeLast()
             return
         }
-        let pixels = pixelSize(of: image)
-        let size = CGSize(
-            width: pixels.width * background.metersPerPixel * scale,
-            height: pixels.height * background.metersPerPixel * scale
-        )
-        let topLeft = transform.toView(background.origin)
-        let imageCenter = CGPoint(x: topLeft.x + size.width / 2, y: topLeft.y + size.height / 2)
-        let rect = CGRect(
-            x: -size.width / 2, y: -size.height / 2, width: size.width, height: size.height
-        )
+        guard let previous = history.undo(from: state.roomLayout) else { return }
+        restore(previous)
+    }
 
-        // L'image tourne autour de son centre pour suivre les rotations du plan : un
-        // décalque qui ne suivrait pas cesserait de correspondre au relevé.
-        context.drawLayer { layer in
-            layer.translateBy(x: imageCenter.x, y: imageCenter.y)
-            layer.rotate(by: .degrees(background.rotation))
-            layer.opacity = background.opacity
-            layer.draw(Image(nsImage: image), in: rect)
-            layer.opacity = 1
-            if !background.isLocked {
-                layer.stroke(
-                    Path(rect), with: .color(Theme.info),
-                    style: .init(lineWidth: 2, dash: [6, 4])
-                )
+    private func redo() {
+        guard let next = history.redo(from: state.roomLayout) else { return }
+        restore(next)
+    }
+
+    private func restore(_ layout: RoomLayout) {
+        state.roomLayout = layout
+        // Ne garder de la sélection que ce qui existe encore : l'inspecteur désignerait sinon
+        // un objet disparu, et un clic sur « Supprimer » ne ferait rien.
+        let wallIDs = Set(layout.walls.map(\.id))
+        let objectIDs = Set(layout.objects.map(\.id))
+        selection = selection.filter { element in
+            switch element {
+            case let .wall(id): wallIDs.contains(id)
+            case let .object(id): objectIDs.contains(id)
             }
         }
+        if tool == .calibrate, layout.background == nil { tool = .select }
+        state.persistRoomLayout()
+        // La vue ne se recadre jamais toute seule, sauf quand elle ne montrerait plus rien :
+        // annuler le chargement d'un plan peut ramener une pièce située ailleurs.
+        if let bounds = layout.bounds, let origin {
+            let view = PlanTransform(scale: scale, origin: origin)
+            let topLeft = view.toModel(.zero)
+            let bottomRight = view.toModel(CGPoint(x: viewSize.width, y: viewSize.height))
+            let visible = CGRect(
+                x: topLeft.x, y: topLeft.y,
+                width: bottomRight.x - topLeft.x, height: bottomRight.y - topLeft.y
+            )
+            if !visible.intersects(bounds) { fitToContent(in: viewSize) }
+        }
     }
+
+    /// Remplace le plan courant par celui du salon. ⌘Z le rend, le temps de la session.
+    private func loadSalonPlan() {
+        commitPendingWall()
+        history.record(state.roomLayout)
+        state.roomLayout = RoomLayout.salon.bindingSpeakers(
+            toOutputs: state.outputs.map { (id: $0.id, name: $0.displayName) }
+        )
+        selection = []
+        tool = .select
+        state.persistRoomLayout()
+        // Le plan change entièrement d'emprise : sans recadrage il partirait hors de la fenêtre.
+        fitToContent(in: viewSize)
+    }
+
+    // MARK: - Dessin
 
     /// La mesure de calibrage en cours.
     private func drawCalibration(_ context: inout GraphicsContext) {
@@ -460,91 +540,6 @@ struct RoomPlanView: View {
             context.stroke(
                 Path(ellipseIn: CGRect(x: view.x - 5, y: view.y - 5, width: 10, height: 10)),
                 with: .color(Theme.destructive), lineWidth: 2
-            )
-        }
-    }
-
-    /// Dimensions en **pixels** de l'image, pas en points : une capture d'écran Retina
-    /// rapporte une taille en points deux fois plus petite que sa vraie définition, ce qui
-    /// fausserait l'échelle d'un facteur 2 sans que rien ne le signale.
-    private func pixelSize(of image: NSImage) -> CGSize {
-        if let representation = image.representations.first {
-            return CGSize(width: representation.pixelsWide, height: representation.pixelsHigh)
-        }
-        return image.size
-    }
-
-    private func drawGrid(_ context: inout GraphicsContext, size: CGSize) {
-        // Graduation au mètre : c'est l'unité dans laquelle on raisonne, et elle donne
-        // l'échelle sans avoir à écrire de cote partout. En dessous de 25 px/m elle
-        // deviendrait un aplat, donc on l'espace.
-        let step: Double = scale < 25 ? 5 : 1
-        var path = Path()
-        let topLeft = transform.toModel(.zero)
-        let bottomRight = transform.toModel(CGPoint(x: size.width, y: size.height))
-        var x = (topLeft.x / step).rounded(.down) * step
-        while x <= bottomRight.x {
-            let viewX = transform.toView(CGPoint(x: x, y: 0)).x
-            path.move(to: CGPoint(x: viewX, y: 0))
-            path.addLine(to: CGPoint(x: viewX, y: size.height))
-            x += step
-        }
-        var y = (topLeft.y / step).rounded(.down) * step
-        while y <= bottomRight.y {
-            let viewY = transform.toView(CGPoint(x: 0, y: y)).y
-            path.move(to: CGPoint(x: 0, y: viewY))
-            path.addLine(to: CGPoint(x: size.width, y: viewY))
-            y += step
-        }
-        context.stroke(path, with: .color(Theme.border), lineWidth: 1)
-    }
-
-    private func drawWalls(_ context: inout GraphicsContext) {
-        for wall in state.roomLayout.walls {
-            let a = transform.toView(wall.a)
-            let b = transform.toView(wall.b)
-            var path = Path()
-            path.move(to: a)
-            path.addLine(to: b)
-            let isSelected = selection.contains(.wall(wall.id))
-            context.stroke(
-                path,
-                with: .color(isSelected ? Theme.info : Theme.foreground.opacity(0.85)),
-                style: .init(lineWidth: isSelected ? 8 : 6, lineCap: .round)
-            )
-            // Les cotes de mur ne s'affichent qu'à la sélection ou une fois assez zoomé :
-            // sur une pièce entière tenant dans la fenêtre, elles se chevauchaient toutes.
-            if showsAllLabels || isSelected || scale >= 45 {
-                context.draw(
-                    Text(String(format: "%.2f m", wall.length))
-                        .font(.system(size: 9))
-                        .foregroundStyle(isSelected ? Theme.info : Theme.mutedForeground),
-                    at: CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 9)
-                )
-            }
-        }
-        drawVertexHandles(&context)
-    }
-
-    /// Les poignées de sommet. Elles ne s'affichent qu'en mode Sélection : pendant un tracé
-    /// elles se confondraient avec les points du mur en cours.
-    private func drawVertexHandles(_ context: inout GraphicsContext) {
-        guard tool == .select else { return }
-        for vertex in uniqueWallVertices {
-            let view = transform.toView(vertex)
-            let isHovered = hoveredVertex.map {
-                hypot($0.x - vertex.x, $0.y - vertex.y) < 0.002
-            } ?? false
-            let radius: CGFloat = isHovered ? 6.5 : 4
-            let circle = Path(
-                ellipseIn: CGRect(
-                    x: view.x - radius, y: view.y - radius, width: radius * 2, height: radius * 2
-                )
-            )
-            context.fill(circle, with: .color(isHovered ? Theme.info : Theme.background))
-            context.stroke(
-                circle, with: .color(isHovered ? Theme.info : Theme.foreground.opacity(0.55)),
-                lineWidth: 1.5
             )
         }
     }
@@ -631,240 +626,6 @@ struct RoomPlanView: View {
         context.stroke(mark, with: .color(Theme.info), lineWidth: 1.5)
     }
 
-    /// Le trait enceinte ↔ oreilles, avec la distance : la lecture directe de ce qui
-    /// produit le délai suggéré.
-    private func drawDistanceLines(_ context: inout GraphicsContext) {
-        guard let listener = state.roomLayout.listener else { return }
-        let listenerView = transform.toView(listener.position)
-        let listenerDesignated = selection.contains(.object(listener.id))
-            || hoveredObject == listener.id
-
-        for output in state.outputs {
-            let speakers = state.roomLayout.speakers(forOutput: output.id)
-            guard !speakers.isEmpty else { continue }
-
-            for speaker in speakers {
-                let speakerView = transform.toView(speaker.position)
-                var line = Path()
-                line.move(to: speakerView)
-                line.addLine(to: listenerView)
-                context.stroke(
-                    line, with: .color(Theme.warning.opacity(0.55)),
-                    style: .init(lineWidth: 1.5, dash: [5, 4])
-                )
-
-                // La cote ne s'affiche que pour l'objet désigné. Avec trois enceintes et
-                // une position d'écoute, quatre étiquettes convergeaient au même endroit
-                // et se rendaient mutuellement illisibles.
-                let designated = showsAllLabels || listenerDesignated
-                    || selection.contains(.object(speaker.id)) || hoveredObject == speaker.id
-                guard designated else { continue }
-
-                let distance = state.roomLayout.distance(from: speaker, to: listener)
-                let flat = hypot(
-                    speaker.position.x - listener.position.x,
-                    speaker.position.y - listener.position.y
-                )
-                // « 3D » n'apparaît que si la hauteur change vraiment la distance : sinon
-                // la mention serait du bruit.
-                let label = abs(distance - flat) > 0.02
-                    ? String(format: "%.2f m (3D)", distance)
-                    : String(format: "%.2f m", distance)
-                context.draw(
-                    Text(label).font(Theme.Font.tiny).foregroundStyle(Theme.warning),
-                    at: CGPoint(
-                        x: (speakerView.x + listenerView.x) / 2,
-                        y: (speakerView.y + listenerView.y) / 2 - 8
-                    )
-                )
-            }
-
-            // Pour une paire stéréo, c'est la moyenne qui commande le délai : l'afficher
-            // évite de croire que le réglage suit l'une des deux boîtes en particulier.
-            if speakers.count > 1, showsAllLabels || listenerDesignated,
-                let mean = state.roomLayout.distanceToListener(outputID: output.id)
-            {
-                let centroid = speakers.reduce(CGPoint.zero) {
-                    CGPoint(x: $0.x + $1.position.x, y: $0.y + $1.position.y)
-                }
-                let middle = transform.toView(
-                    CGPoint(
-                        x: centroid.x / Double(speakers.count),
-                        y: centroid.y / Double(speakers.count)
-                    )
-                )
-                context.draw(
-                    Text(String(format: "moyenne %.2f m", mean))
-                        .font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.warning),
-                    at: CGPoint(
-                        x: (middle.x + listenerView.x) / 2, y: (middle.y + listenerView.y) / 2 + 8
-                    )
-                )
-            }
-        }
-    }
-
-    private func draw(_ object: RoomObject, in context: inout GraphicsContext) {
-        let viewCenter = transform.toView(object.position)
-        let width = object.size.width * scale
-        let height = object.size.height * scale
-        let isSelected = selection.contains(.object(object.id))
-
-        context.drawLayer { layer in
-            layer.translateBy(x: viewCenter.x, y: viewCenter.y)
-            layer.rotate(by: .degrees(object.rotation))
-            let rect = CGRect(x: -width / 2, y: -height / 2, width: width, height: height)
-            let shape: Path = switch object.shape {
-            case .ellipse:
-                Path(ellipseIn: rect)
-            case .lShape:
-                // Le contour vient du modèle, converti en points d'écran : le dessin et le
-                // test de clic partagent ainsi la même définition et ne peuvent pas diverger.
-                Path { path in
-                    let points = object.localPolygon.map {
-                        CGPoint(x: $0.x * scale, y: $0.y * scale)
-                    }
-                    guard let first = points.first else { return }
-                    path.move(to: first)
-                    for point in points.dropFirst() { path.addLine(to: point) }
-                    path.closeSubpath()
-                }
-            case .rectangle:
-                Path(roundedRect: rect, cornerRadius: min(6, min(width, height) / 3))
-            }
-            layer.fill(shape, with: .color(fillColor(for: object)))
-            layer.stroke(
-                shape, with: .color(isSelected ? Theme.info : Theme.border),
-                lineWidth: isSelected ? 2.5 : 1
-            )
-            // Le trait sur un bord marque l'avant du meuble : sans repère d'orientation,
-            // faire tourner un canapé ne se voit pas et le réglage devient incontrôlable.
-            // Sans objet sur un meuble rond, qui n'a pas de face.
-            if !object.isRound {
-                var front = Path()
-                front.move(to: CGPoint(x: -width / 2, y: -height / 2))
-                front.addLine(to: CGPoint(x: width / 2, y: -height / 2))
-                layer.stroke(front, with: .color(Theme.foreground.opacity(0.5)), lineWidth: 2.5)
-            }
-        }
-
-        // Icône et libellés hors du calque tourné : un texte pivoté serait illisible dès
-        // qu'un meuble est de travers.
-        //
-        // Le point d'ancrage vient du modèle et suit la rotation de l'objet — c'est ce qui
-        // met l'icône du canapé d'angle au milieu de sa méridienne quel que soit son sens.
-        let angle = object.rotation * .pi / 180
-        let offset = object.iconOffset
-        let iconPoint = CGPoint(
-            x: viewCenter.x + (offset.x * cos(angle) - offset.y * sin(angle)) * scale,
-            y: viewCenter.y + (offset.x * sin(angle) + offset.y * cos(angle)) * scale
-        )
-
-        if object.kind == .listener {
-            drawListenerFigure(&context, at: iconPoint, rotation: object.rotation)
-        } else {
-            let iconSize = min(22, max(9, min(width, height) * 0.5))
-            // Une icône plus grande que l'objet déborde et brouille ses voisins ; sous
-            // 9 points elle n'est de toute façon plus lisible. Mieux vaut rien.
-            if min(width, height) > 12 {
-                context.draw(
-                    Text(Image(systemName: object.kind.symbol))
-                        .font(.system(size: iconSize))
-                        .foregroundStyle(Theme.foreground.opacity(0.75)),
-                    at: iconPoint
-                )
-            }
-        }
-
-        let isHovered = hoveredObject == object.id
-        // Le nom n'apparaît que si l'objet est assez large pour le porter, ou s'il est
-        // désigné. C'est le principal remède à l'encombrement : sur un plan meublé, une
-        // dizaine d'étiquettes permanentes se recouvrent et plus rien ne se lit.
-        if showsAllLabels || isSelected || isHovered || width >= 64 {
-            context.draw(
-                Text(object.name.isEmpty ? object.kind.label : object.name)
-                    .font(.caption2).bold(),
-                at: CGPoint(x: viewCenter.x, y: viewCenter.y - height / 2 - 9)
-            )
-        }
-        // La hauteur ne sert qu'au moment où on la règle : à la demande uniquement.
-        if showsAllLabels || isSelected || isHovered {
-            context.draw(
-                Text(String(format: "%.2f m", object.elevation))
-                    .font(.system(size: 9)).foregroundStyle(Theme.mutedForeground),
-                at: CGPoint(x: viewCenter.x, y: viewCenter.y + height / 2 + 8)
-            )
-        }
-    }
-
-    /// La position d'écoute, dessinée **vue de dessus**.
-    ///
-    /// Le symbole système `figure.seated.side` est une silhouette de profil : posée sur un
-    /// plan vu du dessus, elle jure avec tout le reste et ne dit pas où sont les oreilles —
-    /// qui sont pourtant le seul point qui compte ici, puisque toutes les distances y
-    /// aboutissent. On dessine donc des épaules, une tête, deux oreilles et le regard.
-    private func drawListenerFigure(
-        _ context: inout GraphicsContext, at point: CGPoint, rotation: Double
-    ) {
-        // Tailles anthropométriques ramenées à l'échelle du plan, bornées pour rester
-        // lisibles quand on dézoome.
-        let head = max(7, min(0.18 * scale, 26))
-        let shoulders = head * 2.1
-
-        context.drawLayer { layer in
-            layer.translateBy(x: point.x, y: point.y)
-            layer.rotate(by: .degrees(rotation))
-
-            // Épaules : une ellipse large et peu profonde, qui donne l'orientation.
-            layer.fill(
-                Path(
-                    ellipseIn: CGRect(
-                        x: -shoulders / 2, y: -head * 0.35, width: shoulders, height: head * 1.15
-                    )
-                ),
-                with: .color(Theme.warning.opacity(0.85))
-            )
-
-            // Tête.
-            let headRect = CGRect(x: -head / 2, y: -head / 2, width: head, height: head)
-            layer.fill(Path(ellipseIn: headRect), with: .color(Theme.warning))
-            layer.stroke(
-                Path(ellipseIn: headRect), with: .color(Theme.foreground.opacity(0.55)), lineWidth: 1
-            )
-
-            // Les deux oreilles : c'est là qu'arrivent les distances calculées.
-            let ear = max(2, head * 0.17)
-            for side in [-1.0, 1.0] {
-                layer.fill(
-                    Path(
-                        ellipseIn: CGRect(
-                            x: side * head * 0.5 - ear / 2, y: -ear / 2,
-                            width: ear, height: ear * 1.6
-                        )
-                    ),
-                    with: .color(Theme.foreground.opacity(0.6))
-                )
-            }
-
-            // Nez : un petit triangle vers l'avant, qui dit dans quel sens on regarde.
-            var nose = Path()
-            nose.move(to: CGPoint(x: -head * 0.18, y: -head * 0.45))
-            nose.addLine(to: CGPoint(x: 0, y: -head * 0.72))
-            nose.addLine(to: CGPoint(x: head * 0.18, y: -head * 0.45))
-            nose.closeSubpath()
-            layer.fill(nose, with: .color(Theme.warning))
-        }
-    }
-
-    private func fillColor(for object: RoomObject) -> Color {
-        switch object.kind {
-        case .speaker: Theme.info.opacity(0.30)
-        case .listener: Theme.warning.opacity(0.28)
-        case .tv: Theme.foreground.opacity(0.22)
-        default: Theme.muted
-        }
-    }
-
     // MARK: - Cadrage
 
     private func zoom(to newScale: Double, around anchor: CGPoint) {
@@ -914,10 +675,18 @@ struct RoomPlanView: View {
         do {
             try FileManager.default.copyItem(at: url, to: destination)
         } catch {
+            Self.log.error(
+                "Import du fond impossible : \(error.localizedDescription, privacy: .public)"
+            )
             return
         }
-        guard let image = NSImage(contentsOf: destination) else { return }
-        let pixels = pixelSize(of: image)
+        guard let image = NSImage(contentsOf: destination) else {
+            Self.log.error("Fond illisible : \(url.lastPathComponent, privacy: .public)")
+            try? FileManager.default.removeItem(at: destination)
+            return
+        }
+        let pixels = PlanRenderer.pixelSize(of: image)
+        history.record(state.roomLayout)
 
         // Échelle de départ : on suppose que l'image couvre environ 8 m de large. C'est
         // arbitraire et faux, mais ça la rend visible à une taille plausible — le calibrage
@@ -969,6 +738,7 @@ struct RoomPlanView: View {
             y: anchor.y + (background.origin.y - anchor.y) * factor
         )
         background.isLocked = true
+        history.record(state.roomLayout)
         state.roomLayout.background = background
         tool = .walls
         state.persistRoomLayout()
@@ -1049,18 +819,6 @@ struct RoomPlanView: View {
         }
     }
 
-    /// Les sommets sans doublon, au millimètre — un coin partagé par quatre segments ne
-    /// doit dessiner qu'une poignée.
-    private var uniqueWallVertices: [CGPoint] {
-        var seen: Set<[Int]> = []
-        var result: [CGPoint] = []
-        for vertex in state.roomLayout.wallVertices {
-            let key = [Int((vertex.x * 1000).rounded()), Int((vertex.y * 1000).rounded())]
-            if seen.insert(key).inserted { result.append(vertex) }
-        }
-        return result
-    }
-
     // MARK: - Interaction
 
     /// **Un seul geste** pour le clic, le déplacement d'objet et le panoramique.
@@ -1075,6 +833,7 @@ struct RoomPlanView: View {
                 guard let origin else { return }
                 if drag == nil {
                     let start = transform.toModel(value.startLocation)
+                    planBeforeDrag = state.roomLayout
                     if let background = state.roomLayout.background, !background.isLocked {
                         // Image déverrouillée : le glissé la cale, il ne déplace pas la vue.
                         // Les deux gestes seraient sinon indiscernables.
@@ -1089,7 +848,7 @@ struct RoomPlanView: View {
                                 width: vertex.x - start.x, height: vertex.y - start.y
                             )
                         )
-                    } else if tool == .select, let hit = object(at: start) {
+                    } else if tool == .select, let hit = draggableObject(at: start) {
                         if !selection.contains(.object(hit.id)) { selection = [.object(hit.id)] }
                         // On mémorise la prise plutôt que de recentrer l'objet sous le
                         // curseur : sinon un canapé de 2 m saute au premier pixel.
@@ -1103,14 +862,21 @@ struct RoomPlanView: View {
                         drag = .pan(startOrigin: origin)
                     }
                 }
+                let travelled = hypot(value.translation.width, value.translation.height)
                 switch drag {
                 case let .move(id, offset):
-                    guard let index = index(ofObject: id) else { return }
+                    // Sous le seuil du clic, rien ne bouge. Le magnétisme s'appliquait dès le
+                    // premier événement : un simple clic pour sélectionner un meuble le
+                    // déplaçait jusqu'à 2,5 cm, sans que la sauvegarde le sache.
+                    guard travelled >= clickTolerance, let index = index(ofObject: id) else {
+                        return
+                    }
                     let model = transform.toModel(value.location)
                     state.roomLayout.objects[index].position = gridSnapped(
                         CGPoint(x: model.x + offset.width, y: model.y + offset.height)
                     )
                 case let .moveVertex(refs, offset):
+                    guard travelled >= clickTolerance else { return }
                     let model = transform.toModel(value.location)
                     let raw = CGPoint(x: model.x + offset.width, y: model.y + offset.height)
                     // Souder à un sommet voisin l'emporte sur la grille : c'est ainsi qu'on
@@ -1142,7 +908,7 @@ struct RoomPlanView: View {
             }
             .onEnded { value in
                 let travelled = hypot(value.translation.width, value.translation.height)
-                if travelled < 4 {
+                if travelled < clickTolerance {
                     // Immobile : c'était un clic. On défait le mouvement parasite.
                     switch drag {
                     case let .pan(startOrigin): origin = startOrigin
@@ -1153,12 +919,26 @@ struct RoomPlanView: View {
                     handleClick(at: value.startLocation)
                 } else {
                     switch drag {
-                    case .move, .moveVertex, .moveBackground: state.persistRoomLayout()
+                    case .move, .moveVertex, .moveBackground:
+                        if let planBeforeDrag { history.record(planBeforeDrag) }
+                        state.persistRoomLayout()
                     default: break
                     }
                 }
                 drag = nil
+                planBeforeDrag = nil
             }
+    }
+
+    /// Le seul meuble que le glissé puisse emporter : celui qu'on voit sous le curseur. Un
+    /// tapis ne suit la souris qu'une fois sélectionné, sinon déplacer la vue au-dessus de lui
+    /// le ferait glisser sous les meubles.
+    private func draggableObject(at model: CGPoint) -> RoomObject? {
+        guard case let .object(id) = element(at: model),
+            let hit = state.roomLayout.objects.first(where: { $0.id == id })
+        else { return nil }
+        if hit.kind.yieldsToEverything, !selection.contains(.object(id)) { return nil }
+        return hit
     }
 
     private func handleClick(at location: CGPoint) {
@@ -1171,7 +951,7 @@ struct RoomPlanView: View {
             let point = snapPoint(model, from: pendingWall.last)
             // Recliquer sur le premier point ferme la pièce : c'est le geste attendu, et ça
             // évite un bouton de plus pour le cas le plus courant.
-            if let first = pendingWall.first, pendingWall.count >= 2,
+            if let first = pendingWall.first, pendingWall.count >= 3,
                 hypot(point.x - first.x, point.y - first.y) * scale < snapRadius
             {
                 commitPendingWall(closing: true)
@@ -1199,25 +979,10 @@ struct RoomPlanView: View {
         }
     }
 
-    /// Élément sous le point. Les meubles priment sur les murs : ils sont dessinés
-    /// par-dessus, c'est donc eux qu'on croit viser.
+    /// Élément sous le point. L'ordre de priorité est celui du dessin, et il vit dans le
+    /// modèle pour pouvoir se vérifier sans lancer l'interface.
     private func element(at model: CGPoint) -> PlanElement? {
-        if let object = object(at: model) { return .object(object.id) }
-        let tolerance = snapRadius / scale
-        if let wall = state.roomLayout.walls
-            .map({ ($0, $0.distance(to: model)) })
-            .filter({ $0.1 < tolerance })
-            .min(by: { $0.1 < $1.1 })?.0
-        {
-            return .wall(wall.id)
-        }
-        return nil
-    }
-
-    /// Objet sous le point, du dessus vers le dessous : le dernier dessiné est celui qu'on
-    /// voit, c'est donc lui qu'on attrape.
-    private func object(at model: CGPoint) -> RoomObject? {
-        state.roomLayout.objects.last { $0.contains(model) }
+        state.roomLayout.element(at: model, wallTolerance: snapRadius / scale)
     }
 
     private func index(ofObject id: UUID) -> Int? {
@@ -1226,6 +991,7 @@ struct RoomPlanView: View {
 
     private func rotatePlan(clockwise: Bool) {
         commitPendingWall()
+        history.record(state.roomLayout)
         state.roomLayout = state.roomLayout.rotatedQuarterTurn(clockwise: clockwise)
         state.persistRoomLayout()
         // Le plan a changé d'emprise : sans recadrage il partirait hors de la fenêtre, et
@@ -1251,6 +1017,7 @@ struct RoomPlanView: View {
             case let .object(id): objects.insert(id)
             }
         }
+        history.record(state.roomLayout)
         // L'ordre compte : on vide la sélection **avant** de toucher aux tableaux, sinon
         // l'inspecteur est réévalué le temps d'une image en désignant un objet disparu.
         selection = []
@@ -1262,8 +1029,11 @@ struct RoomPlanView: View {
     private func commitPendingWall(closing: Bool = false) {
         defer { pendingWall = [] }
         guard pendingWall.count >= 2 else { return }
+        history.record(state.roomLayout)
         var points = pendingWall
-        if closing, let first = points.first { points.append(first) }
+        // Fermer une polyligne de deux points doublerait le mur sur lui-même : deux segments
+        // superposés, dont le second reste dessous à l'effacement du premier.
+        if closing, points.count >= 3, let first = points.first { points.append(first) }
         for (a, b) in zip(points, points.dropFirst()) {
             state.roomLayout.walls.append(RoomLayout.WallSegment(a: a, b: b))
         }
@@ -1281,7 +1051,7 @@ struct RoomPlanView: View {
     /// longueur se lit sur le plan et se change en le retraçant.
     @ViewBuilder
     private var inspector: some View {
-        if selection.count == 1, case let .object(id) = selection.first!,
+        if selection.count == 1, let only = selection.first, case let .object(id) = only,
             let snapshot = state.roomLayout.objects.first(where: { $0.id == id })
         {
             ObjectInspector(
@@ -1293,7 +1063,16 @@ struct RoomPlanView: View {
                     get: { state.roomLayout.objects.first { $0.id == id } ?? snapshot },
                     set: { newValue in
                         guard let index = index(ofObject: id) else { return }
-                        state.roomLayout.objects[index] = newValue
+                        // Toutes les retouches d'un même objet forment un seul pas d'annulation.
+                        history.record(state.roomLayout, group: "inspecteur \(id)")
+                        // Une taille nulle ou négative rendrait l'objet invisible et impossible
+                        // à rattraper au clic : il ne resterait qu'à tout sélectionner.
+                        var edited = newValue
+                        edited.size = CGSize(
+                            width: max(newValue.size.width, 0.01),
+                            height: max(newValue.size.height, 0.01)
+                        )
+                        state.roomLayout.objects[index] = edited
                     }
                 ),
                 outputs: state.outputs,
@@ -1384,6 +1163,24 @@ private struct ObjectInspector: View {
 
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
                 GridRow {
+                    Text("Nom").shadMuted()
+                    // Rien d'autre ne permettait de nommer un objet. Or le nom d'une enceinte
+                    // n'est pas qu'une étiquette : c'est lui qui la rattache à sa sortie.
+                    TextField(object.kind.label, text: $object.name)
+                        .textFieldStyle(.plain)
+                        .font(Theme.Font.small)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(
+                            Theme.background, in: RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                        )
+                        .overlay {
+                            RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                                .strokeBorder(Theme.border, lineWidth: 1)
+                        }
+                        .gridCellColumns(2)
+                }
+                GridRow {
                     Text("Position").shadMuted()
                     field("X", value: $object.position.x.asDouble)
                     field("Y", value: $object.position.y.asDouble)
@@ -1416,12 +1213,33 @@ private struct ObjectInspector: View {
                         .help("Renvoie le retour du canapé de l'autre côté")
                     }
                 }
-                GridRow {
-                    Text("Hauteur").shadMuted()
-                    field(heightLabel, value: $object.elevation)
-                    Text(heightHint).font(Theme.Font.tiny).foregroundStyle(Theme.mutedForeground)
+                if object.kind == .door {
+                    GridRow {
+                        Text("Charnière").shadMuted()
+                        Button {
+                            object.isMirrored.toggle()
+                        } label: {
+                            Label(
+                                object.isMirrored ? "À droite" : "À gauche",
+                                systemImage: "arrow.left.arrow.right"
+                            )
+                        }
+                        .shadButton(.outline, size: .small)
+                        .help("Fait pivoter la porte de l'autre côté")
+                        Color.clear.frame(height: 0)
+                    }
                 }
-                if !object.isRound {
+                // Un tapis, une porte ou une fenêtre n'interviennent dans aucun calcul :
+                // leur demander une hauteur laisserait croire le contraire.
+                if !object.kind.hasNoAcousticHeight {
+                    GridRow {
+                        Text("Hauteur").shadMuted()
+                        field(heightLabel, value: $object.elevation)
+                        Text(heightHint).font(Theme.Font.tiny).foregroundStyle(Theme.mutedForeground)
+                    }
+                }
+                // Une chaise de bureau est ronde mais a un dossier, donc un sens.
+                if !object.isRound || object.kind == .chair {
                     GridRow {
                         Text("Orientation").shadMuted()
                         ShadSlider(value: $object.rotation, range: 0...360, step: 5)
@@ -1481,8 +1299,10 @@ private struct ObjectInspector: View {
         case .listener: "hauteur d'oreilles, assis"
         case .speaker: "hauteur du haut-parleur"
         case .tv: "centre de l'écran"
-        case .sofa: "hauteur d'assise"
-        case .shelf, .tvStand: "hauteur du dessus"
+        case .sofa, .armchair, .chair: "hauteur d'assise"
+        case .shelf, .tvStand, .sideboard, .console, .radiator: "hauteur du dessus"
+        case .plant, .lamp: "hauteur du sommet"
+        case .device, .decor: "hauteur de pose"
         default: "hauteur du plateau"
         }
     }

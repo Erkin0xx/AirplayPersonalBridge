@@ -236,6 +236,16 @@ final class BridgeState {
                 "Aucune sortie trouvée. Vérifier les mocks (./run-mocks.sh) et l'autorisation "
                 + "« Réseau local » dans Réglages Système."
         }
+
+        // Une enceinte posée avant que sa sortie soit visible (la Geneva éteinte, typiquement)
+        // se rattache ici, par son nom, dès que celle-ci apparaît sur le réseau.
+        let bound = roomLayout.bindingSpeakers(
+            toOutputs: outputs.map { (id: $0.id, name: $0.displayName) }
+        )
+        if bound != roomLayout {
+            roomLayout = bound
+            persistRoomLayout()
+        }
     }
 
     func refreshSources() {
