@@ -326,6 +326,8 @@ public actor BridgeEngine {
     /// Reconstruction en cours. Une notification ne l'annule pas : elle relit la route en
     /// terminant, et deux reconstructions simultanées lanceraient deux IO sur le même tampon.
     private var rebuildTask: Task<Void, Never>?
+    /// Options de la session, pour une source qui en remplace une autre en cours de route.
+    private var startOptions = StartOptions()
     /// Les sorties ont été arrêtées pour une nouvelle fréquence, et attendent d'être relancées.
     /// Tant que c'est vrai, une sortie cochée entre dans la liste sans démarrer : c'est la relance
     /// qui la lancera, sur le bon tampon. Vrai aussi après une relance ratée, tant qu'aucune
@@ -437,6 +439,7 @@ public actor BridgeEngine {
         }
 
         lifecycle = .running
+        startOptions = options
         outputsAwaitingRelaunch = false
         health = CaptureHealth()
         health.diagnosis = .waitingForFirstBlock
@@ -446,9 +449,7 @@ public actor BridgeEngine {
         snapshots = [:]
         entries = [:]
 
-        source.setRouteChangeHandler { [weak self] in
-            Task { await self?.noteRouteChange() }
-        }
+        watchRoute(of: source)
         healthTask = Task { [weak self, interval = tuning.healthInterval] in
             while !Task.isCancelled {
                 await self?.tickHealth()
@@ -463,6 +464,12 @@ public actor BridgeEngine {
             }
         }
         log.info("Moteur démarré : \(requests.count) sortie(s)")
+    }
+
+    private func watchRoute(of source: any AudioCaptureSource) {
+        source.setRouteChangeHandler { [weak self] in
+            Task { await self?.noteRouteChange() }
+        }
     }
 
     /// Crée fanout, adaptateur et horloge pour un format de source, puis lance l'IO.
@@ -1022,6 +1029,76 @@ public actor BridgeEngine {
                 snapshots[id]?.phase = .failed("\(error)")
                 snapshots[id]?.lastError = "\(error)"
             }
+        }
+    }
+
+    // MARK: - Changement de source
+
+    /// Remplace ce qui est capté, sans toucher aux sessions des sorties.
+    ///
+    /// Le moteur sait déjà arrêter une source et en redémarrer l'IO sur le même tampon : c'est ce que
+    /// fait une reconstruction. Ici la source qui repart est une autre, et les sorties n'ont pas à le
+    /// savoir (invariant section 12). L'ancienne est arrêtée avant que la nouvelle ne démarre : une
+    /// seule capture à la fois.
+    ///
+    /// Rend la main rapidement, sans attendre une capture qui refuserait de repartir : l'appelant est
+    /// la file des transitions de l'interface, et un arrêt demandé doit pouvoir y passer.
+    ///
+    /// - Returns: faux s'il n'a pas eu lieu, à réessayer plus tard : reconstruction déjà en cours,
+    ///   nouvelle source qui ne démarre pas, ou qui exigerait une autre autorisation. L'ancienne
+    ///   continue alors, reconstruite au besoin en arrière-plan.
+    public func replaceCapture(with request: Source) async -> Bool {
+        // Elle pilote la source : le changement la laisse finir, plutôt que de l'attendre.
+        guard lifecycle == .running, rebuildTask == nil else { return false }
+
+        let task = Task { [weak self] in await self?.swapCapture(for: request) ?? .kept }
+        rebuildTask = Task { _ = await task.value }
+        let outcome = await task.value
+        rebuildTask = nil
+
+        switch outcome {
+        case .replaced:
+            // Une notification de route arrivée entre-temps n'a pas pu lancer sa reconstruction.
+            beginRebuildIfNeeded()
+            return true
+        case .previousStopped:
+            if lifecycle == .running { beginCurrentCaptureRebuild() }
+            return false
+        case .kept:
+            return false
+        }
+    }
+
+    private enum SwapOutcome {
+        case replaced
+        /// L'ancienne source a été arrêtée pour rien : elle reste à relancer.
+        case previousStopped
+        case kept
+    }
+
+    private func swapCapture(for request: Source) async -> SwapOutcome {
+        guard lifecycle == .running, let current = source else { return .kept }
+        let replacement = dependencies.makeSource(request, startOptions)
+        guard replacement.requiredPermission == current.requiredPermission else { return .kept }
+
+        log.info("Changement de source, sorties conservées")
+        let stoppedAt = captureWillStop()
+        let compensatedBefore = health.interruptedSeconds
+        current.setRouteChangeHandler(nil)
+        current.stop()
+        do {
+            try await reopenCapture(
+                replacement, stoppedAt: stoppedAt, compensatedBefore: compensatedBefore
+            )
+            source = replacement
+            watchRoute(of: replacement)
+            lastExpectationCheck = nil
+            return .replaced
+        } catch {
+            replacement.stop()
+            log.error("Changement de source en échec : \(error)")
+            watchRoute(of: current)
+            return .previousStopped
         }
     }
 

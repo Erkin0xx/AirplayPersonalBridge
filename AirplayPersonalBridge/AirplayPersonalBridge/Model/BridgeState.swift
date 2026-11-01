@@ -320,6 +320,11 @@ final class BridgeState {
     /// parte, et un récepteur lent ne retarde jamais les réglages des autres.
     @ObservationIgnored private var outputWork: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var emptySelectionTask: Task<Void, Never>?
+    /// Dernier relevé des processus de l'application captée.
+    @ObservationIgnored private var lastSourceCheck: ContinuousClock.Instant?
+    /// Un changement de capture attend son tour ou s'exécute : pas de second par-dessus.
+    @ObservationIgnored private var isFollowingSource = false
+    @ObservationIgnored private var sourceFollowPacer: SourceFollowPacer
 
     // MARK: - Veille
 
@@ -402,6 +407,10 @@ final class BridgeState {
     init(environment: BridgeEnvironment = .inert) {
         self.environment = environment
         self.engine = BridgeEngine(dependencies: environment.engineDependencies)
+        self.sourceFollowPacer = SourceFollowPacer(
+            minimum: environment.timing.sourceFollowMinimumSpacing,
+            maximum: environment.timing.sourceFollowMaximumSpacing
+        )
         let settings = environment.settingsStore.load()
         self.settings = settings
         self.lastSavedSettings = settings
@@ -595,9 +604,13 @@ final class BridgeState {
     }
 
     private func updateSources(isCaptureLive: Bool) {
+        updateSources(available: environment.availableSources(), isCaptureLive: isCaptureLive)
+    }
+
+    private func updateSources(available: [CaptureSource], isCaptureLive: Bool) {
         let resolved = CaptureSource.resolve(
             preferredID: preferredSourceID, current: selectedSource,
-            available: environment.availableSources(), isLive: isCaptureLive
+            available: available, isLive: isCaptureLive
         )
         if resolved.sources != sources { sources = resolved.sources }
         if resolved.selected != selectedSource { selectedSource = resolved.selected }
@@ -747,6 +760,12 @@ final class BridgeState {
         activeOutputIDs = []
         pushed = [:]
         streamingSince = nil
+        lastSourceCheck = nil
+        isFollowingSource = false
+        sourceFollowPacer = SourceFollowPacer(
+            minimum: environment.timing.sourceFollowMinimumSpacing,
+            maximum: environment.timing.sourceFollowMaximumSpacing
+        )
         captureHealth = BridgeEngine.CaptureHealth()
         captureAlert = nil
         for output in outputs where output.connection != .idle { output.connection = .idle }
@@ -824,6 +843,57 @@ final class BridgeState {
         if captureAlert != alert { captureAlert = alert }
 
         syncOutputsWithEngine()
+        followCaptureSource()
+    }
+
+    /// Suit les processus de l'application captée pendant la diffusion.
+    ///
+    /// Sans toucher aux sorties : leur session continue, et seul le tap change. Une seule application
+    /// est concernée à la fois, celle que l'utilisateur a choisie : sur le mode global ou l'entrée
+    /// physique, il n'y a rien à relire.
+    private func followCaptureSource() {
+        guard !isRestarting, !isFollowingSource,
+            preferredSourceID != CaptureSource.systemWide.id,
+            preferredSourceID != CaptureSource.inputDevice.id
+        else { return }
+        let now = ContinuousClock.now
+        if let lastSourceCheck,
+            lastSourceCheck.duration(to: now) < environment.timing.sourceCheckInterval
+        {
+            return
+        }
+        lastSourceCheck = now
+
+        let available = environment.availableSources()
+        updateSources(available: available, isCaptureLive: true)
+        guard
+            let target = CaptureSource.followTarget(
+                preferredID: preferredSourceID, current: selectedSource, available: available,
+                isProcessAlive: environment.isProcessAlive
+            ),
+            let mode = target.tapMode,
+            sourceFollowPacer.allows(at: now)
+        else { return }
+
+        sourceFollowPacer.noteChange(at: now)
+        isFollowingSource = true
+        let previous = selectedSource
+        let generation = sessionGeneration
+        stateLog.info("Source \(target.label, privacy: .public) : la capture suit ses processus")
+        enqueueLifecycle { [weak self] in
+            guard let self else { return }
+            // Un arrêt ou un autre choix a pu passer : il a alors le dernier mot.
+            guard generation == self.sessionGeneration, self.streamingPhase == .running,
+                !self.isRestarting, self.selectedSource == previous
+            else {
+                if generation == self.sessionGeneration { self.isFollowingSource = false }
+                return
+            }
+            let replaced = await self.engine.replaceCapture(with: .processTap(mode))
+            guard generation == self.sessionGeneration else { return }
+            self.isFollowingSource = false
+            if replaced, self.selectedSource == previous { self.selectedSource = target }
+        }
     }
 
     /// Fait suivre au moteur ce que l'utilisateur a changé depuis le dernier tour.

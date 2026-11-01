@@ -83,6 +83,12 @@ struct BridgeEnvironment {
         var emptySelectionGrace: Duration = .seconds(4)
         /// En deçà, un second clic sur Diffuser est le rebond d'un double clic.
         var minimumToggleInterval: Duration = .milliseconds(500)
+        /// Cadence de relecture des processus de l'application captée. Le relevé passe par plusieurs
+        /// lectures de propriétés Core Audio par processus : pas à chaque tour de 250 ms.
+        var sourceCheckInterval: Duration = .seconds(1)
+        /// Écart entre deux changements de capture qui suivent ces processus.
+        var sourceFollowMinimumSpacing: Duration = .seconds(5)
+        var sourceFollowMaximumSpacing: Duration = .seconds(60)
     }
 
     var engineDependencies: BridgeEngine.Dependencies
@@ -93,6 +99,7 @@ struct BridgeEnvironment {
     var availableSources: () -> [CaptureSource]
     var streamingActivity: any StreamingActivityHolding
     var timing = Timing()
+    var isProcessAlive: (pid_t) -> Bool = CaptureSource.isProcessAlive
 
     static var live: BridgeEnvironment {
         BridgeEnvironment(
