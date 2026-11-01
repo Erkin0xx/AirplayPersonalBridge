@@ -54,6 +54,8 @@ public final class SRPClient {
         """
     /// Générateur du groupe 3072 bits.
     public static let group3072g = "05"
+    /// Longueur de la preuve `HAMK` : un condensat SHA-512.
+    public static let proofLength = 64
 
     public enum Failure: Error, Equatable {
         /// `srp_user_new` a renvoyé NULL.
@@ -140,6 +142,11 @@ public final class SRPClient {
 
     /// Étape M3 : traite `salt` et `B` reçus du récepteur, et produit la preuve `M1`.
     public func processChallenge(salt: Data, serverPublicKey: Data) throws -> Data {
+        // Ces valeurs viennent du réseau. Un `Data` vide donnerait un pointeur nul à la
+        // bibliothèque C.
+        guard !salt.isEmpty, !serverPublicKey.isEmpty else {
+            throw Failure.invalidServerPublicKey
+        }
         var proof: UnsafePointer<UInt8>?
         var proofLength: Int32 = 0
 
@@ -166,6 +173,12 @@ public final class SRPClient {
     /// C'est cette étape qui authentifie le **récepteur** auprès de nous. La sauter
     /// reviendrait à accepter n'importe quel interlocuteur se disant Apple TV.
     public func verifyServerProof(_ serverProof: Data) throws {
+        // `srp_user_verify_session` lit 64 octets (SHA-512) sans connaître la taille du tampon :
+        // sans ce garde-fou, une preuve courte envoyée par le récepteur provoque une lecture hors
+        // limites, et une preuve vide un déréférencement de pointeur nul.
+        guard serverProof.count == Self.proofLength else {
+            throw Failure.serverProofRejected
+        }
         serverProof.withUnsafeBytes { proofBytes in
             srp_user_verify_session(user, proofBytes.bindMemory(to: UInt8.self).baseAddress)
         }
