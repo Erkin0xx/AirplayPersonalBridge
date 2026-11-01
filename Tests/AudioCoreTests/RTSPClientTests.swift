@@ -172,16 +172,7 @@ struct RTSPClientTests {
 
     @Test("Connexion refusée : échec immédiat, message clair, et nouvelle tentative possible")
     func connectionRefused() async throws {
-        // Un port qui vient d'être libéré : rien n'y écoute.
-        let closedPort = try await {
-            let server = try await FakeRAOPReceiver()
-            let port = server.port
-            server.shutdown()
-            return port
-        }()
-        try await Task.sleep(for: .milliseconds(100))
-
-        let client = RTSPClient(host: "127.0.0.1", port: closedPort)
+        let client = RTSPClient(host: "127.0.0.1", port: try LateTCPPort().port)
         let start = ContinuousClock.now
         do {
             try await client.connect(timeout: .seconds(10))

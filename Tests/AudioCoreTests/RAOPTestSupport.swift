@@ -488,6 +488,90 @@ func raopEventually(
     return await condition()
 }
 
+/// Un port TCP de la boucle locale où rien n'écoute, jusqu'à ce qu'on l'ouvre.
+///
+/// **Tiré hors de la plage éphémère (49152–65535), et ouvert avec `SO_REUSEADDR`.** Le numéro ne
+/// peut ainsi être pris ni par un client, ni par un `NWListener` sur `.any`, de ce test ou d'un
+/// autre qui tourne en parallèle. C'était le défaut de la version précédente : un numéro tiré par
+/// un socket UDP n'est libre que côté UDP. Côté TCP il pouvait servir à une connexion active ou
+/// en `TIME_WAIT` (une exécution de la suite en laisse ~300, pendant 30 s), et l'écoute échouait
+/// alors sur `EADDRINUSE` sans que personne ne le voie : le test échouait à l'échéance, une fois
+/// sur plusieurs dizaines.
+///
+/// Un socket lié qui n'écoute pas encore n'aurait pas convenu : le noyau ignore alors le SYN au
+/// lieu de le refuser, et la connexion reste en préparation sans jamais être refusée.
+final class LateTCPPort: @unchecked Sendable {
+    struct Failure: Error, CustomStringConvertible {
+        let description: String
+    }
+
+    let port: UInt16
+    private var descriptor: Int32 = -1
+
+    init() throws {
+        // Un autre programme peut occuper un port fixe de cette plage : on en essaie plusieurs.
+        for _ in 0..<64 {
+            let candidate = UInt16.random(in: 20_000..<45_000)
+            let probe = try Self.boundSocket(port: candidate, reusingAddress: false)
+            if let probe {
+                close(probe)
+                port = candidate
+                return
+            }
+        }
+        throw Failure(description: "aucun port libre entre 20000 et 45000")
+    }
+
+    /// Ouvre l'écoute, de façon synchrone : à son retour, une connexion aboutit. Un échec se voit,
+    /// contrairement à celui d'un `NWListener` dont on ne suivrait pas l'état.
+    func open() throws {
+        guard let socket = try Self.boundSocket(port: port, reusingAddress: true) else {
+            throw Failure(description: "port \(port) devenu indisponible : errno \(errno)")
+        }
+        guard listen(socket, 8) == 0 else {
+            let failure = errno
+            close(socket)
+            throw Failure(description: "écoute impossible sur le port \(port) : errno \(failure)")
+        }
+        descriptor = socket
+    }
+
+    deinit {
+        if descriptor >= 0 { close(descriptor) }
+    }
+
+    /// Un socket lié à ce port, ou `nil` si le port est déjà pris.
+    private static func boundSocket(port: UInt16, reusingAddress: Bool) throws -> Int32? {
+        let descriptor = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
+        guard descriptor >= 0 else {
+            throw Failure(description: "création du socket impossible : errno \(errno)")
+        }
+        if reusingAddress {
+            var enabled: Int32 = 1
+            setsockopt(
+                descriptor, SOL_SOCKET, SO_REUSEADDR, &enabled, socklen_t(MemoryLayout<Int32>.size)
+            )
+        }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        address.sin_addr.s_addr = in_addr_t(0x7F00_0001).bigEndian
+        let status = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard status == 0 else {
+            let failure = errno
+            close(descriptor)
+            errno = failure
+            return nil
+        }
+        return descriptor
+    }
+}
+
 func secondsSince(_ start: ContinuousClock.Instant) -> Double {
     let elapsed = ContinuousClock.now - start
     return Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18

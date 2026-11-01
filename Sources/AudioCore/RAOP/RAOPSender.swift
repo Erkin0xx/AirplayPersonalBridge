@@ -416,30 +416,17 @@ public actor RAOPSender {
     }
 
     private func negotiate() async throws {
-        // Choix du codec d'après `cn`. Le PCM est préféré quand le récepteur l'annonce : notre
-        // encodeur ALAC produit de toute façon des trames **non compressées** (aucun gain de
-        // débit, 4 octets de plus par paquet), et c'est le seul format qu'emploie pyatv, avec
-        // lequel la Geneva a été comparée au fil (2026-08-11). L'ALAC reste le repli pour un
-        // récepteur qui n'annoncerait pas `cn=0`, en stéréo seulement.
-        if device.supportsPCM {
-            usesPCM = true
-        } else if device.supportsALAC, device.channelCount == 2 {
-            usesPCM = false
-        } else {
-            throw RAOPSenderError.alacUnsupported(device.serviceName)
+        // Le choix vit dans `RAOPDevice`, pour que `--browse` dise ce qui sera vraiment employé.
+        switch device.plannedCodec {
+        case .pcm: usesPCM = true
+        case .alac: usesPCM = false
+        case nil: throw RAOPSenderError.alacUnsupported(device.serviceName)
         }
-        // Choix du mode de chiffrement d'après ce que le récepteur annonce en `et`. Le clair est
-        // préféré dès qu'il est proposé : c'est le chemin qu'emprunte la vraie Geneva (`et=0,4`,
-        // FairPlay n'étant pas implémenté) et le seul que connaisse pyatv, qui marche. Sur un
-        // réseau local domestique, chiffrer le son d'une enceinte ne protège de personne. RSA-AES
-        // reste le repli d'un récepteur qui n'accepte que lui (`et=1`).
         let crypto: RAOPCrypto?
-        if device.supportsUnencrypted {
-            crypto = nil
-        } else if device.supportsRSAEncryption {
-            crypto = try RAOPCrypto()
-        } else {
-            throw RAOPSenderError.encryptionUnsupported(device.serviceName)
+        switch device.plannedEncryption {
+        case .clear: crypto = nil
+        case .rsaAES: crypto = try RAOPCrypto()
+        case nil: throw RAOPSenderError.encryptionUnsupported(device.serviceName)
         }
         // Contrôlé avant tout échange : les canaux UDP et le SDP ne savent viser que de l'IPv4.
         // Découvert seulement après le `SETUP`, l'échec laisserait une session ouverte en face.

@@ -48,12 +48,12 @@ public enum RTSPError: Error, CustomStringConvertible {
         switch code {
         case 453:
             return "récepteur occupé : un autre appareil diffuse déjà vers lui (\(detail)). "
-                + "Arrêtez cette diffusion, ou patientez s'il s'agit d'une session précédente."
+                + "Arrête cette diffusion, ou patiente s'il s'agit d'une session précédente."
         case 401:
             return "le récepteur demande un mot de passe (\(detail)), ce que l'application ne "
-                + "sait pas fournir. Retirez-le dans les réglages AirPlay de l'enceinte."
+                + "sait pas fournir. Retire-le dans les réglages AirPlay de l'enceinte."
         case 403:
-            return "le récepteur refuse l'accès (\(detail)). Vérifiez ses réglages AirPlay."
+            return "le récepteur refuse l'accès (\(detail)). Vérifie ses réglages AirPlay."
         case 470:
             return "le récepteur exige un appairage (\(detail))."
         case 400..<500:

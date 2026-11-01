@@ -1145,20 +1145,24 @@ struct BridgeEngineHealthTests {
         let other = try #require(factory.latest("b")).context.clock
         source.push(frames: 480)
 
-        // Le temps écoulé depuis le démarrage, sans trames, compte comme un déficit : sous la charge
-        // d'une suite parallèle il dépasse les 50 ms tolérées et s'ajouterait à l'interruption
-        // mesurée. Un relevé normal, 10 ms et 480 trames plus tard, remet le cumul à zéro.
-        let start = Date()
+        // Le temps écoulé depuis le démarrage, sans trames, compte comme un déficit : reporté d'un
+        // coup s'il atteint 200 ms, ce qui n'arrivait que sous une charge assez forte, et faisait
+        // alors échouer ce test. Le premier relevé est donc daté d'une seconde plus tard, pour que
+        // ce report ait toujours lieu, et seul compte ce qui s'y ajoute ensuite. Un relevé normal,
+        // 10 ms et 480 trames plus tard, remet le cumul à zéro.
+        let start = Date().addingTimeInterval(1)
         await engine.tickHealth(now: start)
         source.push(frames: 480)
         await engine.tickHealth(now: start.addingTimeInterval(0.01))
         let before = try #require(clock.presentationUnixTime(forCaptureFrame: 0))
+        let interruptedBefore = await engine.captureHealth.interruptedSeconds
+        #expect(interruptedBefore > 0)
 
         // 3 s sans le moindre bloc, puis la reprise.
         await engine.tickHealth(now: start.addingTimeInterval(3.01))
         let after = try #require(clock.presentationUnixTime(forCaptureFrame: 0))
         #expect(abs((after - before) - 3) < 0.001)
-        #expect(abs(await engine.captureHealth.interruptedSeconds - 3) < 0.001)
+        #expect(abs(await engine.captureHealth.interruptedSeconds - interruptedBefore - 3) < 0.001)
 
         // L'horloge étant commune, l'alignement mutuel n'a pas bougé.
         #expect(
@@ -1179,10 +1183,14 @@ struct BridgeEngineHealthTests {
         #expect(await eventually { factory.latest("a") != nil })
         let clock = try #require(factory.latest("a")).context.clock
 
+        // Le délai de démarrage, lui, est bien reporté s'il atteint 200 ms : daté une seconde plus
+        // tard pour qu'il le soit toujours, ce relevé ne laisse à juger que le rythme qui suit.
         source.push(frames: 480)
-        var now = Date()
+        var now = Date().addingTimeInterval(1)
         await engine.tickHealth(now: now)
         let before = try #require(clock.presentationUnixTime(forCaptureFrame: 0))
+        let interruptedBefore = await engine.captureHealth.interruptedSeconds
+        #expect(interruptedBefore > 0)
 
         // Relevés toutes les 250 ms, par blocs de 4 096 trames (85 ms) : selon le relevé, 2 ou
         // 3 blocs sont déjà là, soit jusqu'à 80 ms d'écart en plus ou en moins.
@@ -1193,7 +1201,7 @@ struct BridgeEngineHealthTests {
         }
         let after = try #require(clock.presentationUnixTime(forCaptureFrame: 0))
         #expect(after == before)
-        #expect(await engine.captureHealth.interruptedSeconds == 0)
+        #expect(await engine.captureHealth.interruptedSeconds == interruptedBefore)
         await engine.stop()
     }
 

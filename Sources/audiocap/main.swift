@@ -230,8 +230,8 @@ if browseOnly {
                 adresse      : \(device.host):\(device.port)
                 format       : \(device.sampleRate) Hz, \(device.bitDepth) bits, \
             \(device.channelCount) canaux
-                chiffrement  : \(device.supportsRSAEncryption ? "RSA-AES (et=1)" : "aucun")
-                compression  : \(device.supportsALAC ? "ALAC (cn=1)" : "PCM seul")
+                chiffrement  : \(device.encryptionSummary)
+                compression  : \(device.codecSummary)
                 mot de passe : \(device.requiresPassword ? "OUI" : "non")
             """)
     }

@@ -40,6 +40,7 @@ public final class AirPlay2EventChannel: @unchecked Sendable {
 
     private var bytesReceived = 0
     private var messagesReceived = 0
+    private var deferredAttempts = 0
     private var connected = false
     private var closed = false
     /// Appelé si la connexion tombe alors qu'elle avait été établie.
@@ -103,6 +104,7 @@ public final class AirPlay2EventChannel: @unchecked Sendable {
                     // de réseau qui ne viendra pas. pyatv le constate contre le mock, qui ouvre
                     // ce canal un peu après avoir répondu au `SETUP`, et réessaie : idem ici,
                     // dans la limite de l'échéance.
+                    self.lock.withLock { self.deferredAttempts += 1 }
                     self.queue.asyncAfter(deadline: .now() + 0.5) {
                         if case .waiting = connection.state { connection.restart() }
                     }
@@ -200,6 +202,12 @@ public final class AirPlay2EventChannel: @unchecked Sendable {
     /// Requêtes du récepteur déchiffrées et acquittées.
     public var eventMessagesReceived: Int {
         lock.lock(); defer { lock.unlock() }; return messagesReceived
+    }
+
+    /// Fois où la connexion a dû attendre un port pas encore ouvert. C'est ce qui permet à un test
+    /// d'ouvrir ce port après un refus constaté, plutôt qu'après un délai supposé suffisant.
+    var connectionAttemptsDeferred: Int {
+        lock.lock(); defer { lock.unlock() }; return deferredAttempts
     }
 
     public func close() {

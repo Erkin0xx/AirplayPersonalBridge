@@ -1166,7 +1166,7 @@ extension BridgeState {
             left.connection = .streaming
             geneva.connection = .waiting(
                 attempt: 3,
-                message: "Impossible de joindre « Geneva » (192.168.1.42). Vérifiez qu'il est "
+                message: "Impossible de joindre « Geneva » (192.168.1.42). Vérifie qu'il est "
                     + "allumé et sur le même réseau que ce Mac.",
                 nextAttemptAt: nil
             )

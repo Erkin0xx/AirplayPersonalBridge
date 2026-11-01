@@ -7,13 +7,20 @@ import Testing
 /// Sessions contre le vrai mock Geneva (`shairport-sync`, 127.0.0.1:5000).
 ///
 /// **Jamais lancés par défaut** : `RUN_MOCK_TESTS=1 swift test --filter RAOPMockIntegration`,
-/// après avoir démarré le mock (`shairport-sync` seul suffit, il quitte à chaque `TEARDOWN`).
+/// après avoir démarré le mock (`shairport-sync` seul suffit).
 /// Ils visent le mock par son adresse et ne passent jamais par le parcours de `RAOPDiscovery`, qui
 /// pourrait retenir un vrai récepteur et le faire diffuser.
 ///
 /// Le niveau est de −50 dBFS, car shairport-sync joue sur les haut-parleurs du Mac. Pour juger le
-/// son lui-même, lancer le mock avec `shairport-sync -o stdout > sortie.pcm` : plus rien ne
-/// sort des haut-parleurs, et `RAOP_MOCK_LEVEL` permet de monter le niveau.
+/// son lui-même, lancer le mock avec `shairport-sync -c <conf> -o stdout > sortie.pcm`, la
+/// configuration posant `ignore_volume_control = "yes"` : plus rien ne sort des haut-parleurs, et
+/// le fichier porte le signal tel que décodé. Sans cette clé, un volume de −30 l'atténue d'une
+/// centaine de dB, et il ne reste que le dither de shairport : ±1 LSB, sans aucune fréquence.
+///
+/// **Les variantes `clear-pcm` et `rsa-pcm` n'ont de valeur que protocolaire.** Sans ALAC annoncé,
+/// le SDP porte le `fmtp` qu'attendent les vrais récepteurs (voir `RAOPSender.announce`), et
+/// shairport-sync 5.2.1, qui sait pourtant l'ALAC, y décode du PCM comme de l'ALAC : le test passe,
+/// mais ce qui sort est du bruit à pleine échelle, à ne surtout pas écouter à volume élevé.
 ///
 /// La durée se règle par `RAOP_MOCK_SECONDS` (10 s par défaut). L'échec historique survenait à
 /// 25 s environ (`Bus error: 10`) : une session de validation doit donc durer plus longtemps.

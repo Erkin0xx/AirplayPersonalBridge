@@ -1,5 +1,4 @@
 import Foundation
-import Network
 import Testing
 
 @testable import AudioCore
@@ -109,32 +108,30 @@ struct AirPlay2EventChannelConnectionTests {
 
     /// pyatv réessaie contre le mock, qui ouvre ce canal un peu après avoir répondu au `SETUP`.
     /// `NWConnection` reste sinon en attente d'un changement de réseau qui ne viendra jamais.
-    @Test("Un port qui s'ouvre avec retard est rejoint dans la limite de l'échéance")
+    ///
+    /// Le port ne s'ouvre qu'après un refus constaté, et non après un délai : c'est ce refus
+    /// qu'il s'agit de surmonter, sans quoi le test ne prouverait rien. Le délai généreux n'est
+    /// consommé qu'en cas d'échec.
+    @Test("Un port qui s'ouvre après un refus est rejoint dans la limite de l'échéance")
     func portOuvertEnRetard() async throws {
-        // Réserve un port libre, puis le libère : c'est lui qui s'ouvrira plus tard.
-        let reservation = try UDPChannel(label: "test-reservation")
-        let port = reservation.localPort
-        let endpoint = NWEndpoint.Port(rawValue: port) ?? .any
-
-        let channel = AirPlay2EventChannel(host: "127.0.0.1", port: port)
-        let connecting = Task { await channel.connect(timeout: .seconds(4)) }
+        let late = try LateTCPPort()
+        let channel = AirPlay2EventChannel(host: "127.0.0.1", port: late.port)
         defer { channel.close() }
+        let connecting = Task { await channel.connect(timeout: .seconds(20)) }
 
-        try await Task.sleep(for: .milliseconds(700))
-        let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: endpoint)
-        let listener = try NWListener(using: parameters)
-        listener.newConnectionHandler = { $0.start(queue: .global()) }
-        listener.start(queue: .global())
-        defer { listener.cancel() }
+        let refused = await waitUntil(timeout: .seconds(20)) {
+            channel.connectionAttemptsDeferred > 0
+        }
+        #expect(refused, "la connexion aurait dû être refusée tant que rien n'écoute")
 
+        try late.open()
         #expect(await connecting.value)
     }
 
     @Test("Un port qui ne s'ouvre jamais rend false à l'échéance, sans lever")
     func portFerme() async throws {
-        let reservation = try UDPChannel(label: "test-reservation")
-        let channel = AirPlay2EventChannel(host: "127.0.0.1", port: reservation.localPort)
+        let late = try LateTCPPort()
+        let channel = AirPlay2EventChannel(host: "127.0.0.1", port: late.port)
         defer { channel.close() }
 
         let start = ContinuousClock.now

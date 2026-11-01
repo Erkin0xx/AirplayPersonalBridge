@@ -151,6 +151,51 @@ struct RAOPSessionTests {
         #expect(sdp.contains("a=fmtp:96 352 0 16 40"))
     }
 
+    /// `--browse` affichait « RSA-AES » pour un récepteur annonçant `et=0,1`, servi en clair : le
+    /// résumé doit décrire ce qui part vraiment sur le fil, d'où ce test contre une vraie session.
+    @Test("Le résumé de --browse décrit ce que le sender envoie vraiment")
+    func browseSummaryMatchesTheWire() async throws {
+        let clear = "aucun, flux en clair"
+        let pcm = "aucune, PCM L16"
+        let cases: [(txt: [String: String], encryption: String, codec: String)] = [
+            (["et": "0,1", "cn": "0,1"], clear, pcm),  // shairport-sync
+            (["et": "0,4", "cn": "0"], clear, pcm),  // la Geneva
+            (["et": "1", "cn": "0,1"], "RSA-AES", pcm),
+            (["et": "0", "cn": "1"], clear, "ALAC"),
+            (["et": "1", "cn": "1"], "RSA-AES", "ALAC"),
+        ]
+        for (txt, encryption, codec) in cases {
+            let rig = try await makeRig(txt: txt)
+            let device = rig.server.device(txt: txt)
+            try await rig.sender.start(volume: -20)
+            await rig.close()
+
+            let sdp = try #require(rig.server.requests.first?.bodyText)
+            #expect(sdp.contains("a=rsaaeskey") == (encryption == "RSA-AES"), "\(txt)")
+            #expect(sdp.contains("a=rtpmap:96 L16") == (codec == pcm), "\(txt)")
+            #expect(device.encryptionSummary.hasPrefix(encryption), "\(txt)")
+            #expect(device.encryptionSummary.contains("et=\(txt["et"] ?? "")"), "\(txt)")
+            #expect(device.codecSummary.hasPrefix(codec), "\(txt)")
+            #expect(device.codecSummary.contains("cn=\(txt["cn"] ?? "")"), "\(txt)")
+        }
+    }
+
+    @Test("Le résumé de --browse dit qu'un récepteur est inutilisable, et ce qu'il annonce")
+    func browseSummaryOfAnUnusableReceiver() {
+        let device = RAOPDevice(
+            serviceName: "X", host: "127.0.0.1", port: 5000, txt: ["et": "3,4", "cn": "2"]
+        )
+        #expect(device.plannedEncryption == nil)
+        #expect(device.plannedCodec == nil)
+        #expect(device.encryptionSummary.contains("AUCUN MODE UTILISABLE"))
+        #expect(device.encryptionSummary.contains("et=3,4"))
+        #expect(device.codecSummary.contains("AUCUN FORMAT UTILISABLE"))
+
+        let silent = RAOPDevice(serviceName: "X", host: "127.0.0.1", port: 5000, txt: [:])
+        #expect(silent.encryptionSummary == "aucun, flux en clair (et non annoncé)")
+        #expect(silent.codecSummary == "aucune, PCM L16 (cn non annoncé)")
+    }
+
     @Test("Le flux audio : marqueur sur le premier paquet, séquence et estampilles contiguës")
     func audioStream() async throws {
         let rig = try await makeRig()

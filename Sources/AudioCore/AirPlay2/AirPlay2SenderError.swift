@@ -62,26 +62,26 @@ public enum AirPlay2SenderError: Error, CustomStringConvertible, LocalizedError,
         case let .pairingRequired(receiver, status):
             let cause = status.map { "(réponse \($0))" } ?? "(il ne propose pas le mode sans code)"
             return """
-                « \(receiver) » exige un appairage \(cause). Appairez-le une seule fois avec \
+                « \(receiver) » exige un appairage \(cause). Appaire-le une seule fois avec \
                 tools/pyatv313/bin/atvremote -n "\(receiver)" --protocol airplay pair (un code \
-                s'affiche sur l'appareil), enregistrez les credentials obtenus dans un fichier, \
-                puis passez ce fichier à --credentials2.
+                s'affiche sur l'appareil), enregistre les credentials obtenus dans un fichier, \
+                puis passe ce fichier à --credentials2.
                 """
         case let .credentialsRejected(receiver, detail):
             return """
                 « \(receiver) » a refusé les credentials fournis (\(detail)) : ils sont périmés, \
-                révoqués, ou ceux d'un autre appareil. Refaites l'appairage avec \
+                révoqués, ou ceux d'un autre appareil. Refais l'appairage avec \
                 tools/pyatv313/bin/atvremote -n "\(receiver)" --protocol airplay pair.
                 """
         case let .receiverBusy(receiver):
             return """
-                « \(receiver) » est occupé par une autre source AirPlay. Arrêtez la lecture en \
-                cours sur cet appareil, ou attendez qu'elle se termine.
+                « \(receiver) » est occupé par une autre source AirPlay. Arrête la lecture en \
+                cours sur cet appareil, ou attends qu'elle se termine.
                 """
         case let .pairingBackoff(receiver):
             return """
                 « \(receiver) » refuse temporairement le pairing après trop de tentatives. \
-                Patientez quelques minutes avant de réessayer.
+                Patiente quelques minutes avant de réessayer.
                 """
         case let .requestRejected(receiver, step, status, reason):
             let detail = reason.isEmpty ? "" : " \(reason)"
@@ -93,7 +93,7 @@ public enum AirPlay2SenderError: Error, CustomStringConvertible, LocalizedError,
         case let .receiverFailed(receiver, step, status):
             return """
                 « \(receiver) » a rencontré une erreur interne sur \(step) (réponse \(status)). \
-                Réessayez ; si cela persiste, redémarrez l'appareil.
+                Réessaie ; si cela persiste, redémarre l'appareil.
                 """
         case let .connectionRefused(receiver, address):
             return """
@@ -102,11 +102,11 @@ public enum AirPlay2SenderError: Error, CustomStringConvertible, LocalizedError,
                 """
         case let .unreachable(receiver, address):
             return """
-                Impossible de joindre « \(receiver) » (\(address)). Vérifiez qu'il est allumé et \
+                Impossible de joindre « \(receiver) » (\(address)). Vérifie qu'il est allumé et \
                 sur le même réseau que ce Mac.
                 """
         case let .noResponse(receiver, step):
-            return "« \(receiver) » ne répond plus (\(step)). Vérifiez qu'il est allumé et sur le réseau."
+            return "« \(receiver) » ne répond plus (\(step)). Vérifie qu'il est allumé et sur le réseau."
         case let .connectionLost(receiver):
             return "La connexion à « \(receiver) » s'est rompue."
         case let .pairingRefused(receiver, detail):

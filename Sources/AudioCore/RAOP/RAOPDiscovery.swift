@@ -2,6 +2,18 @@ import Foundation
 import Network
 import OSLog
 
+/// Chiffrement d'un flux RAOP.
+public enum RAOPEncryption: Sendable, Equatable {
+    case clear
+    case rsaAES
+}
+
+/// Format de la charge utile d'un flux RAOP.
+public enum RAOPCodec: Sendable, Equatable {
+    case pcm
+    case alac
+}
+
 /// Un récepteur RAOP découvert sur le réseau, avec ses capacités déclarées.
 ///
 /// Le nom d'instance annoncé en `_raop._tcp` porte un préfixe d'adresse matérielle
@@ -57,6 +69,53 @@ public struct RAOPDevice: Sendable {
     public var channelCount: Int { positiveTXTValue("ch", in: 1...2) ?? 2 }
     /// Le récepteur exige-t-il un mot de passe (`pw`) ?
     public var requiresPassword: Bool { txt["pw"]?.lowercased() == "true" }
+
+    /// Chiffrement que le sender emploiera vraiment face à ce récepteur, `nil` s'il n'en a aucun.
+    ///
+    /// Le clair est préféré dès qu'il est proposé : c'est le chemin qu'emprunte la vraie Geneva
+    /// (`et=0,4`, FairPlay n'étant pas implémenté) et le seul que connaisse pyatv, qui marche. Sur
+    /// un réseau local domestique, chiffrer le son d'une enceinte ne protège de personne. RSA-AES
+    /// reste le repli d'un récepteur qui n'accepte que lui (`et=1`).
+    public var plannedEncryption: RAOPEncryption? {
+        if supportsUnencrypted { return .clear }
+        return supportsRSAEncryption ? .rsaAES : nil
+    }
+
+    /// Codec que le sender emploiera vraiment face à ce récepteur, `nil` s'il n'en a aucun.
+    ///
+    /// Le PCM est préféré quand le récepteur l'annonce : notre encodeur ALAC produit de toute façon
+    /// des trames **non compressées** (aucun gain de débit, 4 octets de plus par paquet), et c'est
+    /// le seul format qu'emploie pyatv, avec lequel la Geneva a été comparée au fil (2026-08-11).
+    /// L'ALAC reste le repli d'un récepteur qui n'annoncerait pas `cn=0`, en stéréo seulement.
+    public var plannedCodec: RAOPCodec? {
+        if supportsPCM { return .pcm }
+        return supportsALAC && channelCount == 2 ? .alac : nil
+    }
+
+    /// Ce que dit `--browse` du chiffrement : ce qui sera employé, puis ce qui est annoncé. Afficher
+    /// la seule capacité faisait lire « RSA-AES » pour un récepteur servi en clair.
+    public var encryptionSummary: String {
+        let announced = announcedValue("et")
+        switch plannedEncryption {
+        case .clear: return "aucun, flux en clair (\(announced))"
+        case .rsaAES: return "RSA-AES (\(announced))"
+        case nil: return "AUCUN MODE UTILISABLE, ni clair ni RSA-AES (\(announced))"
+        }
+    }
+
+    /// Ce que dit `--browse` du codec, sur le même principe.
+    public var codecSummary: String {
+        let announced = announcedValue("cn")
+        switch plannedCodec {
+        case .pcm: return "aucune, PCM L16 (\(announced))"
+        case .alac: return "ALAC (\(announced))"
+        case nil: return "AUCUN FORMAT UTILISABLE, ni PCM ni ALAC stéréo (\(announced))"
+        }
+    }
+
+    private func announcedValue(_ key: String) -> String {
+        txt[key].map { "annonce \(key)=\($0)" } ?? "\(key) non annoncé"
+    }
 
     private func txtList(_ key: String) -> [String] {
         (txt[key] ?? "").split(separator: ",").map {
