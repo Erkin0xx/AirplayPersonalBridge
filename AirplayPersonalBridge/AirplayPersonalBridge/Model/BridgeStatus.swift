@@ -37,6 +37,9 @@ struct CaptureAlert: Equatable {
     let title: String
     let detail: String?
     let settingsPane: SystemSettingsPane?
+    /// Plus rien ne part vers les enceintes, même si leurs sessions tiennent : dire qu'on diffuse
+    /// serait faux.
+    var interruptsSound = false
 
     /// Délai au-delà duquel une capture qui n'a encore rien livré mérite d'être signalée. En deçà,
     /// c'est l'attente normale du premier bloc.
@@ -77,14 +80,34 @@ struct CaptureAlert: Equatable {
                 settingsPane: nil
             )
         case .stalled:
+            // « Nouvel essai » seulement si le moteur en a vraiment un de prévu : il ne reconstruit
+            // que pendant qu'une application joue, et ne sait pas toujours le dire.
+            let retrying = health.nextStallRebuild != nil
             return CaptureAlert(
                 severity: .warning,
                 title: "La capture ne reçoit plus rien",
                 detail: health.lastRebuildError
-                    ?? "Le périphérique audio a peut-être changé. Nouvel essai en cours.",
-                settingsPane: nil
+                    ?? (retrying
+                        ? "Le périphérique audio a peut-être changé. Nouvel essai en cours."
+                        : "Le périphérique audio a peut-être changé. Si le son ne revient pas, "
+                            + "arrête puis relance la diffusion."),
+                settingsPane: nil,
+                interruptsSound: true
             )
         case .silentWhilePlaying:
+            // Une autorisation accordée écarte l'accusation : il suffit d'une application qui garde
+            // un flux ouvert sans rien y jouer. Le geste reste indiqué, pour le cas où un rebuild du
+            // bundle l'aurait rendue caduque sans que TCC le dise.
+            if health.permission == .authorized {
+                return CaptureAlert(
+                    severity: .info,
+                    title: "Aucun son capté",
+                    detail: "Une application garde un flux ouvert, mais il est muet. Si tu entends "
+                        + "du son sur ce Mac et pas sur les enceintes, retire l'autorisation "
+                        + "\(permissionName) puis ajoute-la de nouveau.",
+                    settingsPane: pane
+                )
+            }
             return CaptureAlert(
                 severity: .critical,
                 title: "Autorisation manquante",
@@ -220,6 +243,15 @@ extension BridgeStatusSummary {
         if failed > 0 { notes.append("\(failed) en panne") }
         if pending > 0 { notes.append("\(pending) en attente") }
         let needsAttention = failed > 0 || alert?.severity == .critical
+
+        // Les sessions tiennent, mais rien ne leur parvient : ce n'est pas une diffusion.
+        if streaming > 0, alert?.interruptsSound == true {
+            return BridgeStatusSummary(
+                title: "Capture interrompue",
+                detail: "\(streaming) \(speakers(streaming)) sans son",
+                menuBar: .trouble
+            )
+        }
 
         if streaming > 0 {
             return BridgeStatusSummary(

@@ -1198,8 +1198,10 @@ extension BridgeState {
                     + "attend peut-être un autre format ; redémarrer l'appareil peut aussi lever "
                     + "un blocage."
             )
+            var lostPermission = previewHealth(.silentWhilePlaying)
+            lostPermission.permission = .unknown
             state.captureAlert = CaptureAlert.evaluate(
-                health: previewHealth(.silentWhilePlaying), source: .systemWide, runningFor: 60
+                health: lostPermission, source: .systemWide, runningFor: 60
             )
         case .nothingPlaying:
             state.outputs = speakers

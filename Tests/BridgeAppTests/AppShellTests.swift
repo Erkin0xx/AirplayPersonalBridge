@@ -258,10 +258,21 @@ struct CaptureAlertTests {
         #expect(nothing.severity == .info)
         #expect(nothing.settingsPane == nil)
 
-        let missing = try #require(alert(health(.silentWhilePlaying)))
+        let missing = try #require(alert(health(.silentWhilePlaying, permission: .unknown)))
         #expect(missing.title == "Autorisation manquante")
         #expect(missing.severity == .critical)
         #expect(missing.settingsPane == .systemAudioCapture)
+    }
+
+    /// TCC répond « accordée » : il suffit d'une application qui garde un flux muet pour en arriver
+    /// là, et l'accuser de manquer serait faux. Le geste reste à portée, pour un rebuild du bundle.
+    @Test("Un silence avec autorisation accordée reste neutre")
+    func authorizedSilenceIsNeutral() throws {
+        let silence = try #require(alert(health(.silentWhilePlaying, permission: .authorized)))
+        #expect(silence.title != "Autorisation manquante")
+        #expect(silence.severity == .info)
+        #expect(silence.settingsPane == .systemAudioCapture)
+        #expect(silence.detail?.contains("muet") == true)
     }
 
     @Test("Une autorisation refusée prime sur tout diagnostic, avec le bon panneau")
@@ -305,6 +316,18 @@ struct CaptureAlertTests {
         #expect(alert(interrupted)?.detail?.contains("périphérique") == true)
         interrupted.lastRebuildError = "périphérique introuvable"
         #expect(alert(interrupted)?.detail == "périphérique introuvable")
+    }
+
+    /// L'alerte disait « Nouvel essai en cours » alors que rien n'en lançait aucun.
+    @Test("Une capture interrompue ne promet un nouvel essai que s'il y en a un de prévu")
+    func stalledTellsTheTruth() throws {
+        var stalled = health(.stalled)
+        #expect(alert(stalled)?.detail?.contains("Nouvel essai") == false)
+        #expect(alert(stalled)?.detail?.contains("relance") == true)
+
+        stalled.nextStallRebuild = Date()
+        #expect(alert(stalled)?.detail?.contains("Nouvel essai") == true)
+        #expect(alert(stalled)?.interruptsSound == true)
     }
 
     @Test("Les panneaux des Réglages ont une adresse valide")
@@ -386,6 +409,19 @@ struct BridgeStatusSummaryTests {
 
         let info = CaptureAlert(severity: .info, title: "Rien ne joue", detail: nil, settingsPane: nil)
         #expect(summary(selection: [(true, .streaming)], alert: info).menuBar == .streaming)
+    }
+
+    /// Les sessions tiennent, l'icône disait diffuser, et les enceintes restaient muettes.
+    @Test("Une capture interrompue ne se dit pas « diffusion »")
+    func stalledIsNotStreaming() throws {
+        var health = BridgeEngine.CaptureHealth()
+        health.diagnosis = .stalled
+        let alert = CaptureAlert.evaluate(health: health, source: .systemWide, runningFor: 60)
+
+        let status = summary(selection: [(true, .streaming), (true, .streaming)], alert: alert)
+        #expect(status.title == "Capture interrompue")
+        #expect(status.detail == "2 enceintes sans son")
+        #expect(status.menuBar == .trouble)
     }
 
     @Test("Les transitions passent pour une connexion")

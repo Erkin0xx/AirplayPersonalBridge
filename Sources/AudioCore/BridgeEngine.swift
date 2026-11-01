@@ -180,13 +180,15 @@ public actor BridgeEngine {
             /// c'est l'attente normale, pas une panne.
             case waitingForFirstBlock
             case healthy
-            /// Les blocs ont cessé d'arriver (périphérique perdu, reconstruction en échec).
+            /// Les blocs ont cessé d'arriver alors que quelque chose joue, ou sans qu'on puisse dire
+            /// si quelque chose joue (périphérique perdu, reconstruction en échec).
             case stalled
-            /// Silence strict alors qu'une application captée joue : **autorisation perdue ou
-            /// tap mal câblé**. Typiquement juste après un rebuild, qui révoque l'autorisation
-            /// sans la moindre erreur (`CLAUDE.md`).
+            /// Silence strict alors qu'une application captée a un flux ouvert. Soit elle garde un
+            /// flux muet, et il n'y a rien d'anormal, soit **autorisation perdue ou tap mal câblé**,
+            /// typiquement juste après un rebuild, qui révoque l'autorisation sans la moindre erreur
+            /// (`CLAUDE.md`). C'est `permission` qui permet de pencher pour l'un ou l'autre.
             case silentWhilePlaying
-            /// Silence strict et rien ne joue : rien d'anormal.
+            /// Silence strict, ou plus aucun bloc, et rien ne joue : rien d'anormal.
             case silentNothingPlaying
             /// Silence strict, et la source ne sait pas dire si quelque chose devrait jouer.
             case silentUnknown
@@ -206,6 +208,9 @@ public actor BridgeEngine {
         public var rebuilds = 0
         /// Dernière erreur de reconstruction, tant qu'aucune n'a abouti depuis.
         public var lastRebuildError: String?
+        /// Prochaine reconstruction prévue d'une capture bloquée. `nil` si aucune ne l'est : c'est
+        /// ce qui permet de dire « nouvel essai en cours » sans mentir.
+        public var nextStallRebuild: Date?
         /// Durée cumulée des interruptions reportées sur l'horloge commune, en secondes.
         public var interruptedSeconds: TimeInterval = 0
 
@@ -229,6 +234,10 @@ public actor BridgeEngine {
         /// Retard de la graduation à partir duquel un trou est reporté sur l'horloge commune, une
         /// fois confirmé au relevé suivant (voir ``trackInterruption(deficit:clock:)``).
         public var interruptionThresholdSeconds: TimeInterval = 0.2
+        /// Capture bloquée pendant qu'une application joue : délai avant de la reconstruire, doublé
+        /// à chaque essai resté sans effet, jusqu'au maximum.
+        public var stallRebuildDelaySeconds: TimeInterval = 5
+        public var stallRebuildMaximumDelaySeconds: TimeInterval = 60
         /// Regroupe la rafale de notifications d'un changement de périphérique.
         public var routeChangeDebounce: Duration = .milliseconds(300)
         public var rebuildRetryInitialDelay: Duration = .milliseconds(500)
@@ -335,6 +344,9 @@ public actor BridgeEngine {
     private var pendingInterruption: TimeInterval = 0
     /// Le trou en cours est avéré : tant qu'il dure, chaque relevé le reporte sans attendre.
     private var interruptionConfirmed = false
+    /// Délai avant la prochaine reconstruction d'une capture bloquée, s'il faut y revenir.
+    private var stallRebuildDelay: TimeInterval = 0
+    private var nextStallRebuild: Date?
     private var lastExpectationCheck: Date?
     private var lastExpectation: Bool?
 
@@ -352,6 +364,10 @@ public actor BridgeEngine {
 
     /// Santé de la capture, rafraîchie plusieurs fois par seconde.
     public var captureHealth: CaptureHealth { health }
+
+    /// Une reconstruction ou un changement de source est-il en cours ? Interne : uniquement lu par
+    /// les tests qui avancent l'heure à la main, et l'attendent à chaque pas.
+    var isRebuildingCapture: Bool { rebuildTask != nil }
 
     // MARK: - Démarrage
 
@@ -425,6 +441,7 @@ public actor BridgeEngine {
         health = CaptureHealth()
         health.diagnosis = .waitingForFirstBlock
         resetHealthReferences(frames: fanout?.framesCaptured ?? 0, now: Date())
+        resetStallRecovery()
         outputOrder = []
         snapshots = [:]
         entries = [:]
@@ -1008,6 +1025,61 @@ public actor BridgeEngine {
         }
     }
 
+    // MARK: - Capture bloquée
+
+    /// Reconstruit une capture dont les blocs ont cessé d'arriver alors qu'une application joue.
+    ///
+    /// Sans notification de route, rien d'autre ne le fait, et l'application dirait diffuser vers des
+    /// enceintes muettes indéfiniment. Seule une capture qui ne livre déjà plus rien est touchée : le
+    /// tap ne livrant rien tant que rien ne joue, ce cas-là reste une attente normale.
+    ///
+    /// Si reconstruire n'y change rien, le délai double à chaque essai : au pire une tentative par
+    /// minute, sans effet sur les sessions des sorties, qui attendent leur tampon.
+    private func recoverStalledCapture(
+        _ source: any AudioCaptureSource, framesMoved: Bool, now: Date
+    ) {
+        if framesMoved { resetStallRecovery() }
+        guard health.diagnosis == .stalled, silenceExpectation(source, now: now) == true else {
+            nextStallRebuild = nil
+            health.nextStallRebuild = nil
+            return
+        }
+        let due = nextStallRebuild ?? lastFlowDate.addingTimeInterval(stallRebuildDelay)
+        if now >= due, rebuildTask == nil {
+            log.error("Capture bloquée alors qu'une application joue : reconstruction")
+            stallRebuildDelay = min(stallRebuildDelay * 2, tuning.stallRebuildMaximumDelaySeconds)
+            nextStallRebuild = now.addingTimeInterval(stallRebuildDelay)
+            beginCurrentCaptureRebuild()
+        } else {
+            nextStallRebuild = due
+        }
+        health.nextStallRebuild = nextStallRebuild
+    }
+
+    private func resetStallRecovery() {
+        stallRebuildDelay = tuning.stallRebuildDelaySeconds
+        nextStallRebuild = nil
+        health.nextStallRebuild = nil
+    }
+
+    /// Reconstruit la capture en cours, même sans changement de route.
+    private func beginCurrentCaptureRebuild() {
+        rebuildTask = Task { [weak self] in
+            await self?.rebuildCurrentCapture()
+            await self?.rebuildDidFinish()
+        }
+    }
+
+    private func rebuildCurrentCapture() async {
+        guard let source else { return }
+        // Reconstruire ne fait pas revenir les blocs par magie : la capture reste dite bloquée
+        // depuis le même instant, tant qu'aucun n'est arrivé.
+        let lastFlow = lastFlowDate
+        await rebuildCapture(source)
+        lastFlowDate = lastFlow
+        await rebuildCaptureIfNeeded()
+    }
+
     // MARK: - Santé de la capture
 
     private func resetHealthReferences(frames: Int, now: Date) {
@@ -1090,7 +1162,8 @@ public actor BridgeEngine {
         let advanced = Double(frames - lastHealthFrames) / rate
         trackInterruption(deficit: elapsed - advanced, clock: clock)
 
-        if frames != lastHealthFrames { lastFlowDate = now }
+        let framesMoved = frames != lastHealthFrames
+        if framesMoved { lastFlowDate = now }
         lastHealthDate = now
         lastHealthFrames = frames
 
@@ -1113,7 +1186,11 @@ public actor BridgeEngine {
         if frames == 0 {
             health.diagnosis = .waitingForFirstBlock
         } else if health.stalledSince != nil {
-            health.diagnosis = .stalled
+            // Le tap ne livre plus rien quand plus rien ne joue : ce n'est pas une panne, sauf si une
+            // reconstruction échoue, ce que l'interface doit dire.
+            let nothingPlaying =
+                silenceExpectation(source, now: now) == false && health.lastRebuildError == nil
+            health.diagnosis = nothingPlaying ? .silentNothingPlaying : .stalled
         } else if isSilent {
             switch silenceExpectation(source, now: now) {
             case true?: health.diagnosis = .silentWhilePlaying
@@ -1123,6 +1200,8 @@ public actor BridgeEngine {
         } else {
             health.diagnosis = .healthy
         }
+
+        recoverStalledCapture(source, framesMoved: framesMoved, now: now)
     }
 
     /// Demande à la source si quelque chose devrait jouer, au plus une fois par seconde : la
