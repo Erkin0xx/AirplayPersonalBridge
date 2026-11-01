@@ -43,8 +43,10 @@ quoi faire et quoi écouter, puis une seule chose à répondre.
 3. Découverte : `swift run audiocap --browse` et `--browse2`. Relève les noms exacts et les bits de
    fonctionnalité de chaque appareil. Le nom réseau de la Geneva n'a jamais été noté : ajoute-le à
    `CLAUDE.md`.
-4. Demande à Baptiste de regarder dans l'app Maison : les deux HomePod forment-ils une paire
-   stéréo ? Quelle est la sortie audio par défaut de l'Apple TV ?
+4. Les deux HomePod **forment une paire stéréo** (confirmé par Baptiste). Relève leur TXT
+   `_airplay._tcp` (`dns-sd -L`) : `gid`, `igl`, `gcgl`, `tsid` et ce qui distingue le leader, pour
+   comprendre ce que représentent « Salon » et « Salon (2) ». Demande à Baptiste quelle est la sortie
+   audio par défaut de l'Apple TV (app Réglages de l'Apple TV ou app Maison).
 5. **Garder la Geneva éveillée.** Sa veille n'a jamais été mesurée ; un ping ne garantit rien, car
    ce genre d'enceinte se met en général en veille faute de son. Ping en arrière-plan uniquement
    comme témoin (il dit si elle est tombée), et tiens-la éveillée par une session quasi inaudible :
@@ -87,37 +89,52 @@ l'ancien calcul.
 
 1. **Mesure acoustique, pour ne pas dépendre de la seule oreille.** Un sous-agent écrit une source
    de clics (salve courte toutes les 2 s, drapeau CLI à côté de `--tone`) et un script qui repère
-   les salves dans un enregistrement. Baptiste pose le Mac à la position d'écoute, au milieu du
-   canapé. Enregistre avec `./audiocap --mode input` (autorisation micro à donner une fois) pendant
-   que chaque enceinte joue seule, puis les trois ensemble. Rapporte l'écart entre enceintes. Critère
-   du CDC section 8 : moins de 20 à 30 ms.
+   les salves dans un enregistrement. **Le lieu d'écoute principal est la table** (choix de
+   Baptiste) : c'est là que le calage doit être bon. Baptiste pose le Mac au centre de la table.
+   Enregistre avec `./audiocap --mode input` (autorisation micro à donner une fois) pendant que
+   chaque enceinte joue seule, puis les trois ensemble. Rapporte l'écart entre enceintes. Critère du
+   CDC section 8 : moins de 20 à 30 ms. Si le temps le permet, refais une mesure depuis le canapé pour
+   savoir ce que devient le calage ailleurs dans la pièce.
 2. Rejoue en lançant les sorties dans un ordre différent, et après une reconnexion forcée :
    l'alignement ne doit plus dépendre de la durée de négociation. Ajoute une enceinte en pleine
    diffusion : elle doit s'aligner.
-3. Le plan suggère 0 ms pour la Geneva, 5,31 ms pour le HomePod gauche et 6,05 ms pour le droit :
-   vérifie que les appliquer améliore la mesure à la position d'écoute.
+3. Depuis le centre de la table, le plan donne 2,20 m pour la Geneva, 2,13 m pour le HomePod gauche
+   et 1,70 m pour le droit, soit des délais suggérés de 0, 0,2 et 1,5 ms : sous le seuil de
+   perception. Ne les applique que si la mesure montre qu'ils améliorent quelque chose.
 4. Écoute finale par Baptiste, sur une musique avec des attaques nettes. Il dit s'il entend un écho.
 
 Si un réglage de délai manuel est nécessaire à chaque session, c'est un défaut à comprendre, pas un
 réglage à conserver.
 
-## Phase 3 : HomePod séparés ou via l'Apple TV
+## Phase 3 : la paire stéréo de HomePod
 
-1. **Séparés** (`Salon` + `Salon (2)`) : la référence, déjà jouée en août. Mesure l'écart entre les
-   deux, et demande à Baptiste si la stéréo a une image gauche/droite ou si les deux jouent la même
-   chose.
-2. **Via l'Apple TV** : `pair-verify` n'a jamais abouti sur elle. La correction `X-Apple-HKP: 3` n'a
+Les deux HomePod forment une paire stéréo, et le projet les a jusqu'ici adressés comme deux sorties
+séparées, sans jamais savoir ce que chacun restitue dans ce cas. Teste du plus simple au plus lourd.
+
+1. **Une seule session, vers `Salon` seul, puis vers `Salon (2)` seul.** Fais écouter un test de
+   canaux gauche/droite (un sous-agent ajoute au besoin une source de test qui alterne les canaux).
+   Question à trancher : est-ce qu'une seule enceinte joue, ou les deux, et avec quelle répartition ?
+   Si le leader de la paire répartit lui-même gauche et droite, **c'est la solution** : vraie stéréo,
+   calage assuré par les HomePod, une seule session, et l'interface doit présenter la paire comme une
+   seule enceinte. C'est une hypothèse, pas un fait établi.
+2. **Deux sessions** (`Salon` + `Salon (2)`) : la référence, déjà jouée en août. Mesure l'écart entre
+   les deux, et note ce que chacune joue quand les deux sessions sont actives, et si l'une expulse
+   l'autre.
+3. **Via l'Apple TV** : `pair-verify` n'a jamais abouti sur elle. La correction `X-Apple-HKP: 3` n'a
    été confirmée que contre un accessoire simulé.
    ```bash
    ./audiocap --airplay2 "Apple TV Salon" --credentials2 "<chemin absolu>/credentials/appletv-salon-airplay.txt" 30
    ```
    Attendu : `pair-verify abouti`. Si « autre identité » réapparaît, l'hypothèse est fausse : compare
    l'échange à celui de pyatv avec ces mêmes credentials. Si ça passe, compare à l'oreille : image
-   stéréo, latence, tenue dans la durée. Ajoute à l'interface ce qu'il faut pour la choisir.
-3. **Décision**, tracée dans un ADR du vault. Si l'Apple TV échoue et que l'écart entre HomePod
-   mesuré en 1 est assez faible pour une image stéréo (de l'ordre de quelques ms), un sous-agent
-   ajoute un mode de canal par sortie (gauche, droite, stéréo), sur la copie propre au sender
-   (invariant section 12), réglé par enceinte dans l'interface. Sinon, écris pourquoi.
+   stéréo, latence, tenue dans la durée, et ajoute à l'interface ce qu'il faut pour la choisir.
+4. **Décision**, tracée dans un ADR du vault, en comparant stéréo, calage avec la Geneva et simplicité.
+   Dernier recours, seulement si aucune des options ne donne d'image stéréo et que l'écart mesuré en 2
+   est de l'ordre de quelques ms : un sous-agent ajoute un mode de canal par sortie (gauche, droite,
+   stéréo), sur la copie propre au sender (invariant section 12), réglé par enceinte dans l'interface.
+   Adapte ensuite le plan : la distance d'une sortie est déjà la moyenne de ses enceintes, donc une
+   paire adressée en une session se rattache aux deux HomePod du plan. Si tu touches à l'identifiant
+   de sortie, rattache à nouveau (`RoomLayout.salon`, plan réel de Baptiste).
 
 ## Phase 4 : l'app et le widget de la barre de menus
 

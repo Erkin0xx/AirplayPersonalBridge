@@ -79,8 +79,7 @@ extension RoomLayout {
         var sofa = Library.cornerSofa.makeObject(at: CGPoint(x: 3.0125, y: 4.00), name: "Canapé")
         sofa.isMirrored = true
 
-        var listener = Library.listener.makeObject(at: CGPoint(x: 2.70, y: 3.70))
-        listener.rotation = 180  // face à la télé, nez vers le bas du plan
+        let listener = Library.listener.makeObject(at: CGPoint(x: 2.656, y: 1.601))
 
         return [
             item(.rug, 2.70, 3.60, 3.00, 2.00, height: 0.01, name: "Tapis 200 × 300"),
@@ -151,8 +150,9 @@ extension RoomLayout {
             speaker(Library.homePod, 4.056, 2.545, height: 0.85 + 0.085, name: "HomePod D",
                     output: salonRightHomePodID),
 
-            // Absente de la capture, mais sans elle aucun délai ne se calcule : au milieu des
-            // deux places du canapé, oreilles à 1,10 m. C'est une hypothèse à faire confirmer.
+            // Absente de la capture, mais sans elle aucun délai ne se calcule. La table est le
+            // principal lieu d'écoute (choix de Baptiste) : au centre, qui vaut pour toutes les
+            // places autour d'elle, oreilles à 1,10 m. L'orientation ne joue sur aucun calcul.
             listener,
         ]
     }
