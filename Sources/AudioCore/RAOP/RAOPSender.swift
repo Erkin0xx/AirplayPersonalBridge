@@ -72,7 +72,12 @@ public actor RAOPSender {
 
     public private(set) var state: RAOPSenderState = .idle
 
-    private let device: RAOPDevice
+    /// Le récepteur. Seuls son adresse et son port bougent, voir ``refreshAddress()``.
+    private var device: RAOPDevice
+    /// Relit l'annonce du récepteur, quand une perte de session se prolonge. `nil` : jamais.
+    private let rediscover: (@Sendable () async -> RAOPDevice?)?
+    /// Échecs de reconnexion consécutifs entre deux relectures.
+    private let rediscoveryInterval: Int
     private let ring: AudioRingBuffer
     private let captureFormat: AVAudioFormat
     /// Alignement, réglage manuel et correction de dérive de **cette** sortie (CDC 4.5).
@@ -183,15 +188,22 @@ public actor RAOPSender {
     ///     sortie diffuse ; l'alignement inter-sorties suppose de passer **la même** aux deux.
     ///   - reconnects: rétablissement automatique de la session après perte réseau.
     ///   - keepAliveInterval: période du maintien de session.
+    ///   - rediscover: relit l'annonce du récepteur quand les reconnexions échouent. Ne contacte
+    ///     aucun appareil : ce ne sont que des questions mDNS.
+    ///   - rediscoveryInterval: échecs de reconnexion entre deux relectures.
     public init(
         device: RAOPDevice,
         ring: AudioRingBuffer,
         captureFormat: AVAudioFormat,
         clock: PlaybackClockProtocol? = nil,
         reconnects: Bool = true,
-        keepAliveInterval: Duration = .seconds(25)
+        keepAliveInterval: Duration = .seconds(25),
+        rediscover: (@Sendable () async -> RAOPDevice?)? = nil,
+        rediscoveryInterval: Int = 3
     ) {
         self.device = device
+        self.rediscover = rediscover
+        self.rediscoveryInterval = max(1, rediscoveryInterval)
         self.ring = ring
         self.captureFormat = captureFormat
         self.reconnects = reconnects
@@ -346,6 +358,7 @@ public actor RAOPSender {
 
             var delay: Duration = .seconds(1)
             var reconnected = false
+            var failedAttempts = 0
             while !Task.isCancelled && !reconnected {
                 do {
                     try await Task.sleep(for: delay)
@@ -365,6 +378,8 @@ public actor RAOPSender {
                         return
                     }
                     delay = Self.reconnectDelay(after: error, current: delay)
+                    failedAttempts += 1
+                    if failedAttempts % rediscoveryInterval == 0 { await refreshAddress() }
                 }
             }
             guard reconnected, !Task.isCancelled else { break }
@@ -373,6 +388,27 @@ public actor RAOPSender {
             state = .streaming
             log.info("Session RAOP rétablie")
         }
+    }
+
+    /// Relit l'adresse et le port annoncés, quand les reconnexions s'enchaînent en échec.
+    ///
+    /// Un récepteur redémarré peut revenir sous une autre adresse (bail DHCP) ou un autre port, et
+    /// la seule chose que le sender en connaît date de la découverte initiale : sans cette relecture,
+    /// il l'appellerait à l'ancienne adresse jusqu'à l'arrêt de la diffusion.
+    ///
+    /// Rien ne change tant que la session vit, et une relecture sans réponse ne coûte rien. Seuls
+    /// l'adresse et le port sont repris : les capacités ont servi à bâtir la session et le
+    /// synchroniseur, et rien ne dit qu'un TXT lu à ce moment soit complet.
+    private func refreshAddress() async {
+        guard let rediscover else { return }
+        let found = try? await untilCancelled { await rediscover() }
+        guard let found, found.host != device.host || found.port != device.port else { return }
+        log.info(
+            "\(self.device.displayName, privacy: .public) : nouvelle adresse \(found.host, privacy: .public):\(found.port)"
+        )
+        device = RAOPDevice(
+            serviceName: device.serviceName, host: found.host, port: found.port, txt: device.txt
+        )
     }
 
     /// Un refus définitif ne se corrigera pas en réessayant : mot de passe exigé, ou format que

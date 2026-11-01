@@ -307,4 +307,54 @@ struct BridgeEngineRealSenderTests {
         #expect(factory.sender === sender)
         await engine.stop()
     }
+
+    /// Un récepteur redémarré qui revient sur un autre port. La relecture vise le service que le
+    /// sender sert déjà, par son nom complet et en exact.
+    @Test("Une perte prolongée fait relire l'adresse, sans viser un autre appareil")
+    func prolongedLossFollowsAddress() async throws {
+        let first = try LoopbackRAOPReceiver()
+        let firstPort = try await first.start()
+        let second = try LoopbackRAOPReceiver()
+        let secondPort = try await second.start()
+        defer { second.stop() }
+
+        let log = LookupLog(port: firstPort)
+        var dependencies = BridgeEngine.Dependencies.live
+        dependencies.senderFactory = LiveOutputSenderFactory(
+            findRAOP: { name, matching, passes in
+                log.find(name: name, matching: matching, passes: passes)
+            },
+            findAirPlay2: { name, _, _ in
+                throw AirPlay2DiscoveryError.notFound(name: name, seen: [])
+            },
+            rediscoveryInterval: 1
+        )
+        dependencies.tuning.monitorInterval = .milliseconds(20)
+        let engine = BridgeEngine(dependencies: dependencies)
+        let output = BridgeEngine.OutputRequest(
+            id: "boucle", proto: .raop, deviceName: "Boucle", volumeDB: -30
+        )
+
+        try await engine.start(source: .tone(frequency: 440, levelDBFS: -50), outputs: [output])
+        #expect(await eventually { await engine.phase(of: "boucle") == .streaming })
+
+        log.move(to: secondPort)
+        first.stop()
+
+        #expect(await eventually { await engine.phase(of: "boucle") == .reconnecting })
+        #expect(await eventually(timeout: .seconds(15)) {
+            await engine.phase(of: "boucle") == .streaming
+        })
+        #expect(await engine.snapshot(of: "boucle")?.statistics.reconnections == 1)
+
+        let lookups = log.lookups
+        #expect(lookups.first?.name == "Boucle")
+        #expect(lookups.first?.matching == .exact)
+        #expect(lookups.first?.passes == nil)
+        let reread = try #require(lookups.dropFirst().first)
+        #expect(reread.name == "000000000000@Boucle")
+        #expect(reread.matching == .exact)
+        #expect(reread.passes == 1)
+        await engine.stop()
+    }
 }

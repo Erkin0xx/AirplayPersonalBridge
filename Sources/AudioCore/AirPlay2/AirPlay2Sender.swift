@@ -70,7 +70,12 @@ public actor AirPlay2Sender {
 
     public private(set) var state: AirPlay2SenderState = .idle
 
-    private let device: AirPlay2Device
+    /// Le récepteur. Seuls son adresse et son port bougent, voir ``refreshAddress()``.
+    private var device: AirPlay2Device
+    /// Relit l'annonce du récepteur, quand une perte de session se prolonge. `nil` : jamais.
+    private let rediscover: (@Sendable () async -> AirPlay2Device?)?
+    /// Échecs de reconnexion consécutifs entre deux relectures.
+    private let rediscoveryInterval: Int
     private let ring: AudioRingBuffer
     private let captureFormat: AVAudioFormat
     /// Alignement, réglage manuel et correction de dérive de **cette** sortie (CDC 4.5).
@@ -150,15 +155,22 @@ public actor AirPlay2Sender {
     ///     senders est ce qui les aligne ; à défaut, chacun s'en fabrique une et se comporte
     ///     comme au jalon 3.
     ///   - reconnects: rétablissement automatique de la session après perte réseau.
+    ///   - rediscover: relit l'annonce du récepteur quand les reconnexions échouent. Ne contacte
+    ///     aucun appareil : ce ne sont que des questions mDNS.
+    ///   - rediscoveryInterval: échecs de reconnexion entre deux relectures.
     public init(
         device: AirPlay2Device,
         ring: AudioRingBuffer,
         captureFormat: AVAudioFormat,
         clock: PlaybackClockProtocol? = nil,
         reconnects: Bool = true,
-        credentials: HapCredentials? = nil
+        credentials: HapCredentials? = nil,
+        rediscover: (@Sendable () async -> AirPlay2Device?)? = nil,
+        rediscoveryInterval: Int = 3
     ) {
         self.device = device
+        self.rediscover = rediscover
+        self.rediscoveryInterval = max(1, rediscoveryInterval)
         self.ring = ring
         self.captureFormat = captureFormat
         self.reconnects = reconnects
@@ -289,6 +301,7 @@ public actor AirPlay2Sender {
                 ? .seconds(1) : min(backoff * 2, .seconds(15))
 
             var reconnected = false
+            var failedAttempts = 0
             while !Task.isCancelled && !reconnected {
                 do {
                     try await Task.sleep(for: backoff)
@@ -312,6 +325,8 @@ public actor AirPlay2Sender {
                         return
                     }
                     backoff = min(max(backoff * 2, failure.minimumRetryDelay), .seconds(15))
+                    failedAttempts += 1
+                    if failedAttempts % rediscoveryInterval == 0 { await refreshAddress() }
                 }
             }
             guard reconnected, !Task.isCancelled else { return }
@@ -319,6 +334,36 @@ public actor AirPlay2Sender {
             state = .streaming
             log.info("Session AirPlay 2 rétablie")
         }
+    }
+
+    /// Relit l'adresse et le port annoncés, quand les reconnexions s'enchaînent en échec.
+    ///
+    /// Un récepteur redémarré peut revenir sous une autre adresse (bail DHCP) ou un autre port, et
+    /// la seule chose que le sender en connaît date de la découverte initiale : sans cette relecture,
+    /// il l'appellerait à l'ancienne adresse jusqu'à l'arrêt de la diffusion.
+    ///
+    /// Rien ne change tant que la session vit, et une relecture sans réponse ne coûte rien. Seuls
+    /// l'adresse et le port sont repris : rien ne dit qu'un TXT lu à ce moment soit complet. Un
+    /// service de même nom mais d'un autre `deviceid` n'est pas celui qu'on visait : un second
+    /// HomePod peut hériter d'un nom libéré par Bonjour, et il n'a pas à recevoir ce flux.
+    private func refreshAddress() async {
+        guard let rediscover else { return }
+        let found = try? await untilCancelled { await rediscover() }
+        guard let found, found.host != device.host || found.port != device.port else { return }
+        let known = device.deviceIdentifier.lowercased()
+        let announced = found.deviceIdentifier.lowercased()
+        guard known.isEmpty || announced.isEmpty || known == announced else {
+            log.error(
+                "\(self.device.serviceName, privacy: .public) : le service de ce nom est un autre appareil (\(announced, privacy: .public)), adresse conservée"
+            )
+            return
+        }
+        log.info(
+            "\(self.device.serviceName, privacy: .public) : nouvelle adresse \(found.host, privacy: .public):\(found.port)"
+        )
+        device = AirPlay2Device(
+            serviceName: device.serviceName, host: found.host, port: found.port, txt: device.txt
+        )
     }
 
     /// Arrête la diffusion et libère la session.

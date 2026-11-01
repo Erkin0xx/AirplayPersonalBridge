@@ -190,8 +190,14 @@ public struct LiveOutputSenderFactory: OutputSenderFactory {
     typealias AirPlay2Finder =
         @Sendable (String, ReceiverNameMatching, Int?) async throws -> AirPlay2Device
 
+    /// Une relecture d'adresse se contente d'un parcours : elle revient de toute façon plus tard, et
+    /// la reconnexion attend pendant ce temps.
+    private static let rediscoveryPasses = 1
+
     private let findRAOP: RAOPFinder
     private let findAirPlay2: AirPlay2Finder
+    /// Échecs de reconnexion entre deux relectures d'adresse.
+    private let rediscoveryInterval: Int
 
     public init() {
         self.init(
@@ -212,9 +218,13 @@ public struct LiveOutputSenderFactory: OutputSenderFactory {
         )
     }
 
-    init(findRAOP: @escaping RAOPFinder, findAirPlay2: @escaping AirPlay2Finder) {
+    init(
+        findRAOP: @escaping RAOPFinder, findAirPlay2: @escaping AirPlay2Finder,
+        rediscoveryInterval: Int = 3
+    ) {
         self.findRAOP = findRAOP
         self.findAirPlay2 = findAirPlay2
+        self.rediscoveryInterval = rediscoveryInterval
     }
 
     public func makeSender(
@@ -224,6 +234,10 @@ public struct LiveOutputSenderFactory: OutputSenderFactory {
         // La découverte s'écoule toujours jusqu'au bout de son délai, annulation ou non. Elle
         // part donc à côté : une sortie retirée pendant le parcours rend la main aussitôt, et
         // le parcours se termine de lui-même sans rien retenir.
+        //
+        // La relecture d'adresse d'un sender en perte de session vise le service qu'il sert déjà,
+        // par son nom complet et en exact, même si la ligne de commande l'a trouvé par une partie
+        // du nom : elle ne doit jamais l'envoyer vers un autre appareil.
         switch request.proto {
         case .raop:
             let device = try await untilCancelled { [findRAOP] in
@@ -231,7 +245,11 @@ public struct LiveOutputSenderFactory: OutputSenderFactory {
             }
             return RAOPSender(
                 device: device, ring: context.ring, captureFormat: context.captureFormat,
-                clock: context.clock
+                clock: context.clock,
+                rediscover: { [findRAOP, serviceName = device.serviceName] in
+                    try? await findRAOP(serviceName, .exact, Self.rediscoveryPasses)
+                },
+                rediscoveryInterval: rediscoveryInterval
             )
         case .airplay2:
             let device = try await untilCancelled { [findAirPlay2] in
@@ -239,7 +257,11 @@ public struct LiveOutputSenderFactory: OutputSenderFactory {
             }
             return AirPlay2Sender(
                 device: device, ring: context.ring, captureFormat: context.captureFormat,
-                clock: context.clock, credentials: request.credentials
+                clock: context.clock, credentials: request.credentials,
+                rediscover: { [findAirPlay2, serviceName = device.serviceName] in
+                    try? await findAirPlay2(serviceName, .exact, Self.rediscoveryPasses)
+                },
+                rediscoveryInterval: rediscoveryInterval
             )
         }
     }

@@ -8,6 +8,14 @@ import Testing
 @Suite("Sender AirPlay 2 — session complète")
 struct AirPlay2SenderSessionTests {
 
+    private final class LockedCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+
+        func increment() { lock.withLock { count += 1 } }
+        var value: Int { lock.withLock { count } }
+    }
+
     private func makeReceiver(
         options: FakeAirPlay2Receiver.Options = .init()
     ) async throws -> FakeAirPlay2Receiver {
@@ -734,6 +742,74 @@ struct AirPlay2SenderSessionTests {
         #expect(ContinuousClock.now - start < .seconds(2))
         #expect(throws: CancellationError.self) { try result.get() }
         #expect(await sender.state == .idle)
+    }
+
+    // MARK: - Relecture de l'adresse
+
+    /// Un sender branché sur `receiver`, qui relit son adresse à chaque échec de reconnexion.
+    private func senderWithLookup(
+        receiver: FakeAirPlay2Receiver,
+        lookup: @escaping @Sendable () async -> AirPlay2Device?
+    ) throws -> (sender: AirPlay2Sender, feeder: SineFeeder) {
+        let ring = AudioRingBuffer(capacityFrames: 48_000, channelCount: 2)
+        let feeder = SineFeeder(ring: ring)
+        let sender = AirPlay2Sender(
+            device: receiver.device(), ring: ring, captureFormat: try SenderHarness.captureFormat(),
+            rediscover: lookup, rediscoveryInterval: 1
+        )
+        feeder.start()
+        return (sender, feeder)
+    }
+
+    /// Un récepteur redémarré qui revient ailleurs : sans relecture, le sender l'appelle à l'ancienne
+    /// adresse jusqu'à l'arrêt de la diffusion.
+    @Test("Après un échec de reconnexion, l'adresse est relue et suivie")
+    func adresseRelue() async throws {
+        let first = try await makeReceiver()
+        defer { first.stop() }
+        let second = try await makeReceiver()
+        defer { second.stop() }
+        let moved = second.device()
+        let (sender, feeder) = try senderWithLookup(receiver: first) { moved }
+        defer { feeder.stop() }
+
+        try await sender.start(volume: -20)
+        #expect(await waitUntil { first.audioPackets(inSession: 0).count >= 5 })
+
+        first.stop()
+
+        #expect(await waitUntil(timeout: .seconds(15)) { second.audioPackets(inSession: 0).count >= 5 })
+        #expect(await sender.state == .streaming)
+        await sender.stop()
+    }
+
+    /// Bonjour peut rendre à un second HomePod le nom libéré par le premier.
+    @Test("Un service de même nom, mais d'un autre appareil, n'est pas suivi")
+    func autreAppareilNonSuivi() async throws {
+        let first = try await makeReceiver()
+        defer { first.stop() }
+        let other = try await makeReceiver()
+        defer { other.stop() }
+        let impostor = AirPlay2Device(
+            serviceName: "Récepteur simulé", host: "127.0.0.1", port: other.port,
+            txt: ["features": "0x405f4200,0x1c300", "deviceid": "11:22:33:44:55:66"]
+        )
+        let lookups = LockedCounter()
+        let (sender, feeder) = try senderWithLookup(receiver: first) {
+            lookups.increment()
+            return impostor
+        }
+        defer { feeder.stop() }
+
+        try await sender.start(volume: -20)
+        #expect(await waitUntil { first.audioPackets(inSession: 0).count >= 5 })
+
+        first.stop()
+
+        #expect(await waitUntil(timeout: .seconds(15)) { lookups.value >= 2 })
+        #expect(other.sessionCount == 0)
+        #expect(await sender.state == .reconnecting)
+        await sender.stop()
     }
 
     // MARK: - Messages d'erreur
