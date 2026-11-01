@@ -128,13 +128,68 @@ struct SalonPlanTests {
         #expect(geneva.kind == .speaker(outputID: nil))
     }
 
-    @Test("La position d'écoute est au centre de la table, oreilles à 1,10 m")
-    func listenerSitsAtTheTable() throws {
+    @Test("Par défaut on écoute à table, côté fenêtre, face à la télé, oreilles à 1,10 m")
+    func defaultListenerSitsAtTheTable() throws {
         let listener = try #require(salon.listener)
+        #expect(listener.name == "À table")
         #expect(listener.elevation == 1.10)
+        #expect(listener.rotation == 180)
         let table = try #require(salon.objects.first { $0.kind == .table })
-        #expect(hypot(listener.position.x - table.position.x,
-                      listener.position.y - table.position.y) < 0.01)
+        // Entre le bord de la table et la fenêtre, centré sur la table.
+        #expect(listener.position.y < table.position.y - table.size.height / 2)
+        #expect(listener.position.y > 0)
+        #expect(abs(listener.position.x - table.position.x) < 0.01)
+        let tv = try #require(salon.objects.first { $0.kind == .tv })
+        #expect(tv.position.y > listener.position.y)
+    }
+
+    @Test("Le second lieu d'écoute est la place gauche du canapé, face à la télé")
+    func secondListenerSitsOnTheLeftOfTheSofa() throws {
+        let listeners = salon.listeners
+        #expect(listeners.count == 2)
+        let onSofa = try #require(listeners.last)
+        #expect(onSofa.name == "Au canapé")
+        #expect(onSofa.rotation == 180)
+        let sofa = try #require(salon.objects.first { $0.kind == .sofa && $0.shape == .lShape })
+        #expect(sofa.contains(onSofa.position))
+        #expect(onSofa.position.x < sofa.position.x)
+    }
+
+    @Test("Choisir un lieu d'écoute change les distances, et ne survit pas à sa suppression")
+    func selectingAListenerDrivesTheDelays() throws {
+        var layout = salon
+        let ids = ["airplay2/Salon", "airplay2/Salon (2)"]
+        let atTable = layout.suggestedDelaysMS(for: ids)
+        let onSofa = try #require(layout.listeners.last)
+
+        layout.selectListener(id: onSofa.id)
+        #expect(layout.listener?.id == onSofa.id)
+        #expect(layout.suggestedDelaysMS(for: ids) != atTable)
+
+        // Un identifiant qui n'est pas un lieu d'écoute ne change rien.
+        let table = try #require(layout.objects.first { $0.kind == .table })
+        layout.selectListener(id: table.id)
+        #expect(layout.listener?.id == onSofa.id)
+
+        layout.objects.removeAll { $0.id == onSofa.id }
+        #expect(layout.listener?.name == "À table")
+    }
+
+    @Test("Le lieu choisi survit à l'écriture du plan, et un ancien fichier retombe sur le premier")
+    func activeListenerIsPersisted() throws {
+        var layout = salon
+        let onSofa = try #require(layout.listeners.last)
+        layout.selectListener(id: onSofa.id)
+
+        let data = try JSONEncoder().encode(layout)
+        let decoded = try JSONDecoder().decode(RoomLayout.self, from: data)
+        #expect(decoded.listener?.id == onSofa.id)
+
+        var fields = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        fields.removeValue(forKey: "activeListenerID")
+        let older = try JSONDecoder().decode(
+            RoomLayout.self, from: JSONSerialization.data(withJSONObject: fields))
+        #expect(older.listener?.name == "À table")
     }
 
     @Test("Le canapé d'angle garde ses cotes réelles, retour en bas à droite")
@@ -172,31 +227,33 @@ struct SalonPlanTests {
         }
     }
 
-    @Test("Délais suggérés : la Geneva, la plus loin, garde 0 ms ; les HomePod l'attendent")
+    @Test("Délais suggérés : à chaque lieu, la sortie la plus lointaine garde 0 ms")
     func suggestedDelaysAreConsistent() throws {
-        let bound = salon.bindingSpeakers(toOutputs: [(id: genevaID, name: "Geneva")])
+        var bound = salon.bindingSpeakers(toOutputs: [(id: genevaID, name: "Geneva")])
         let ids = [genevaID, "airplay2/Salon", "airplay2/Salon (2)"]
-        let delays = bound.suggestedDelaysMS(for: ids)
-        #expect(delays.count == 3)
-        #expect(delays[genevaID] == 0)
 
-        let listener = try #require(bound.listener)
-        let geneva = try object(named: "Geneva")
-        let distance = salon.distance(from: geneva, to: listener)
-        // Lue directement sur le plan : 1,3 m en y, 1,8 m en x depuis le centre de la table.
-        #expect(distance > 2.0 && distance < 2.4)
+        for place in bound.listeners {
+            bound.selectListener(id: place.id)
+            let delays = bound.suggestedDelaysMS(for: ids)
+            #expect(delays.count == 3)
 
-        for id in ["airplay2/Salon", "airplay2/Salon (2)"] {
-            let speakers = bound.speakers(forOutput: id)
-            #expect(speakers.count == 1)
-            let near = try #require(speakers.first)
-            let expected = (distance - bound.distance(from: near, to: listener))
-                / RoomLayout.speedOfSound * 1000
-            #expect(abs(try #require(delays[id]) - expected) < 0.001)
-            // La table est presque à égale distance des trois enceintes : moins de 2 ms, et la
-            // Geneva reste la plus lointaine.
-            #expect(expected > 0 && expected < 2)
+            let distances = try ids.map { id in
+                try #require(bound.distanceToListener(outputID: id))
+            }
+            let farthest = try #require(distances.max())
+            for (id, distance) in zip(ids, distances) {
+                let expected = (farthest - distance) / RoomLayout.speedOfSound * 1000
+                #expect(abs(try #require(delays[id]) - expected) < 0.001)
+                // Quelques millisecondes : l'ordre de grandeur d'une pièce, pas d'une erreur.
+                #expect(expected >= 0 && expected < 10)
+            }
         }
+
+        // Lues sur le plan : à table c'est le HomePod gauche le plus loin, au canapé la Geneva.
+        bound.selectListener(id: try #require(bound.listeners.first).id)
+        #expect(bound.suggestedDelaysMS(for: ids)["airplay2/Salon"] == 0)
+        bound.selectListener(id: try #require(bound.listeners.last).id)
+        #expect(bound.suggestedDelaysMS(for: ids)[genevaID] == 0)
     }
 
     @Test("Sans la Geneva, le plus lointain des deux HomePod devient la référence")

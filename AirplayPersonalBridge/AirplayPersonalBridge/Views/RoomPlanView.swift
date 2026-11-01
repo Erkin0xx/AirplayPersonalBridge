@@ -280,6 +280,8 @@ struct RoomPlanView: View {
                         .shadButton(.destructive, size: .small)
                 }
 
+                listeningPlacePicker
+
                 Button(action: undo) {
                     Image(systemName: "arrow.uturn.backward").font(.system(size: 11))
                 }
@@ -393,6 +395,31 @@ struct RoomPlanView: View {
         }
     }
 
+    /// Le choix du lieu d'écoute. Il n'apparaît qu'à partir de deux : avec un seul, il n'y a rien
+    /// à choisir.
+    @ViewBuilder
+    private var listeningPlacePicker: some View {
+        let listeners = state.roomLayout.listeners
+        if listeners.count >= 2, let active = state.roomLayout.listener {
+            HStack(spacing: 6) {
+                Text("Écoute").shadMuted()
+                ShadTabs(
+                    selection: Binding(
+                        get: { active.id },
+                        set: { id in
+                            history.record(state.roomLayout)
+                            state.roomLayout.selectListener(id: id)
+                            state.persistRoomLayout()
+                        }
+                    ),
+                    items: listeners.map {
+                        ($0.id, $0.name.isEmpty ? $0.kind.label : $0.name)
+                    }
+                )
+            }
+        }
+    }
+
     /// La bibliothèque de meubles, plus un raccourci par sortie découverte.
     ///
     /// Les modèles sont dans un menu et non en boutons alignés : la liste s'allonge, et une
@@ -403,14 +430,10 @@ struct RoomPlanView: View {
                 ForEach(RoomObject.Library.groups, id: \.0) { title, presets in
                     Section(title) {
                         ForEach(presets) { preset in
-                            // Une seule position d'écoute par plan : la proposer deux fois
-                            // laisserait croire qu'on peut écouter à deux endroits.
-                            if preset.kind != .listener || state.roomLayout.listener == nil {
-                                Button {
-                                    add(preset)
-                                } label: {
-                                    Label(preset.label, systemImage: preset.kind.symbol)
-                                }
+                            Button {
+                                add(preset)
+                            } label: {
+                                Label(preset.label, systemImage: preset.kind.symbol)
                             }
                         }
                     }

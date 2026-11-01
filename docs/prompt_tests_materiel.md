@@ -89,18 +89,22 @@ l'ancien calcul.
 
 1. **Mesure acoustique, pour ne pas dépendre de la seule oreille.** Un sous-agent écrit une source
    de clics (salve courte toutes les 2 s, drapeau CLI à côté de `--tone`) et un script qui repère
-   les salves dans un enregistrement. **Le lieu d'écoute principal est la table** (choix de
-   Baptiste) : c'est là que le calage doit être bon. Baptiste pose le Mac au centre de la table.
+   les salves dans un enregistrement. **Deux lieux d'écoute sont sélectionnables : « À table » par
+   défaut (dos à la fenêtre, face à la télé) et « Au canapé » (place gauche sur le plan).** Le calage
+   doit être bon avant tout à table : Baptiste pose le Mac sur le bord de la table côté fenêtre.
    Enregistre avec `./audiocap --mode input` (autorisation micro à donner une fois) pendant que
    chaque enceinte joue seule, puis les trois ensemble. Rapporte l'écart entre enceintes. Critère du
-   CDC section 8 : moins de 20 à 30 ms. Si le temps le permet, refais une mesure depuis le canapé pour
-   savoir ce que devient le calage ailleurs dans la pièce.
+   CDC section 8 : moins de 20 à 30 ms. Refais la mesure au canapé, en sélectionnant ce lieu, pour
+   vérifier que le choix améliore bien le calage là où on écoute.
 2. Rejoue en lançant les sorties dans un ordre différent, et après une reconnexion forcée :
    l'alignement ne doit plus dépendre de la durée de négociation. Ajoute une enceinte en pleine
    diffusion : elle doit s'aligner.
-3. Depuis le centre de la table, le plan donne 2,20 m pour la Geneva, 2,13 m pour le HomePod gauche
-   et 1,70 m pour le droit, soit des délais suggérés de 0, 0,2 et 1,5 ms : sous le seuil de
-   perception. Ne les applique que si la mesure montre qu'ils améliorent quelque chose.
+3. Le lieu sélectionné compense la distance de chaque enceinte, en plus du réglage manuel. Valeurs du
+   plan (distance, compensation) : à table, Geneva 1,86 m et 2,2 ms, HomePod gauche 2,62 m et 0 ms,
+   droit 2,21 m et 1,2 ms ; au canapé, Geneva 3,71 m et 0 ms, HomePod gauche 1,75 m et 5,7 ms, droit
+   2,07 m et 4,8 ms. Ces écarts sont sous le seuil de perception : vérifie par la mesure qu'ils
+   améliorent le calage, et si changer de lieu en pleine diffusion ne produit aucune coupure audible.
+   Si la paire devient une seule session en phase 3, sa compensation est la moyenne des deux HomePod.
 4. Écoute finale par Baptiste, sur une musique avec des attaques nettes. Il dit s'il entend un écho.
 
 Si un réglage de délai manuel est nécessaire à chaque session, c'est un défaut à comprendre, pas un
@@ -144,8 +148,8 @@ diffusion (`TEARDOWN` visible en capture) ; veille puis réveil ; réouverture d
 conservés après relance ; démarrage à l'ouverture de session ; « Couper le son du Mac » ; alerte de
 silence ; changement de sortie audio du Mac en pleine diffusion (casque débranché) ; enceintes du plan
 rattachées aux bonnes sorties (gauche = `Salon` est une hypothèse, à confirmer en faisant jouer une
-seule enceinte) ; hauteurs et position d'écoute à corriger par Baptiste ; entrée physique si
-l'interface audio est disponible.
+seule enceinte) ; choix du lieu d'écoute depuis le widget et depuis le plan ; hauteurs et place exacte
+des deux lieux d'écoute à corriger par Baptiste ; entrée physique si l'interface audio est disponible.
 
 ## Phase 5 : pannes et endurance
 

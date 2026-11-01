@@ -32,7 +32,10 @@ extension RoomLayout {
     static let salonRightHomePodID = "airplay2/Salon (2)"
 
     static var salon: RoomLayout {
-        RoomLayout(walls: salonWalls, objects: salonObjects)
+        var layout = RoomLayout(walls: salonWalls, objects: salonObjects)
+        // Le premier lieu d'écoute du plan, à table, est celui qui vaut par défaut.
+        layout.activeListenerID = layout.listeners.first?.id
+        return layout
     }
 
     /// Épaisseur des murs sur la capture : 25 pixels.
@@ -79,7 +82,10 @@ extension RoomLayout {
         var sofa = Library.cornerSofa.makeObject(at: CGPoint(x: 3.0125, y: 4.00), name: "Canapé")
         sofa.isMirrored = true
 
-        let listener = Library.listener.makeObject(at: CGPoint(x: 2.656, y: 1.601))
+        var atTable = Library.listener.makeObject(at: CGPoint(x: 2.656, y: 0.85), name: "À table")
+        atTable.rotation = 180  // dos à la fenêtre, face à la télé : nez vers le bas du plan
+        var onSofa = Library.listener.makeObject(at: CGPoint(x: 2.35, y: 3.70), name: "Au canapé")
+        onSofa.rotation = 180
 
         return [
             item(.rug, 2.70, 3.60, 3.00, 2.00, height: 0.01, name: "Tapis 200 × 300"),
@@ -150,10 +156,11 @@ extension RoomLayout {
             speaker(Library.homePod, 4.056, 2.545, height: 0.85 + 0.085, name: "HomePod D",
                     output: salonRightHomePodID),
 
-            // Absente de la capture, mais sans elle aucun délai ne se calcule. La table est le
-            // principal lieu d'écoute (choix de Baptiste) : au centre, qui vaut pour toutes les
-            // places autour d'elle, oreilles à 1,10 m. L'orientation ne joue sur aucun calcul.
-            listener,
+            // Absents de la capture, mais sans eux aucun délai ne se calcule. Deux lieux au choix
+            // (demande de Baptiste), oreilles à 1,10 m : à table côté fenêtre, le lieu par défaut,
+            // et la place gauche du canapé, vue sur le plan. Leur place exacte reste à confirmer.
+            atTable,
+            onSofa,
         ]
     }
 

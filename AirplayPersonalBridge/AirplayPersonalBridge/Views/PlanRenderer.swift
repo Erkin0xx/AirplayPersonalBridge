@@ -368,8 +368,12 @@ struct PlanRenderer {
         let isSelected = selection.contains(.object(object.id))
         let isDesignated = isSelected || hoveredObject == object.id
         let outline = outlinePath(of: object, in: rect)
+        // Un lieu d'écoute non choisi reste visible et déplaçable, mais en retrait : c'est le lieu
+        // choisi qui commande les distances tracées et les délais.
+        let opacity = object.kind == .listener && object.id != layout.listener?.id ? 0.35 : 1
 
         context.drawLayer { layer in
+            layer.opacity = opacity
             layer.translateBy(x: center.x, y: center.y)
             layer.rotate(by: .degrees(object.rotation))
             drawMaterial(of: object, in: rect, outline: outline, on: &layer)
@@ -388,7 +392,9 @@ struct PlanRenderer {
             }
         }
         if object.kind == .listener {
-            drawListenerFigure(&context, at: center, rotation: object.rotation)
+            var figure = context
+            figure.opacity = opacity
+            drawListenerFigure(&figure, at: center, rotation: object.rotation)
         }
     }
 
@@ -989,6 +995,9 @@ struct PlanRenderer {
         switch object.kind {
         case .speaker:
             return true
+        case .listener:
+            // Avec plusieurs lieux d'écoute, le nom est ce qui les distingue sur le plan.
+            return !object.name.isEmpty
         case .sofa, .armchair, .table, .sideboard, .desk, .tvStand, .rug, .plant:
             return max(width, height) >= 36
         case .lamp:
