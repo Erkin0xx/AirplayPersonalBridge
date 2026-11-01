@@ -5,9 +5,9 @@ import OSLog
 /// Un récepteur RAOP découvert sur le réseau, avec ses capacités déclarées.
 ///
 /// Le nom d'instance annoncé en `_raop._tcp` porte un préfixe d'adresse matérielle
-/// (`65D15B6D3AC1@Geneva-Mock`). C'est pourquoi la recherche se fait sur une
-/// **sous-chaîne** du nom et jamais sur une égalité stricte, et pourquoi l'hôte et le port
-/// viennent toujours de la résolution du service, jamais d'une valeur en dur.
+/// (`65D15B6D3AC1@Geneva-Mock`) : la recherche accepte donc le nom d'instance ou le nom lisible,
+/// et une simple partie du nom pour la ligne de commande (``ReceiverNameMatching``). L'hôte et le
+/// port viennent toujours de la résolution du service, jamais d'une valeur en dur.
 public struct RAOPDevice: Sendable {
     /// Nom d'instance complet, préfixe matériel compris.
     public let serviceName: String
@@ -149,6 +149,7 @@ public actor RAOPDiscovery {
     /// peut rendre une liste vide au premier passage et la bonne au suivant, sans erreur.
     public func find(
         named name: String,
+        matching: ReceiverNameMatching = .exact,
         timeout: Duration = .seconds(5),
         attempts: Int = 2
     ) async throws -> RAOPDevice {
@@ -164,7 +165,9 @@ public actor RAOPDiscovery {
                 }
             )
             seen = results.compactMap { Self.serviceName(of: $0) }
-            if let match = Self.bestMatch(for: name, among: results, name: { Self.serviceName(of: $0) }) {
+            if let match = Self.bestMatch(
+                for: name, among: results, name: { Self.serviceName(of: $0) }, matching: matching
+            ) {
                 let resolved = await BonjourAddressResolver.resolveAll([match]) { result in
                     await Self.resolve(result, log: AudioLog.raop)
                 }
@@ -182,14 +185,15 @@ public actor RAOPDiscovery {
     }
 
     /// Choisit le récepteur désigné par un nom, **exactitude d'abord** : nom d'instance, puis
-    /// nom affiché (celui que l'interface propose, sans le préfixe matériel), puis contenance.
+    /// nom affiché (sans le préfixe matériel), puis, sur demande, contenance.
     ///
     /// La contenance seule est un piège dès que deux appareils partagent un préfixe : « Salon »
     /// est contenu dans « Salon (2) », et l'ordre de parcours Bonjour n'est pas garanti. Quand
     /// plusieurs noms ne correspondent que partiellement, le plus court l'emporte, ce qui rend
     /// au moins le choix reproductible d'un démarrage à l'autre.
     static func bestMatch<T>(
-        for name: String, among candidates: [T], name serviceName: (T) -> String?
+        for name: String, among candidates: [T], name serviceName: (T) -> String?,
+        matching: ReceiverNameMatching = .exact
     ) -> T? {
         let needle = name.lowercased()
         let named = candidates.compactMap { candidate in
@@ -201,6 +205,7 @@ public actor RAOPDiscovery {
         if let display = named.first(where: { displayName(of: $0.name).lowercased() == needle }) {
             return display.candidate
         }
+        guard matching == .partial else { return nil }
         return named
             .filter { $0.name.lowercased().contains(needle) }
             .min { $0.name.count < $1.name.count }?

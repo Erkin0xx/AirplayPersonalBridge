@@ -161,8 +161,64 @@ private final class LoopbackSenderFactory: OutputSenderFactory, @unchecked Senda
     }
 }
 
+/// La fabrique réelle, ses recherches remplacées : aucune question ne part sur le réseau.
+private final class LookupLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [(name: String, matching: ReceiverNameMatching, passes: Int?)] = []
+    private var currentPort: UInt16
+
+    init(port: UInt16) { currentPort = port }
+
+    func move(to port: UInt16) { lock.withLock { currentPort = port } }
+
+    var lookups: [(name: String, matching: ReceiverNameMatching, passes: Int?)] {
+        lock.withLock { entries }
+    }
+
+    func find(
+        name: String, matching: ReceiverNameMatching, passes: Int?
+    ) -> RAOPDevice {
+        lock.withLock {
+            entries.append((name, matching, passes))
+            return RAOPDevice(
+                serviceName: "000000000000@Boucle", host: "127.0.0.1", port: currentPort,
+                txt: ["et": "0", "cn": "0", "sr": "44100", "ss": "16", "ch": "2"]
+            )
+        }
+    }
+}
+
 @Suite("Moteur et vrai sender, sur une boucle locale")
 struct BridgeEngineRealSenderTests {
+    /// Le CLI garde sa correspondance partielle, l'application demande le nom exact : la fabrique
+    /// doit transmettre ce que dit la demande, et la relecture reste exacte dans tous les cas.
+    @Test("La fabrique cherche comme la demande le dit")
+    func factoryPassesMatching() async throws {
+        let log = LookupLog(port: 1)
+        let factory = LiveOutputSenderFactory(
+            findRAOP: { name, matching, passes in
+                log.find(name: name, matching: matching, passes: passes)
+            },
+            findAirPlay2: { name, _, _ in
+                throw AirPlay2DiscoveryError.notFound(name: name, seen: [])
+            }
+        )
+        let context = OutputSenderContext(
+            ring: AudioRingBuffer(capacityFrames: 1_024, channelCount: 2),
+            captureFormat: stereoFormat(),
+            clock: SharedPlaybackClock(captureSampleRate: 48_000)
+        )
+        for matching in [ReceiverNameMatching.exact, .partial] {
+            _ = try await factory.makeSender(
+                for: BridgeEngine.OutputRequest(
+                    id: "a", proto: .raop, deviceName: "Boucle", nameMatching: matching, volumeDB: -30
+                ),
+                context: context
+            )
+            #expect(log.lookups.last?.matching == matching)
+        }
+    }
+
     /// La reconnexion n'est pas celle d'une doublure : le sender réel perd sa connexion RTSP, son
     /// tampon déborde pendant qu'il renégocie, et il repart.
     ///

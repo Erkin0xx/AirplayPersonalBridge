@@ -186,6 +186,27 @@ struct BridgeStateSelectionTests {
     }
 }
 
+@Suite("État — sortie visée")
+struct BridgeStateReceiverNameTests {
+    /// L'application connaît le nom exact de chacune de ses sorties, y compris le préfixe matériel qui
+    /// distingue en RAOP deux HomePod baptisés « Salon ».
+    @Test("Le moteur reçoit le nom complet de l'instance, à prendre exactement")
+    func requestsExactInstance() async throws {
+        let harness = BridgeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.left, Devices.right])
+        await harness.startStreaming(expecting: [Devices.genevaID, Devices.leftID, Devices.rightID])
+
+        let geneva = try #require(harness.factory.lastRequest(Devices.genevaID))
+        #expect(geneva.deviceName == "AABBCCDDEEFF@Geneva")
+        #expect(geneva.nameMatching == .exact)
+        let left = try #require(harness.factory.lastRequest(Devices.leftID))
+        #expect(left.deviceName == "Salon")
+        #expect(left.nameMatching == .exact)
+        #expect(harness.factory.lastRequest(Devices.rightID)?.deviceName == "Salon (2)")
+        await harness.stopStreaming()
+    }
+}
+
 @Suite("État — réglages poussés")
 struct BridgeStatePushTests {
     @Test("Basses : valeur de départ, puis sur changement seulement")

@@ -885,7 +885,11 @@ struct RAOPDiscoveryTests {
     ]
 
     private func match(_ name: String) -> String? {
-        RAOPDiscovery.bestMatch(for: name, among: names, name: { $0 })
+        RAOPDiscovery.bestMatch(for: name, among: names, name: { $0 }, matching: .partial)
+    }
+
+    private func exactMatch(_ name: String, among names: [String]? = nil) -> String? {
+        RAOPDiscovery.bestMatch(for: name, among: names ?? self.names, name: { $0 }, matching: .exact)
     }
 
     @Test("Le nom exact l'emporte sur la contenance : « Salon » n'est pas « Salon (2) »")
@@ -893,6 +897,18 @@ struct RAOPDiscoveryTests {
         #expect(match("salon") == "DD44EE55FF66@Salon")
         #expect(match("Salon (2)") == "AA11BB22CC33@Salon (2)")
         #expect(match("DD44EE55FF66@Salon") == "DD44EE55FF66@Salon")
+    }
+
+    /// Le chemin de l'application : « Salon » éteint ne doit pas se rabattre sur ce qui lui ressemble.
+    @Test("En exact, ni la contenance ni un autre préfixe matériel ne suffisent")
+    func exactNeverFallsBack() {
+        #expect(exactMatch("Salon", among: ["AA@Salon (2)", "BB@Apple TV Salon"]) == nil)
+        #expect(exactMatch("Geneva") == nil, "le nom entier est « Geneva AeroSphere Large »")
+        // L'instance complète désigne l'un des deux HomePod au même nom affiché, et lui seul.
+        #expect(exactMatch("DD44EE55FF66@Salon") == "DD44EE55FF66@Salon")
+        #expect(exactMatch("CC44EE55FF66@Salon", among: ["DD44EE55FF66@Salon"]) == nil)
+        // Le nom affiché reste une désignation exacte.
+        #expect(exactMatch("salon") == "DD44EE55FF66@Salon")
     }
 
     @Test("Sans nom exact, une partie du nom suffit, et le choix est reproductible")

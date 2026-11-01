@@ -90,8 +90,11 @@ public actor BridgeEngine {
     public struct OutputRequest: Sendable, Identifiable {
         public let id: String
         public let proto: OutputProtocol
-        /// Nom du récepteur, en correspondance partielle comme dans la découverte.
+        /// Nom du récepteur.
         public let deviceName: String
+        /// Comment ce nom désigne un appareil. Exact par défaut : l'application connaît le nom de
+        /// ses sorties, seule la ligne de commande demande une partie du nom.
+        public let nameMatching: ReceiverNameMatching
         public var volumeDB: Float
         public var manualDelaySeconds: TimeInterval
         /// Renfort de basses, en dB (ADR-002). Ignoré hors RAOP : le CDC ne le prévoit que pour la
@@ -105,6 +108,7 @@ public actor BridgeEngine {
             id: String,
             proto: OutputProtocol,
             deviceName: String,
+            nameMatching: ReceiverNameMatching = .exact,
             volumeDB: Float,
             manualDelaySeconds: TimeInterval = 0,
             bassBoostDB: Float = 0,
@@ -113,6 +117,7 @@ public actor BridgeEngine {
             self.id = id
             self.proto = proto
             self.deviceName = deviceName
+            self.nameMatching = nameMatching
             self.volumeDB = volumeDB
             self.manualDelaySeconds = manualDelaySeconds
             self.bassBoostDB = bassBoostDB

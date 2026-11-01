@@ -141,6 +141,15 @@ final class OutputState: Identifiable {
         self.unavailability = unavailability
     }
 
+    /// Le nom sous lequel le moteur doit chercher ce récepteur : l'instance Bonjour complète, tirée
+    /// de l'identifiant.
+    ///
+    /// Pas `displayName` : deux HomePod baptisés « Salon » sont `<MAC>@Salon` tous les deux en
+    /// `_raop._tcp`, et seul le préfixe matériel les distingue.
+    var serviceInstanceName: String {
+        id.split(separator: "/", maxSplits: 1).last.map(String.init) ?? id
+    }
+
     /// La ligne de message sous le nom, ou `nil` s'il n'y a rien à dire.
     ///
     /// L'état du moteur prime : ce qu'il dit d'une sortie qu'il fait vivre est plus précis que ce
@@ -740,7 +749,8 @@ final class BridgeState {
         BridgeEngine.OutputRequest(
             id: output.id,
             proto: output.proto == .raop ? .raop : .airplay2,
-            deviceName: output.displayName,
+            deviceName: output.serviceInstanceName,
+            nameMatching: .exact,
             volumeDB: Self.receiverVolume(forGainDB: effectiveGainDB(for: output)),
             manualDelaySeconds: effectiveDelayMS(for: output) / 1000,
             bassBoostDB: Float(output.supportsBassBoost ? output.bassBoostDB : 0)

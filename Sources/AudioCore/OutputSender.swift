@@ -177,7 +177,39 @@ public protocol OutputSenderFactory: Sendable {
 
 /// Fabrique réelle : découverte Bonjour, puis `RAOPSender` ou `AirPlay2Sender`.
 public struct LiveOutputSenderFactory: OutputSenderFactory {
-    public init() {}
+    /// Cherche un récepteur : nom, façon de le comparer, nombre de parcours (`nil` : le défaut de la
+    /// découverte). Injecté : aucun test ne doit interroger le réseau, où se trouve le vrai matériel.
+    typealias RAOPFinder =
+        @Sendable (String, ReceiverNameMatching, Int?) async throws -> RAOPDevice
+    typealias AirPlay2Finder =
+        @Sendable (String, ReceiverNameMatching, Int?) async throws -> AirPlay2Device
+
+    private let findRAOP: RAOPFinder
+    private let findAirPlay2: AirPlay2Finder
+
+    public init() {
+        self.init(
+            findRAOP: { name, matching, passes in
+                guard let passes else {
+                    return try await RAOPDiscovery().find(named: name, matching: matching)
+                }
+                return try await RAOPDiscovery().find(
+                    named: name, matching: matching, attempts: passes)
+            },
+            findAirPlay2: { name, matching, passes in
+                guard let passes else {
+                    return try await AirPlay2Discovery().find(named: name, matching: matching)
+                }
+                return try await AirPlay2Discovery().find(
+                    named: name, matching: matching, attempts: passes)
+            }
+        )
+    }
+
+    init(findRAOP: @escaping RAOPFinder, findAirPlay2: @escaping AirPlay2Finder) {
+        self.findRAOP = findRAOP
+        self.findAirPlay2 = findAirPlay2
+    }
 
     public func makeSender(
         for request: BridgeEngine.OutputRequest,
@@ -188,16 +220,16 @@ public struct LiveOutputSenderFactory: OutputSenderFactory {
         // le parcours se termine de lui-même sans rien retenir.
         switch request.proto {
         case .raop:
-            let device = try await untilCancelled {
-                try await RAOPDiscovery().find(named: request.deviceName)
+            let device = try await untilCancelled { [findRAOP] in
+                try await findRAOP(request.deviceName, request.nameMatching, nil)
             }
             return RAOPSender(
                 device: device, ring: context.ring, captureFormat: context.captureFormat,
                 clock: context.clock
             )
         case .airplay2:
-            let device = try await untilCancelled {
-                try await AirPlay2Discovery().find(named: request.deviceName)
+            let device = try await untilCancelled { [findAirPlay2] in
+                try await findAirPlay2(request.deviceName, request.nameMatching, nil)
             }
             return AirPlay2Sender(
                 device: device, ring: context.ring, captureFormat: context.captureFormat,

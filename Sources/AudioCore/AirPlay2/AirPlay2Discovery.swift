@@ -5,9 +5,9 @@ import OSLog
 /// Un récepteur AirPlay 2 découvert sur le réseau, avec ses capacités déclarées.
 ///
 /// Le nom d'instance de `_airplay._tcp` n'a **pas** le préfixe d'adresse matérielle qu'on
-/// trouve en `_raop._tcp` : le mock s'annonce `ApTV-HomePod-Mock`, sans préfixe. La
-/// recherche reste néanmoins partielle et insensible à la casse, par cohérence avec le
-/// sender RAOP et parce qu'un Apple TV réel peut porter un nom composé.
+/// trouve en `_raop._tcp` : le mock s'annonce `ApTV-HomePod-Mock`, sans préfixe. La recherche
+/// est insensible à la casse ; elle n'accepte une partie du nom que si on le lui demande
+/// (``ReceiverNameMatching``), ce que seule la ligne de commande fait.
 public struct AirPlay2Device: Sendable {
     public let serviceName: String
     public let host: String
@@ -152,13 +152,14 @@ public actor AirPlay2Discovery {
     ///
     /// Deux règles en découlent, vu qu'un passage peut être incomplet :
     ///
-    /// - **Une correspondance partielle attend un second passage.** « Salon » contenu dans
-    ///   « Salon (2) » serait sinon retenu dès que le vrai « Salon » manque à un parcours, et deux
-    ///   sorties viseraient le même appareil.
+    /// - **Une correspondance partielle, quand elle est demandée, attend un second passage.**
+    ///   « Salon » contenu dans « Salon (2) » serait sinon retenu dès que le vrai « Salon » manque à
+    ///   un parcours.
     /// - **Seul le service retenu est résolu.** Inutile d'interroger tout le réseau, ni d'attendre
     ///   ses retardataires.
     public func find(
         named name: String,
+        matching: ReceiverNameMatching = .exact,
         timeout: Duration = .seconds(5),
         attempts: Int = 3
     ) async throws -> AirPlay2Device {
@@ -174,7 +175,9 @@ public actor AirPlay2Discovery {
             let services = try await cancellableBrowse(timeout: timeout)
             seen.formUnion(services.map(\.name))
 
-            if let match = Self.bestMatch(for: needle, among: services, name: \.name) {
+            if let match = Self.bestMatch(
+                for: needle, among: services, name: \.name, matching: matching
+            ) {
                 let isExact = match.name.lowercased() == needle
                 if isExact || pass >= min(2, passes),
                     let device = await BonjourAddressResolver.resolveAll(
@@ -236,10 +239,12 @@ public actor AirPlay2Discovery {
     /// n'est pas garanti. Deux sorties visaient alors le même récepteur — la première
     /// diffusait, la seconde échouait. Constaté le 2026-08-11 avec deux HomePod.
     static func bestMatch<T>(
-        for needle: String, among devices: [T], name: (T) -> String
+        for needle: String, among devices: [T], name: (T) -> String,
+        matching: ReceiverNameMatching = .exact
     ) -> T? {
-        devices.first { name($0).lowercased() == needle }
-            ?? devices.first { name($0).lowercased().contains(needle) }
+        if let exact = devices.first(where: { name($0).lowercased() == needle }) { return exact }
+        guard matching == .partial else { return nil }
+        return devices.first { name($0).lowercased().contains(needle) }
     }
 
     static func resolve(_ service: BrowsedService) async -> AirPlay2Device? {
