@@ -15,7 +15,10 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="${REPO_ROOT}/.mock-logs"
+# Surchargeables pour le test de ce script (`RunMocksScriptTests`), qui ne doit toucher ni aux
+# journaux ni aux pid des vrais mocks.
+LOG_DIR="${MOCK_LOG_DIR:-${REPO_ROOT}/.mock-logs}"
+STOP_TIMEOUT_SECONDS="${MOCK_STOP_TIMEOUT_SECONDS:-5}"
 NETIFACE="${NETIFACE:-en0}"
 GENEVA_PORT=5000
 AP2_PORT=7000
@@ -97,10 +100,18 @@ stop_one() {
   if pid="$(recorded_pid "$name")"; then
     kill "$pid" 2>/dev/null || true
     # Attendre que le port se libère : `restart` échouerait sinon sur « port occupé ».
-    while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 10 ]; do
+    while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt "$STOP_TIMEOUT_SECONDS" ]; do
       sleep 1
       waited=$((waited + 1))
     done
+    # shairport-sync peut fermer son port sur SIGTERM sans jamais quitter, et tourner ensuite à vide
+    # sur un cœur (constaté après une session). Le laisser ferait annoncer un arrêt qui n'a pas eu
+    # lieu, et le `start` suivant conclurait à « déjà lancé » devant un port fermé.
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "  ${name} ignore SIGTERM : SIGKILL (pid ${pid})"
+      kill -KILL "$pid" 2>/dev/null || true
+      sleep 1
+    fi
     rm -f "$(pid_file "$name")"
     echo "  ${name} arrêté (pid ${pid})"
   elif other="$(any_running_pid "$name")" && [ -n "$other" ]; then
