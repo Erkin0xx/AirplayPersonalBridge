@@ -26,6 +26,9 @@ struct OutputRow: View {
         Card(padding: 11) {
             VStack(alignment: .leading, spacing: 10) {
                 title
+                if let line = output.statusLine {
+                    OutputStatusMessage(text: line.text, tone: line.tone)
+                }
                 settings
             }
         }
@@ -39,7 +42,7 @@ struct OutputRow: View {
                 .toggleStyle(.checkbox)
                 .accessibilityLabel("Diffuser vers \(output.displayName)")
 
-            StatusDot(state: output.connection)
+            OutputStatusDot(state: output.connection)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(output.displayName)
@@ -47,7 +50,7 @@ struct OutputRow: View {
                     .foregroundStyle(Theme.foreground)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text("\(output.host):\(String(output.port))")
+                Text(output.host.isEmpty ? "adresse inconnue" : "\(output.host):\(String(output.port))")
                     .font(Theme.Font.tiny.monospacedDigit())
                     .foregroundStyle(Theme.mutedForeground)
                     .lineLimit(1)
@@ -62,11 +65,11 @@ struct OutputRow: View {
     private var settings: some View {
         VStack(spacing: 6) {
             settingRow(
-                "Trim", value: $output.trimDB, in: -12...12,
+                "Trim", value: $output.trimDB, in: BridgeSettings.Limits.trimDB,
                 format: { String(format: "%+.1f dB", $0) }
             )
             settingRow(
-                "Délai", value: $output.delayMS, in: -200...200,
+                "Délai", value: $output.delayMS, in: BridgeSettings.Limits.delayMS,
                 format: { String(format: "%.0f ms", $0) }
             )
             if let suggestedDelayMS {
@@ -89,7 +92,7 @@ struct OutputRow: View {
             }
             if output.supportsBassBoost {
                 settingRow(
-                    "Basses", value: $output.bassBoostDB, in: 0...12,
+                    "Basses", value: $output.bassBoostDB, in: BridgeSettings.Limits.bassBoostDB,
                     format: { String(format: "%+.1f dB", $0) }
                 )
             }
@@ -133,7 +136,7 @@ struct OutputRow: View {
 /// Pastille d'état. La reconnexion a sa propre couleur : c'est un fonctionnement normal
 /// prévu par le CDC section 8, pas une panne — la confondre avec un échec ferait paniquer
 /// pour rien devant les 90 reconnexions d'une session d'une heure.
-private struct StatusDot: View {
+struct OutputStatusDot: View {
     let state: OutputConnectionState
 
     var body: some View {
@@ -148,6 +151,7 @@ private struct StatusDot: View {
         switch state {
         case .idle: Theme.mutedForeground
         case .connecting: Theme.warning
+        case .waiting: Theme.warning
         case .streaming: Theme.success
         case .reconnecting: Theme.warning
         case .failed: Theme.destructive
@@ -158,9 +162,52 @@ private struct StatusDot: View {
         switch state {
         case .idle: "Inactive"
         case .connecting: "Connexion"
+        case let .waiting(_, message, _): "En attente : \(message)"
         case .streaming: "Diffusion"
-        case .reconnecting: "Reconnexion"
+        case let .reconnecting(message):
+            message.map { "Reconnexion : \($0)" } ?? "Reconnexion"
         case let .failed(reason): "Échec : \(reason)"
+        }
+    }
+}
+
+/// La ligne de message d'une sortie, telle que le moteur la rédige.
+///
+/// Ces messages disent quoi faire, et certains font plusieurs phrases (l'appairage d'un Apple TV,
+/// par exemple). Repliés, ils gardent la liste lisible d'un coup d'œil ; un lien les déplie, pour
+/// qu'une coupure ne passe jamais pour la fin du message.
+struct OutputStatusMessage: View {
+    let text: String
+    let tone: OutputStatusTone
+    @State private var isExpanded = false
+
+    /// Ce qui tient en trois lignes dans la colonne la plus étroite.
+    private let foldedLength = 125
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(text)
+                .font(Theme.Font.tiny)
+                .foregroundStyle(color)
+                .lineLimit(isExpanded ? nil : 3)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(text)
+            if text.count > foldedLength {
+                Button(isExpanded ? "Réduire" : "Lire la suite") { isExpanded.toggle() }
+                    .buttonStyle(.plain)
+                    .font(Theme.Font.tiny.weight(.medium))
+                    .foregroundStyle(Theme.mutedForeground)
+            }
+        }
+    }
+
+    private var color: Color {
+        switch tone {
+        case .muted: Theme.mutedForeground
+        case .warning: Theme.warning
+        case .critical: Theme.destructive
         }
     }
 }

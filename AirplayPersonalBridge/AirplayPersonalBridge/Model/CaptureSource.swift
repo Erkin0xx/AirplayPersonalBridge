@@ -83,6 +83,31 @@ extension CaptureSource {
         return sources
     }
 
+    /// Réconcilie la sélection avec les sources disponibles.
+    ///
+    /// La comparaison se fait sur l'identifiant, jamais sur la valeur : les PID d'une application
+    /// changent à chaque relevé dès qu'un processus de rendu se crée, et une sélection comparée à
+    /// la valeur retomberait sur le mode global alors que l'application joue toujours.
+    ///
+    /// Une application qui cesse de jouer disparaît de la liste. Hors diffusion, la sélection
+    /// retombe sur le mode global plutôt que de désigner un process mort, et le choix de
+    /// l'utilisateur attend son retour. Pendant une diffusion, rien ne bouge : une simple pause
+    /// ne doit pas relancer la capture sur tout le son du Mac.
+    static func resolve(
+        preferredID: String, current: CaptureSource, available: [CaptureSource], isLive: Bool
+    ) -> (sources: [CaptureSource], selected: CaptureSource) {
+        guard isLive else {
+            return (available, available.first { $0.id == preferredID } ?? .systemWide)
+        }
+        guard !available.contains(where: { $0.id == current.id }) else {
+            return (available, current)
+        }
+        var sources = available
+        let position = sources.firstIndex(of: .inputDevice) ?? sources.endIndex
+        sources.insert(current, at: position)
+        return (sources, current)
+    }
+
     /// Remonte la chaîne des parents jusqu'à une application connue d'AppKit.
     ///
     /// Un processus de rendu n'est pas une application : il n'apparaît pas dans

@@ -221,6 +221,8 @@ struct ShadSlider: View {
     @Binding var value: Double
     let range: ClosedRange<Double>
     var step: Double?
+    /// Rail plus fin, pastille plus petite : pour un réglage secondaire qui doit rester discret.
+    var isCompact = false
 
     @State private var isHovering = false
 
@@ -233,17 +235,23 @@ struct ShadSlider: View {
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
-            let thumb: CGFloat = 14
+            let thumb: CGFloat = isCompact ? 10 : 14
+            let rail: CGFloat = isCompact ? 3 : 5
             let travel = max(width - thumb, 1)
 
             ZStack(alignment: .leading) {
-                Capsule().fill(Theme.muted).frame(height: 5)
+                Capsule().fill(Theme.muted).frame(height: rail)
                 Capsule()
-                    .fill(Theme.primary)
-                    .frame(width: thumb / 2 + travel * fraction, height: 5)
+                    .fill(isCompact ? Theme.mutedForeground : Theme.primary)
+                    .frame(width: thumb / 2 + travel * fraction, height: rail)
                 Circle()
                     .fill(Theme.background)
-                    .overlay { Circle().strokeBorder(Theme.primary, lineWidth: 2) }
+                    .overlay {
+                        Circle().strokeBorder(
+                            isCompact ? Theme.mutedForeground : Theme.primary,
+                            lineWidth: isCompact ? 1.5 : 2
+                        )
+                    }
                     .frame(width: thumb, height: thumb)
                     .offset(x: travel * fraction)
                     .shadow(color: .black.opacity(isHovering ? 0.18 : 0), radius: 3, y: 1)
@@ -260,7 +268,7 @@ struct ShadSlider: View {
                     }
             )
         }
-        .frame(height: 18)
+        .frame(height: isCompact ? 14 : 18)
         .accessibilityElement()
         .accessibilityValue(String(format: "%.1f", value))
         .accessibilityAdjustableAction { direction in
@@ -302,6 +310,90 @@ struct ShadSwitch: View {
             .accessibilityElement()
             .accessibilityAddTraits(.isToggle)
             .accessibilityValue(isOn ? "activé" : "désactivé")
+    }
+}
+
+// MARK: - Case à cocher
+
+/// La case du `Checkbox` de shadcn, sans comportement : le clic appartient à la ligne entière,
+/// comme dans le menu AirPlay de macOS, où l'on vise le nom d'une enceinte et pas un carré de
+/// seize points.
+struct ShadCheckboxMark: View {
+    let isOn: Bool
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: Theme.Radius.sm)
+            .fill(isOn ? Theme.primary : Color.clear)
+            .overlay {
+                RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                    .strokeBorder(isOn ? Theme.primary : Theme.mutedForeground, lineWidth: 1)
+            }
+            .overlay {
+                if isOn {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Theme.primaryForeground)
+                }
+            }
+            .frame(width: 16, height: 16)
+    }
+}
+
+// MARK: - Bandeau
+
+/// Une alerte en bandeau. Le titre dit ce qui se passe, le détail quoi en penser, et le bouton
+/// mène là où ça se règle.
+struct NoticeBanner: View {
+    let severity: CaptureAlert.Severity
+    let title: String
+    let detail: String?
+    var actionTitle: String?
+    var action: () -> Void = {}
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: symbol)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(color)
+                Text(title)
+                    .font(Theme.Font.small.weight(.semibold))
+                    .foregroundStyle(Theme.foreground)
+            }
+            if let detail {
+                Text(detail)
+                    .font(Theme.Font.tiny)
+                    .foregroundStyle(Theme.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let actionTitle {
+                Button(actionTitle, action: action)
+                    .shadButton(.outline, size: .small)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(9)
+        .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: Theme.Radius.md))
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                .strokeBorder(color.opacity(0.35), lineWidth: 1)
+        }
+    }
+
+    private var symbol: String {
+        switch severity {
+        case .info: "info.circle.fill"
+        case .warning: "exclamationmark.circle.fill"
+        case .critical: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var color: Color {
+        switch severity {
+        case .info: Theme.info
+        case .warning: Theme.warning
+        case .critical: Theme.destructive
+        }
     }
 }
 

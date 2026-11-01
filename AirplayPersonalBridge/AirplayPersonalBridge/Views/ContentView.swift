@@ -3,7 +3,6 @@
 //  AirplayPersonalBridge
 //
 
-import AppKit
 import SwiftUI
 
 /// La fenêtre principale (CDC section 9, jalon 5).
@@ -12,7 +11,9 @@ import SwiftUI
 /// une largeur naturelle — un curseur ne gagne rien à faire 700 points — alors que le plan,
 /// lui, profite de chaque point qu'on lui donne.
 struct ContentView: View {
-    @State private var state = BridgeState()
+    /// Partagé avec le panneau de la barre de menus : c'est l'application qui le détient, la
+    /// fenêtre peut se fermer et se rouvrir sans rien perdre.
+    @Bindable var state: BridgeState
     @State private var showsDiagnostics = false
 
     var body: some View {
@@ -25,18 +26,9 @@ struct ContentView: View {
         }
         .frame(minWidth: 900, minHeight: 620)
         .background(Theme.background)
-        .task {
-            state.refreshSources()
-            await state.refreshOutputs()
-        }
-        // Filet de sécurité : le plan est déjà écrit à chaque modification, mais une
-        // sauvegarde à la fermeture évite de dépendre d'un appel qu'on aurait oublié
-        // d'ajouter en introduisant une nouvelle façon de le modifier.
-        .onReceive(
-            NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
-        ) { _ in
-            state.persistRoomLayout()
-        }
+        // Les applications qui jouent changent sans prévenir : la liste doit être juste à
+        // l'ouverture. La découverte, elle, tourne déjà sans fenêtre (`AppLifecycle`).
+        .onAppear { state.refreshSources() }
         .sheet(isPresented: $showsDiagnostics) {
             DiagnosticsView(state: state, onClose: { showsDiagnostics = false })
         }
@@ -53,6 +45,15 @@ struct ContentView: View {
         .background(Theme.background)
     }
 
+    /// Le sélecteur porte des identifiants : les PID d'une application varient d'un relevé à
+    /// l'autre, et une valeur complète ne correspondrait plus à aucune entrée de la liste.
+    private var sourceSelection: Binding<String> {
+        Binding(
+            get: { state.selectedSource.id },
+            set: { state.selectSource(id: $0) }
+        )
+    }
+
     // MARK: - Haut : source et volume master
 
     private var header: some View {
@@ -60,9 +61,9 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Source").shadLabel()
                 HStack(spacing: 6) {
-                    Picker("", selection: $state.selectedSource) {
+                    Picker("", selection: sourceSelection) {
                         ForEach(state.sources) { source in
-                            Text(source.label).tag(source)
+                            Text(source.label).tag(source.id)
                         }
                     }
                     .labelsHidden()
@@ -76,6 +77,17 @@ struct ContentView: View {
                     .shadButton(.outline, size: .small)
                     .help("Rafraîchir la liste des applications qui jouent du son")
                 }
+
+                HStack(spacing: 6) {
+                    ShadSwitch(isOn: $state.muteLocalOutput)
+                    Text("Couper le son du Mac").shadMuted()
+                }
+                .disabled(state.selectedSource.tapMode == nil)
+                .opacity(state.selectedSource.tapMode == nil ? 0.5 : 1)
+                .help(
+                    "Ne s'applique qu'à la capture du son système ou d'une application. "
+                        + "Pendant une diffusion, la change la relance."
+                )
             }
 
             Card(padding: 12) {
@@ -84,7 +96,7 @@ struct ContentView: View {
                         value: $state.masterVolumeDB,
                         range: BridgeState.silenceDB...0,
                         diameter: 68,
-                        resetValue: -12
+                        resetValue: BridgeState.defaultMasterVolumeDB
                     )
                     .opacity(state.isMuted ? 0.35 : 1)
 
@@ -132,13 +144,19 @@ struct ContentView: View {
 
     private var emptyState: some View {
         VStack(spacing: 10) {
-            Image(systemName: "hifispeaker.slash")
+            Image(systemName: "hifispeaker")
                 .font(.system(size: 26))
                 .foregroundStyle(Theme.mutedForeground)
             Text("Aucune sortie").font(Theme.Font.title)
             Text(state.discoveryNotice ?? "Lance une recherche sur le réseau local.")
                 .shadMuted()
                 .multilineTextAlignment(.center)
+            if state.discoveryNotice != nil {
+                Button("Ouvrir les réglages « Réseau local »") {
+                    SystemSettingsPane.localNetwork.open()
+                }
+                .shadButton(.ghost, size: .small)
+            }
             Button("Rechercher") { Task { await state.refreshOutputs() } }
                 .shadButton(.outline, size: .small)
         }
@@ -150,6 +168,21 @@ struct ContentView: View {
 
     private var footer: some View {
         VStack(spacing: 8) {
+            if let failure = state.startFailure {
+                NoticeBanner(
+                    severity: .critical, title: "Démarrage impossible", detail: failure.message,
+                    actionTitle: failure.settingsPane == nil ? nil : "Ouvrir les Réglages",
+                    action: { failure.settingsPane?.open() }
+                )
+            }
+            if let alert = state.captureAlert {
+                NoticeBanner(
+                    severity: alert.severity, title: alert.title, detail: alert.detail,
+                    actionTitle: alert.settingsPane == nil ? nil : "Ouvrir les Réglages",
+                    action: { alert.settingsPane?.open() }
+                )
+            }
+
             Button {
                 state.toggleStreaming()
             } label: {
@@ -160,10 +193,12 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
             }
             .shadButton(state.isStreaming ? .destructive : .primary, size: .large)
-            .keyboardShortcut(.defaultAction)
+            // ⌘↩ et non `.defaultAction` : Retour valide un champ de l'inspecteur du plan, et cette
+            // validation ne doit pas faire partir le son vers les enceintes.
+            .keyboardShortcut(.return, modifiers: .command)
             // Rien à diffuser tant qu'aucune sortie n'est cochée. Le cœur le supporterait
             // (une sortie absente n'empêche pas l'autre), mais l'action n'aurait aucun sens.
-            .disabled(!state.outputs.contains(where: \.isEnabled))
+            .disabled(!state.canToggleStreaming)
 
             HStack(spacing: 8) {
                 Button {
@@ -196,5 +231,5 @@ struct ContentView: View {
 }
 
 #Preview {
-    ContentView()
+    ContentView(state: .previewWithRoom())
 }
