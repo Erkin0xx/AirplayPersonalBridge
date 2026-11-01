@@ -112,34 +112,36 @@ public actor RAOPDiscovery {
     static let serviceType = "_raop._tcp"
 
     private let log = AudioLog.raop
+    private let serviceType: String
 
-    public init() {}
+    public init() {
+        self.init(serviceType: Self.serviceType)
+    }
 
-    /// Parcourt `_raop._tcp` et renvoie tous les récepteurs résolus.
+    /// Un autre type de service : celui des tests, qui exercent ainsi ``browse(timeout:)`` et
+    /// ``find(named:timeout:attempts:)`` en entier sans jamais solliciter une vraie enceinte.
+    init(serviceType: String) {
+        self.serviceType = serviceType
+    }
+
+    /// Parcourt `_raop._tcp` et renvoie tous les récepteurs résolus, sans contacter aucun d'eux
+    /// (voir `BonjourAddressResolver`).
     ///
-    /// La résolution passe par une connexion TCP brève vers **chaque** récepteur vu, d'où le
-    /// parallélisme : un appareil éteint mais encore en cache Bonjour coûte plusieurs secondes,
-    /// qu'il n'a pas à faire payer aux autres.
+    /// La résolution se fait en parallèle : un appareil parti sans se désannoncer coûte plusieurs
+    /// secondes, qu'il n'a pas à faire payer aux autres. Il est simplement absent de ce passage.
     ///
     /// - Parameter timeout: durée d'écoute du parcours avant de rendre la main.
     public func browse(timeout: Duration = .seconds(5)) async -> [RAOPDevice] {
         let results = await browseRaw(timeout: timeout)
-        return await withTaskGroup(of: RAOPDevice?.self) { group in
-            for result in results {
-                group.addTask { await Self.resolve(result, log: AudioLog.raop) }
-            }
-            var devices: [RAOPDevice] = []
-            for await device in group {
-                if let device { devices.append(device) }
-            }
-            return devices
+        return await BonjourAddressResolver.resolveAll(results) { result in
+            await Self.resolve(result, log: AudioLog.raop)
         }
     }
 
     /// Cherche un récepteur par son nom (comparaison insensible à la casse).
     ///
-    /// Seul le récepteur retenu est résolu, donc contacté : parcourir d'abord tous les appareils
-    /// du réseau leur ouvrait à chacun une connexion à chaque démarrage, pour n'en garder qu'un.
+    /// Seul le récepteur retenu est résolu : une recherche n'a pas à attendre les délais de tous
+    /// les appareils du réseau pour n'en garder qu'un.
     ///
     /// Le parcours s'arrête dès qu'un nom correspond exactement : attendre la fin du délai ne
     /// pourrait rien apporter de mieux, et ces secondes-là sont du silence pour l'utilisateur.
@@ -153,7 +155,7 @@ public actor RAOPDiscovery {
         var seen: [String] = []
         for attempt in 1...max(1, attempts) {
             let results = await Self.browseRaw(
-                serviceType: Self.serviceType,
+                serviceType: serviceType,
                 timeout: timeout,
                 includeTXTRecord: false,
                 log: log,
@@ -163,7 +165,10 @@ public actor RAOPDiscovery {
             )
             seen = results.compactMap { Self.serviceName(of: $0) }
             if let match = Self.bestMatch(for: name, among: results, name: { Self.serviceName(of: $0) }) {
-                guard let device = await Self.resolve(match, log: log) else {
+                let resolved = await BonjourAddressResolver.resolveAll([match]) { result in
+                    await Self.resolve(result, log: AudioLog.raop)
+                }
+                guard let device = resolved.first else {
                     throw RAOPDiscoveryError.resolutionFailed(Self.serviceName(of: match) ?? name)
                 }
                 log.info("Récepteur RAOP résolu : \(device.serviceName, privacy: .public) → \(device.host, privacy: .public):\(device.port)")
@@ -236,16 +241,15 @@ public actor RAOPDiscovery {
 
     private func browseRaw(timeout: Duration) async -> [NWBrowser.Result] {
         await Self.browseRaw(
-            serviceType: Self.serviceType, timeout: timeout, includeTXTRecord: false, log: log
+            serviceType: serviceType, timeout: timeout, includeTXTRecord: false, log: log
         )
     }
 
     /// Parcours Bonjour brut, paramétré par type de service.
     ///
     /// Sorti en `static` au jalon 3 : le sender AirPlay 2 parcourt `_airplay._tcp` avec
-    /// exactement la même mécanique (résolution incluse). Seul le type de service change,
-    /// il n'y avait donc aucune raison de dupliquer `NWBrowser` et sa gestion de reprise
-    /// unique.
+    /// exactement la même mécanique. Seul le type de service change, il n'y avait donc aucune
+    /// raison de dupliquer `NWBrowser` et sa gestion de reprise unique.
     ///
     /// - Parameter stopWhen: rend la main sans attendre le délai dès que ce prédicat est vrai.
     static func browseRaw(
@@ -305,9 +309,6 @@ public actor RAOPDiscovery {
     /// tout service dont le TXT lui déplaît : un récepteur au TXT inhabituel doit rester visible
     /// (voir `BonjourTXTQuery`). Un TXT illisible n'est pas fatal : ``RAOPDevice`` retombe alors
     /// sur les valeurs par défaut du protocole, celles que pyatv emploie sans condition.
-    ///
-    /// L'adresse, elle, n'existe qu'après une connexion effective, d'où la connexion TCP brève
-    /// réalisée ici.
     private static func resolve(_ result: NWBrowser.Result, log: Logger) async -> RAOPDevice? {
         guard case let .service(name, type, domain, _) = result.endpoint else { return nil }
 
@@ -317,20 +318,36 @@ public actor RAOPDiscovery {
                 txt[key.lowercased()] = value
             }
         }
+        return await resolve(name: name, type: type, domain: domain, knownTXT: txt, log: log)
+    }
+
+    /// Hôte, port et TXT d'un service, sans ouvrir de connexion vers l'appareil.
+    ///
+    /// TXT et adresse sont demandés en même temps : un appareil parti coûte ainsi un seul délai,
+    /// pas la somme des deux.
+    static func resolve(
+        name: String,
+        type: String,
+        domain: String,
+        knownTXT: [String: String] = [:],
+        log: Logger = AudioLog.raop
+    ) async -> RAOPDevice? {
+        async let address = BonjourAddressResolver.resolveInBackground(
+            name: name, type: type, domain: domain, log: log
+        )
+        var txt = knownTXT
         if txt.isEmpty {
             txt = await lookupTXT(
                 fullName: fullServiceName(name: name, type: type, domain: domain)
             )
         }
-        if txt.isEmpty {
-            log.error("TXT vide pour \(name, privacy: .public) : valeurs par défaut du protocole")
-        }
 
-        guard let resolved = await resolveEndpoint(
-            NWEndpoint.service(name: name, type: type, domain: domain, interface: nil)
-        ) else {
+        guard let resolved = await address else {
             log.error("Résolution impossible pour \(name, privacy: .public)")
             return nil
+        }
+        if txt.isEmpty {
+            log.error("TXT vide pour \(name, privacy: .public) : valeurs par défaut du protocole")
         }
 
         return RAOPDevice(serviceName: name, host: resolved.host, port: resolved.port, txt: txt)
@@ -343,78 +360,6 @@ public actor RAOPDiscovery {
             DispatchQueue.global(qos: .userInitiated).async {
                 continuation.resume(returning: BonjourTXTQuery.lookup(fullName: fullName))
             }
-        }
-    }
-
-    /// Résolution d'un service Bonjour en couple hôte/port.
-    ///
-    /// `static` et partagée avec `AirPlay2Discovery` depuis le jalon 3 : la mécanique est
-    /// strictement la même quel que soit le type de service.
-    /// **L'IPv4 est essayée d'abord**, avec repli sur une résolution sans contrainte.
-    ///
-    /// Motif (constaté le 2026-08-11 contre un HomePod gen 2) : sans contrainte, la résolution
-    /// rendait une adresse IPv6 **lien-local**. La session s'établissait, le pairing aboutissait,
-    /// mais le récepteur refusait le `SETUP` en `400`, là où pyatv — qui passe en IPv4 — était
-    /// accepté avec un plist identique. Le repli garde le chemin ouvert vers un récepteur qui
-    /// n'aurait pas d'adresse IPv4.
-    static func resolveEndpoint(_ endpoint: NWEndpoint) async -> (host: String, port: UInt16)? {
-        if let v4 = await resolveEndpoint(endpoint, ipVersion: .v4) { return v4 }
-        return await resolveEndpoint(endpoint, ipVersion: nil)
-    }
-
-    private static func resolveEndpoint(
-        _ endpoint: NWEndpoint, ipVersion: NWProtocolIP.Options.Version?
-    ) async -> (host: String, port: UInt16)? {
-        await withCheckedContinuation { continuation in
-            let box = EndpointResumeBox(continuation: continuation)
-            let parameters = NWParameters.tcp
-            if let ipVersion,
-                let options = parameters.defaultProtocolStack.internetProtocol
-                    as? NWProtocolIP.Options
-            {
-                options.version = ipVersion
-            }
-            let connection = NWConnection(to: endpoint, using: parameters)
-            let timer = Task {
-                do {
-                    try await Task.sleep(for: .seconds(3))
-                } catch {
-                    return
-                }
-                box.finish(nil, connection: connection)
-            }
-            box.attach(timer: timer)
-            connection.stateUpdateHandler = { [weak connection] state in
-                guard let connection else { return }
-                switch state {
-                case .ready:
-                    guard case let .hostPort(host, port) = connection.currentPath?.remoteEndpoint
-                    else {
-                        box.finish(nil, connection: connection)
-                        return
-                    }
-                    box.finish((Self.literal(from: host), port.rawValue), connection: connection)
-                case .failed, .cancelled:
-                    box.finish(nil, connection: connection)
-                default:
-                    break
-                }
-            }
-            connection.start(queue: .global(qos: .userInitiated))
-        }
-    }
-
-    /// Forme littérale d'une adresse, sans le suffixe de zone (`%en0`) qu'ajoute IPv6.
-    static func literal(from host: NWEndpoint.Host) -> String {
-        switch host {
-        case let .ipv4(address):
-            return address.debugDescription.components(separatedBy: "%")[0]
-        case let .ipv6(address):
-            return address.debugDescription.components(separatedBy: "%")[0]
-        case let .name(name, _):
-            return name
-        @unknown default:
-            return String(describing: host)
         }
     }
 }
@@ -459,35 +404,5 @@ private final class ResumeBox: @unchecked Sendable {
         browser.stateUpdateHandler = nil
         browser.cancel()
         pending.resume(returning: snapshot)
-    }
-}
-
-private final class EndpointResumeBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<(host: String, port: UInt16)?, Never>?
-    private var timer: Task<Void, Never>?
-
-    init(continuation: CheckedContinuation<(host: String, port: UInt16)?, Never>) {
-        self.continuation = continuation
-    }
-
-    func attach(timer: Task<Void, Never>) {
-        lock.lock()
-        self.timer = timer
-        lock.unlock()
-    }
-
-    func finish(_ value: (host: String, port: UInt16)?, connection: NWConnection) {
-        lock.lock()
-        let pending = continuation
-        continuation = nil
-        let timer = timer
-        self.timer = nil
-        lock.unlock()
-        guard let pending else { return }
-        timer?.cancel()
-        connection.stateUpdateHandler = nil
-        connection.cancel()
-        pending.resume(returning: value)
     }
 }

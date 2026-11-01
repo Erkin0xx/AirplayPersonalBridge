@@ -157,6 +157,37 @@ public actor RTSPClient {
 
     // MARK: - Cycle de vie
 
+    /// Réglages TCP de la connexion de contrôle.
+    ///
+    /// Les options sont passées à la construction : les retrouver après coup par
+    /// `defaultProtocolStack.internetProtocol`, comme ce code le faisait, désigne la couche IP.
+    /// Le transtypage vers les options TCP y échoue sans bruit, et `noDelay` n'a jamais été
+    /// appliqué jusqu'ici.
+    ///
+    /// - **Sans délai** : les requêtes RTSP sont petites et l'algorithme de Nagle ajouterait une
+    ///   latence inutile à chaque aller-retour du handshake.
+    /// - **Keepalive** : un récepteur coupé net (panne de courant) n'envoie ni FIN ni RST, et le
+    ///   flux audio en UDP ne signale rien. Côté RAOP, le `/feedback` périodique ne compte pas non
+    ///   plus : il n'existe que si le récepteur l'a accepté, et son échec ne dit rien de la session.
+    ///   Après 5 s sans rien recevoir, le noyau sonde toutes les 2 s et abandonne au bout de
+    ///   3 essais, soit 11 s au pire : la connexion passe alors en échec et
+    ///   ``onConnectionLost(_:)`` se déclenche.
+    ///
+    /// Ces sondes sont traitées par les noyaux des deux côtés, sans contenu : elles n'atteignent ni
+    /// les lectures d'ici, ni le serveur RTSP d'en face. Rien ne change donc pour le découpage du
+    /// canal chiffré d'AirPlay 2 ni pour ses compteurs de blocs, dont le `/feedback` toutes les 2 s
+    /// empêche d'ailleurs la moindre sonde tant que le récepteur répond. Une connexion qui vit moins
+    /// de 5 s n'en voit aucune.
+    static func connectionParameters() -> NWParameters {
+        let tcp = NWProtocolTCP.Options()
+        tcp.noDelay = true
+        tcp.enableKeepalive = true
+        tcp.keepaliveIdle = 5
+        tcp.keepaliveInterval = 2
+        tcp.keepaliveCount = 3
+        return NWParameters(tls: nil, tcp: tcp)
+    }
+
     /// Établit la connexion.
     ///
     /// - Parameter honoringCancellation: abandonne dès que la tâche appelante est annulée.
@@ -171,13 +202,7 @@ public actor RTSPClient {
             host: NWEndpoint.Host(host),
             port: NWEndpoint.Port(rawValue: port) ?? .any
         )
-        // TCP sans délai : les requêtes RTSP sont petites et l'algorithme de Nagle
-        // ajouterait une latence inutile à chaque aller-retour du handshake.
-        let parameters = NWParameters.tcp
-        if let tcp = parameters.defaultProtocolStack.internetProtocol as? NWProtocolTCP.Options {
-            tcp.noDelay = true
-        }
-        let connection = NWConnection(to: endpoint, using: parameters)
+        let connection = NWConnection(to: endpoint, using: Self.connectionParameters())
         self.connection = connection
         closure = nil
 

@@ -18,6 +18,39 @@ struct RTSPClientTests {
 
     private func options() -> RTSPRequest { RTSPRequest(method: "OPTIONS", uri: "*") }
 
+    /// Relu sur la pile de protocoles effective : ces réglages ont longtemps été posés sur
+    /// `internetProtocol`, où le transtypage vers les options TCP échoue sans bruit.
+    @Test("Le keepalive du noyau et l'absence de délai sont bien sur la couche TCP")
+    func tcpOptions() throws {
+        let parameters = RTSPClient.connectionParameters()
+        let tcp = try #require(
+            parameters.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options
+        )
+        #expect(tcp.enableKeepalive)
+        #expect(tcp.keepaliveIdle == 5)
+        #expect(tcp.keepaliveInterval == 2)
+        #expect(tcp.keepaliveCount == 3)
+        #expect(tcp.noDelay)
+    }
+
+    /// La sonde du noyau ne remonte jamais jusqu'au flux : 6 s d'inactivité, soit au moins une
+    /// sonde, puis un échange normal. En clair ici ; le canal chiffré repose sur le même flux.
+    @Test("Une connexion inactive au-delà du seuil de sonde reste saine")
+    func idleBeyondKeepaliveThreshold() async throws {
+        let server = try await FakeRAOPReceiver()
+        defer { server.shutdown() }
+        let client = try await connectedClient(to: server)
+        let lost = LostFlag()
+        await client.onConnectionLost { lost.set() }
+
+        try await Task.sleep(for: .seconds(6))
+
+        #expect(!lost.value)
+        let response = try await client.send(options(), timeout: .seconds(2))
+        #expect(response.statusCode == 200)
+        await client.disconnect()
+    }
+
     @Test("Une réponse livrée octet par octet est reconstituée, corps compris")
     func fragmentedResponse() async throws {
         let raw = "RTSP/1.0 200 OK\r\ncseq: 1\r\nAUDIO-LATENCY: 4096\r\nconTENT-lengTH: 5\r\n\r\nhello"

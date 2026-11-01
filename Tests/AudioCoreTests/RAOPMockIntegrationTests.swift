@@ -8,8 +8,8 @@ import Testing
 ///
 /// **Jamais lancés par défaut** : `RUN_MOCK_TESTS=1 swift test --filter RAOPMockIntegration`,
 /// après avoir démarré le mock (`shairport-sync` seul suffit, il quitte à chaque `TEARDOWN`).
-/// Ils visent le mock par son adresse et ne passent jamais par `RAOPDiscovery`, dont le parcours
-/// général ouvre une connexion vers chaque récepteur vu, y compris les vrais.
+/// Ils visent le mock par son adresse et ne passent jamais par le parcours de `RAOPDiscovery`, qui
+/// pourrait retenir un vrai récepteur et le faire diffuser.
 ///
 /// Le niveau est de −50 dBFS, car shairport-sync joue sur les haut-parleurs du Mac. Pour juger le
 /// son lui-même, lancer le mock avec `shairport-sync -o stdout > sortie.pcm` : plus rien ne
