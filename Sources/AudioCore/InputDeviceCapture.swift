@@ -13,43 +13,44 @@ import OSLog
 ///
 /// Invariant section 12 : comme `ProcessTapCapture`, cette classe ne connaît aucune
 /// destination et n'expose qu'un flux PCM.
-public final class InputDeviceCapture {
+public final class InputDeviceCapture: AudioCaptureSource {
     private let engine = AVAudioEngine()
     private var isRunning = false
+    private var configurationObserver: NSObjectProtocol?
     private let log = AudioLog.capture
 
-    /// Format réel de l'entrée physique, connu après `start()`.
-    public private(set) var format: AVAudioFormat?
+    public init() {}
 
-    /// Consommateur des buffers capturés.
-    ///
-    /// Appelé sur le thread de rendu d'AVAudioEngine : mêmes contraintes que le callback du
-    /// Process Tap (pas d'allocation, pas de verrou) — voir CDC section 13.
-    private let sink: (AVAudioPCMBuffer) -> Void
-
-    public init(sink: @escaping (AVAudioPCMBuffer) -> Void) {
-        self.sink = sink
+    deinit {
+        setRouteChangeHandler(nil)
+        teardown()
     }
 
-    deinit { teardown() }
+    public var requiredPermission: CapturePermission.Kind? { .microphone }
 
-    public func start() throws {
-        guard !isRunning else { return }
-
-        let input = engine.inputNode
-        let inputFormat = input.inputFormat(forBus: 0)
+    /// Format réel de l'entrée physique : **mono planaire à 48 kHz** sur cette machine, mais une
+    /// interface multicanal donnerait autre chose. Le code en aval ne suppose rien
+    /// (`CaptureBlockAdapter`).
+    public func prepare() throws -> AVAudioFormat {
+        let inputFormat = engine.inputNode.inputFormat(forBus: 0)
         guard inputFormat.channelCount > 0, inputFormat.sampleRate > 0 else {
             throw AudioCaptureError.noInputDevice
         }
-        format = inputFormat
         log.info("""
             Entrée physique : \(inputFormat.sampleRate, privacy: .public) Hz, \
             \(inputFormat.channelCount, privacy: .public) canaux
             """)
+        return inputFormat
+    }
+
+    public func start(deliveringTo consumer: @escaping CaptureBlockConsumer) throws {
+        guard !isRunning else { return }
+        let input = engine.inputNode
+        let inputFormat = input.inputFormat(forBus: 0)
 
         // bufferSize est une valeur souhaitée : le système peut livrer des blocs différents.
-        input.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [sink] buffer, _ in
-            sink(buffer)
+        input.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { buffer, _ in
+            consumer(buffer.audioBufferList, buffer.frameLength)
         }
 
         engine.prepare()
@@ -68,6 +69,23 @@ public final class InputDeviceCapture {
         teardown()
         log.info("Capture d'entrée physique arrêtée.")
     }
+
+    /// `AVAudioEngine` s'arrête seul quand l'entrée par défaut change ou disparaît, et le
+    /// signale par cette notification : sans la relancer, la capture resterait muette.
+    public func setRouteChangeHandler(_ handler: (@Sendable () -> Void)?) {
+        if let configurationObserver {
+            NotificationCenter.default.removeObserver(configurationObserver)
+            self.configurationObserver = nil
+        }
+        guard let handler else { return }
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+        ) { _ in
+            handler()
+        }
+    }
+
+    public func routeRequiresRebuild() -> Bool { !engine.isRunning }
 
     private func teardown() {
         if engine.isRunning { engine.stop() }

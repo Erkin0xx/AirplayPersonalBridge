@@ -319,13 +319,26 @@ final class BridgeState {
                         else { continue }
                         switch snapshot.phase {
                         case .idle: output.connection = .idle
-                        case .connecting: output.connection = .connecting
+                        case .connecting, .waitingForReceiver: output.connection = .connecting
                         case .streaming: output.connection = .streaming
+                        case .reconnecting: output.connection = .reconnecting
                         case let .failed(message): output.connection = .failed(message)
                         }
-                        output.diagnostics.packetsSent = snapshot.packetsSent
-                        output.diagnostics.errors = snapshot.errors
-                        output.diagnostics.framesInserted = snapshot.driftCorrections
+                        let statistics = snapshot.statistics
+                        output.diagnostics.packetsSent = statistics.packetsSent
+                        output.diagnostics.framesRead = statistics.framesRead
+                        output.diagnostics.errors = statistics.errors
+                        output.diagnostics.resyncs = statistics.resyncs
+                        output.diagnostics.anchoredSyncPackets = statistics.anchoredSyncPackets
+                        output.diagnostics.syncPacketsSent = statistics.syncPacketsSent
+                        output.diagnostics.framesInserted = statistics.framesInserted
+                        output.diagnostics.framesRemoved = statistics.framesRemoved
+                        output.diagnostics.reconnections = statistics.reconnections
+                        output.diagnostics.reconnectionAttempts = statistics.reconnectionAttempts
+                        output.diagnostics.droppedBeforeStreaming = statistics.droppedBeforeStreaming
+                        output.diagnostics.reportedLatencyFrames = statistics.reportedLatencyFrames ?? 0
+                        output.diagnostics.eventChannelConnected =
+                            statistics.eventChannelConnected ?? false
                     }
                 }
                 // Les volumes sont calculés sur le fil principal, avec le reste de l'état,

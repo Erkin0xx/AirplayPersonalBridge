@@ -2,13 +2,15 @@ import AVFoundation
 import AudioCore
 import Foundation
 
-// CLI de validation du jalon 1 (CDC section 11) : les trois modes de capture, chacun
-// dumpant un .wav relisible par `afplay`.
+// CLI de validation (CDC section 11) : capture vers un .wav relisible par `afplay`, ou
+// diffusion vers les sorties AirPlay.
 //
-//   audiocap [--mode global|app|input] [--app <nom|pid>] [--list] [durée_s] [sortie.wav]
+//   audiocap [--mode global|app|input] [--app <nom|pid>] [--tone] [--list] [durée_s] [sortie.wav]
 //
 // À lancer via ./audiocap (wrapper `open`), jamais par le binaire interne : l'autorisation
-// TCC est attribuée au bundle, pas au binaire nu.
+// TCC est attribuée au bundle, pas au binaire nu. Seul `--tone` s'en passe, n'utilisant ni tap
+// ni micro : c'est le mode qui permet de tester la chaîne avec `swift run`, sans reconstruire le
+// bundle et donc sans révoquer l'autorisation.
 
 /// Sortie du CLI, dupliquée dans un fichier.
 ///
@@ -32,7 +34,7 @@ enum CLIOutput {
 func note(_ text: String) { CLIOutput.write(text) }
 
 enum Mode: String {
-    case global, app, input
+    case global, app, input, tone
 }
 
 var mode = Mode.global
@@ -57,6 +59,11 @@ var browse2Only = false
 /// sécurité, en complément de l'alignement automatique, jamais à sa place).
 var airplayDelayMs: Double = 0
 var airplay2DelayMs: Double = 0
+/// Niveau et fréquence de la sinusoïde de `--tone`.
+var toneLevelDBFS: Double = -50
+var toneFrequency: Double = 440
+/// Coupe le son du Mac pendant la capture, pour ne pas l'entendre en double avec les enceintes.
+var muteLocalOutput = false
 
 var arguments = Array(CommandLine.arguments.dropFirst())
 var index = 0
@@ -80,6 +87,24 @@ while index < arguments.count {
         mode = .app
     case "--list":
         listOnly = true
+    case "--tone":
+        mode = .tone
+    case "--tone-level":
+        index += 1
+        guard index < arguments.count, let value = Double(arguments[index]) else {
+            FileHandle.standardError.write(Data("--tone-level attend un niveau en dBFS\n".utf8))
+            exit(2)
+        }
+        toneLevelDBFS = value
+    case "--tone-freq":
+        index += 1
+        guard index < arguments.count, let value = Double(arguments[index]), value > 0 else {
+            FileHandle.standardError.write(Data("--tone-freq attend une fréquence en Hz\n".utf8))
+            exit(2)
+        }
+        toneFrequency = value
+    case "--mute-local":
+        muteLocalOutput = true
     case "--airplay":
         index += 1
         guard index < arguments.count else {
@@ -139,6 +164,11 @@ while index < arguments.count {
 
               --mode global|app|input   mode de capture (défaut : global)
               --app <nom|pid>           application à capter (implique --mode app)
+              --tone                    sinusoïde à la place de la capture : aucun tap, aucune
+                                        autorisation, utilisable avec `swift run`
+              --tone-level <dBFS>       niveau de la sinusoïde (défaut : −50)
+              --tone-freq <Hz>          fréquence de la sinusoïde (défaut : 440)
+              --mute-local              coupe le son du Mac pendant la capture (Process Tap)
               --list                    liste les process audio et quitte
               --browse                  liste les récepteurs _raop._tcp et quitte
               --airplay <nom>           diffuse vers ce récepteur RAOP au lieu d'écrire
@@ -164,6 +194,7 @@ while index < arguments.count {
               ./audiocap --airplay2 ApTV 30
               ./audiocap --airplay Geneva --airplay2 ApTV 30   # deux sorties en parallèle
               ./audiocap --airplay Geneva --airplay2 ApTV --delay2 25 3700   # validation 1 h
+              swift run audiocap --tone --airplay Geneva-Mock --volume -30 10   # sans bundle
             """)
         exit(0)
     default:
@@ -252,21 +283,15 @@ let outputURL = URL(fileURLWithPath: outputPath ?? "capture-\(mode.rawValue).wav
 // --- Collecteur alimenté par le ring buffer ---
 //
 // Le callback de capture écrit dans un ring buffer lock-free (invariant section 12) ; cette
-// boucle, hors temps réel, le draine et écrit le .wav. C'est exactement la frontière que
-// franchiront les senders des jalons 2 et 3, à ceci près qu'ils écriront sur le réseau.
+// boucle, hors temps réel, le draine et écrit le .wav. Le fichier garde le format natif de la
+// source : c'est lui qu'on veut vérifier à l'oreille.
 final class CaptureSink: @unchecked Sendable {
-    /// Ring buffer du pipeline principal (dump `.wav`, ou première sortie AirPlay).
     let ring: AudioRingBuffer
-    /// Ring buffer d'une **seconde** sortie, quand deux destinations diffusent en parallèle.
-    ///
-    /// Invariant section 12 : « le flux PCM capturé est dupliqué en lecture seule vers
-    /// chaque pipeline de sortie », avec « un ring buffer lock-free par pipeline de
-    /// sortie ». Les deux senders lisent donc chacun le sien et ne se volent aucun
-    /// échantillon — une sortie qui décroche n'affame pas l'autre.
-    private(set) var secondaryRing: AudioRingBuffer?
     let format: AVAudioFormat
     private var scratch: [Float]
-    fileprivate var interleaveScratch: [Float]
+    /// Tampon d'entrelacement, alloué une fois : le chemin temps réel n'alloue jamais.
+    private let interleaveScratch: UnsafeMutablePointer<Float>
+    private let interleaveFrames = 8_192
 
     init(format: AVAudioFormat, capacityFrames: Int = 48_000) {
         self.format = format
@@ -276,52 +301,45 @@ final class CaptureSink: @unchecked Sendable {
         self.scratch = [Float](
             repeating: 0, count: capacityFrames * Int(format.channelCount)
         )
-        // Tampon d'entrelacement, alloué une fois : le chemin temps réel n'alloue jamais.
-        self.interleaveScratch = [Float](repeating: 0, count: 8192 * Int(format.channelCount))
+        self.interleaveScratch = .allocate(capacity: interleaveFrames * Int(format.channelCount))
     }
 
-    /// Arme un second pipeline de sortie, avec son propre ring buffer.
-    ///
-    /// À appeler **avant** de démarrer la capture : le callback temps réel n'alloue rien, et
-    /// créer le tampon pendant qu'il tourne violerait cette règle.
-    func enableSecondaryPipeline(capacityFrames: Int = 48_000) -> AudioRingBuffer {
-        let ring = AudioRingBuffer(
-            capacityFrames: capacityFrames, channelCount: Int(format.channelCount)
-        )
-        secondaryRing = ring
-        return ring
-    }
+    deinit { interleaveScratch.deallocate() }
 
-    /// Écrit un bloc entrelacé dans **tous** les pipelines de sortie actifs.
-    ///
-    /// Appelé depuis le callback temps réel : lock-free, sans allocation (invariant
-    /// section 12). La duplication est une simple recopie vers chaque ring buffer ; aucun
-    /// sender ne voit le tampon d'un autre.
-    func writeToAllPipelines(_ samples: UnsafePointer<Float>, frameCount: Int) {
-        ring.write(from: samples, frameCount: frameCount)
-        secondaryRing?.write(from: samples, frameCount: frameCount)
-    }
-
-    /// Entrelace des canaux planaires puis écrit dans le ring buffer.
-    ///
-    /// Appelé depuis le thread de rendu d'AVAudioEngine. `interleaveScratch` est alloué une
-    /// fois à l'init : rien n'est alloué ici (CDC section 13).
-    func interleaveAndWrite(_ channels: UnsafePointer<UnsafeMutablePointer<Float>>, frames: Int) {
-        let channelCount = Int(format.channelCount)
-        let capacityFrames = interleaveScratch.count / channelCount
-        var offset = 0
-        while offset < frames {
-            let chunk = min(frames - offset, capacityFrames)
-            interleaveScratch.withUnsafeMutableBufferPointer { buffer in
-                guard let base = buffer.baseAddress else { return }
-                for frame in 0..<chunk {
-                    for channel in 0..<channelCount {
-                        base[frame * channelCount + channel] = channels[channel][offset + frame]
-                    }
+    /// Le consommateur à remettre à la source. **Appelé depuis le thread temps réel.**
+    func makeConsumer() -> CaptureBlockConsumer {
+        let channels = Int(format.channelCount)
+        let interleaved = format.isInterleaved
+        return { [self] list, frameCount in
+            let frames = Int(frameCount)
+            guard frames > 0 else { return }
+            let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: list))
+            if interleaved {
+                if let data = buffers[0].mData {
+                    ring.write(from: data.assumingMemoryBound(to: Float.self), frameCount: frames)
                 }
-                writeToAllPipelines(base, frameCount: chunk)
+                return
             }
-            offset += chunk
+            // Planaire (entrée physique) : le ring buffer attend de l'entrelacé.
+            guard buffers.count >= channels else { return }
+            var offset = 0
+            while offset < frames {
+                let chunk = min(frames - offset, interleaveFrames)
+                // `while` : hors optimisation, `for … in 0..<n` alloue à chaque tour.
+                var channel = 0
+                while channel < channels {
+                    guard let data = buffers[channel].mData else { return }
+                    let source = data.assumingMemoryBound(to: Float.self)
+                    var frame = 0
+                    while frame < chunk {
+                        interleaveScratch[frame * channels + channel] = source[offset + frame]
+                        frame += 1
+                    }
+                    channel += 1
+                }
+                ring.write(from: interleaveScratch, frameCount: chunk)
+                offset += chunk
+            }
         }
     }
 
@@ -368,6 +386,7 @@ final class CaptureSink: @unchecked Sendable {
     }
 }
 
+@MainActor
 func report(_ writer: WAVWriter, _ meter: LevelMeter, _ ring: AudioRingBuffer) {
     print("""
 
@@ -410,394 +429,197 @@ func describe(_ snapshot: SyncSnapshot) -> String {
         """
 }
 
-/// Diffuse le contenu du ring buffer vers un récepteur RAOP pour la durée demandée.
-///
-/// Le sender **lit** le ring buffer et ne l'écrit jamais : c'est exactement la frontière
-/// posée par l'invariant section 12. La capture, elle, ignore tout de cette destination.
-func streamToRAOP(
-    target: String,
-    ring: AudioRingBuffer,
-    format: AVAudioFormat,
-    volume: Float,
-    duration: Double,
-    clock: PlaybackClockProtocol? = nil,
-    manualDelaySeconds: TimeInterval = 0
-) async throws {
-    note("Recherche du récepteur RAOP « \(target) »…")
-    let device = try await RAOPDiscovery().find(named: target)
-    note("""
-        Récepteur : \(device.displayName) (\(device.serviceName))
-          adresse     : \(device.host):\(device.port)
-          format cible: \(device.sampleRate) Hz, \(device.bitDepth) bits, \
-        \(device.channelCount) canaux
-          chiffrement : \(device.supportsRSAEncryption ? "RSA-AES" : "aucun")
-        """)
-
-    let sender = RAOPSender(device: device, ring: ring, captureFormat: format, clock: clock)
-    await sender.setManualDelay(seconds: manualDelaySeconds)
-    try await sender.start(volume: volume)
-    note("Session RAOP établie, diffusion pendant \(duration) s "
-        + "(volume \(volume) dB, délai manuel \(manualDelaySeconds * 1000) ms)…")
-
-    let interval = progressInterval(for: duration)
-    let deadline = Date().addingTimeInterval(duration)
-    while Date() < deadline {
-        try await Task.sleep(for: .seconds(interval))
-        let statistics = await sender.statistics
-        let sync = sender.synchronizer.snapshot()
-        let residual = sync.residualErrorSeconds.map { String(format: "%+.2f ms", $0 * 1000) }
-            ?? "stabilisation"
-        note(String(
-            format: "  RAOP %6d paquets  %4d sync  %3d timing  %d err  dérive %@  ±%d trames",
-            statistics.packetsSent, statistics.syncPacketsSent,
-            statistics.timingResponsesSent, statistics.errors,
-            residual as NSString, statistics.framesInserted + statistics.framesRemoved
-        ))
-    }
-
-    let final = await sender.statistics
-    let sync = sender.synchronizer.snapshot()
-    await sender.stop()
-    note("""
-
-        Résultat de la diffusion RAOP
-          récepteur          : \(device.displayName) (\(device.host):\(device.port))
-          paquets audio      : \(final.packetsSent)
-          paquets de synchro : \(final.syncPacketsSent) dont \(final.anchoredSyncPackets) ancrés
-          réponses de timing : \(final.timingResponsesSent)
-          trames lues        : \(final.framesRead)
-          erreurs            : \(final.errors)
-          recalages          : \(final.resyncs)
-          reconnexions       : \(final.reconnections) (dont \(final.reconnectionAttempts) tentatives échouées)
-          trames refusées    : \(ring.droppedFrames) au total, dont \
-        \(final.droppedBeforeStreaming) pendant la négociation
-          dont en diffusion  : \(ring.droppedFrames - final.droppedBeforeStreaming)
-
-        Synchronisation RAOP (CDC 4.5)
-        \(describe(sync))
-        """)
-}
-
-/// Diffuse vers un récepteur AirPlay 2 (jalon 3).
-///
-/// Même frontière qu'en RAOP : le sender **lit** son ring buffer et ne l'écrit jamais, et
-/// la capture ignore tout de cette destination (invariant section 12).
-func streamToAirPlay2(
-    credentialsPath: String? = nil,
-    target: String,
-    ring: AudioRingBuffer,
-    format: AVAudioFormat,
-    volume: Float,
-    duration: Double,
-    clock: PlaybackClockProtocol? = nil,
-    manualDelaySeconds: TimeInterval = 0
-) async throws {
-    note("Recherche du récepteur AirPlay 2 « \(target) »…")
-    let device = try await AirPlay2Discovery().find(named: target)
-    note("""
-        Récepteur : \(device.serviceName)
-          adresse     : \(device.host):\(device.port)
-          features    : 0x\(String(device.features, radix: 16))
-          pairing     : \(device.supportsTransientPairing ? "transitoire" : "transitoire NON proposé")
-        """)
-
-    // Un récepteur qui exige l'appairage système (un Apple TV) refuse le transitoire en 470.
-    // Ses credentials, obtenus une fois, se rejouent alors par pair-verify.
-    var credentials: HapCredentials?
-    if let path = credentialsPath {
-        credentials = try HapCredentials.load(contentsOf: URL(fileURLWithPath: path))
-        note("Credentials d'appairage système chargés depuis \(path)")
-    }
-    let sender = AirPlay2Sender(
-        device: device, ring: ring, captureFormat: format, clock: clock,
-        credentials: credentials
-    )
-    await sender.setManualDelay(seconds: manualDelaySeconds)
-    try await sender.start(volume: volume)
-    note("Session AirPlay 2 établie, diffusion pendant \(duration) s "
-        + "(volume \(volume) dB, délai manuel \(manualDelaySeconds * 1000) ms)…")
-
-    let interval = progressInterval(for: duration)
-    let deadline = Date().addingTimeInterval(duration)
-    while Date() < deadline {
-        try await Task.sleep(for: .seconds(interval))
-        let statistics = await sender.statistics
-        let sync = sender.synchronizer.snapshot()
-        let residual = sync.residualErrorSeconds.map { String(format: "%+.2f ms", $0 * 1000) }
-            ?? "stabilisation"
-        note(String(
-            format: "  AP2  %6d paquets  %4d sync  %d err  dérive %@  ±%d trames",
-            statistics.packetsSent, statistics.syncPacketsSent, statistics.errors,
-            residual as NSString, statistics.framesInserted + statistics.framesRemoved
-        ))
-    }
-
-    let final = await sender.statistics
-    let sync = sender.synchronizer.snapshot()
-    await sender.stop()
-    note("""
-
-        Résultat de la diffusion AirPlay 2
-          récepteur          : \(device.serviceName) (\(device.host):\(device.port))
-          paquets audio      : \(final.packetsSent)
-          paquets de synchro : \(final.syncPacketsSent) dont \(final.anchoredSyncPackets) ancrés
-          canal d'événements : \(final.eventChannelConnected ? "ouvert" : "indisponible")
-          retransmissions    : \(final.retransmitRequests) demandes reçues
-          trames lues        : \(final.framesRead)
-          erreurs            : \(final.errors)
-          recalages          : \(final.resyncs)
-          reconnexions       : \(final.reconnections) (dont \(final.reconnectionAttempts) tentatives échouées)
-          trames refusées    : \(ring.droppedFrames) au total, dont \
-        \(final.droppedBeforeStreaming) pendant la négociation
-          dont en diffusion  : \(ring.droppedFrames - final.droppedBeforeStreaming)
-
-        Synchronisation AirPlay 2 (CDC 4.5)
-        \(describe(sync))
-        """)
-}
-
-/// Diffuse simultanément vers les deux sorties — l'objectif fonctionnel du projet (CDC 2).
-///
-/// Les deux senders tournent dans des tâches **indépendantes**, chacun sur son propre ring
-/// buffer. C'est ce qui matérialise l'invariant section 12 : « une panne ou déconnexion sur
-/// une sortie n'interrompt jamais la capture ni l'autre sortie ». Un `async let` qui
-/// propagerait l'erreur annulerait l'autre branche ; ici chaque échec est capturé et
-/// journalisé dans sa propre tâche, sans toucher à l'autre.
-///
-/// **Jalon 4** : les deux senders reçoivent ici la **même** horloge de restitution. C'est
-/// elle, et rien d'autre, qui les aligne : chacun en tire l'instant auquel le récepteur doit
-/// restituer la trame captée qu'il est en train d'envoyer, et l'annonce sur son propre canal
-/// de synchronisation. Aucun des deux ne sait que l'autre existe (invariant section 12).
-func streamToBothOutputs(
-    airplay2CredentialsPath: String?,
-    raopTarget: String,
-    airplay2Target: String,
-    raopRing: AudioRingBuffer,
-    airplay2Ring: AudioRingBuffer,
-    format: AVAudioFormat,
-    raopVolume: Float,
-    airplay2Volume: Float,
-    duration: Double,
-    clock: PlaybackClockProtocol,
-    raopDelaySeconds: TimeInterval,
-    airplay2DelaySeconds: TimeInterval
-) async {
-    note("Diffusion simultanée vers deux sorties (RAOP + AirPlay 2), horloge commune\n")
-
-    await withTaskGroup(of: Void.self) { group in
-        group.addTask {
-            do {
-                try await streamToRAOP(
-                    target: raopTarget, ring: raopRing, format: format,
-                    volume: raopVolume, duration: duration,
-                    clock: clock, manualDelaySeconds: raopDelaySeconds
-                )
-            } catch {
-                // Panne confinée : l'autre sortie continue.
-                note("SORTIE RAOP EN ÉCHEC : \(error)")
-                note("→ la sortie AirPlay 2 continue (invariant section 12).")
-            }
-        }
-        group.addTask {
-            do {
-                try await streamToAirPlay2(
-                    credentialsPath: airplay2CredentialsPath,
-                    target: airplay2Target, ring: airplay2Ring, format: format,
-                    volume: airplay2Volume, duration: duration,
-                    clock: clock, manualDelaySeconds: airplay2DelaySeconds
-                )
-            } catch {
-                note("SORTIE AIRPLAY 2 EN ÉCHEC : \(error)")
-                note("→ la sortie RAOP continue (invariant section 12).")
-            }
-        }
+func describe(_ phase: BridgeEngine.Phase) -> String {
+    switch phase {
+    case .idle: return "à l'arrêt"
+    case .connecting: return "connexion"
+    case let .waitingForReceiver(attempt, lastError):
+        return "récepteur attendu (essai \(attempt) : \(lastError))"
+    case .streaming: return "diffusion"
+    case .reconnecting: return "reconnexion"
+    case let .failed(reason): return "ÉCHEC : \(reason)"
     }
 }
 
-/// Aiguille vers la ou les sorties AirPlay demandées en ligne de commande.
+func describe(_ health: BridgeEngine.CaptureHealth) -> String {
+    switch health.diagnosis {
+    case .notRunning: return "capture à l'arrêt"
+    case .waitingForFirstBlock: return "capture en attente d'un premier son"
+    case .healthy: return "capture active"
+    case .stalled: return "CAPTURE INTERROMPUE"
+    case .silentWhilePlaying:
+        return "SILENCE STRICT alors qu'une application joue — autorisation perdue ?"
+    case .silentNothingPlaying: return "silence strict, aucune application ne joue"
+    case .silentUnknown: return "silence strict"
+    }
+}
+
+/// Diffuse vers les sorties demandées, par le même moteur que l'application.
 ///
-/// Rend `false` si aucune n'est demandée — le CLI retombe alors sur le dump `.wav` du
-/// jalon 1. Factorisé parce que les trois modes de capture en ont besoin à l'identique : la
-/// capture ignore ses destinations (invariant section 12), c'est donc bien le même code.
-///
-/// **L'horloge de restitution commune est créée ici**, une seule fois, et passée aux deux
-/// senders. Elle est ancrée sur l'état courant de la capture pour que sa trame n° 0
-/// corresponde bien au premier échantillon capté, et non à l'instant de sa création.
+/// Chaque sortie reçoit son propre ring buffer et la même horloge de restitution, et une panne
+/// sur l'une n'atteint pas l'autre (invariant section 12) : tout cela vit dans `BridgeEngine`, ce
+/// qui fait valider par ce CLI le code réellement employé par l'interface.
 @MainActor
-func runRequestedOutputs(sink: CaptureSink, format: AVAudioFormat) async throws -> Bool {
-    guard airplayTarget != nil || airplay2Target != nil else { return false }
+func runRequestedOutputs(source: BridgeEngine.Source) async throws -> Bool {
+    var requests: [BridgeEngine.OutputRequest] = []
+    if let airplayTarget {
+        requests.append(BridgeEngine.OutputRequest(
+            id: "RAOP", proto: .raop, deviceName: airplayTarget,
+            volumeDB: airplayVolume, manualDelaySeconds: airplayDelayMs / 1000
+        ))
+    }
+    if let airplay2Target {
+        // Un récepteur qui exige l'appairage système (un Apple TV) refuse le transitoire en 470.
+        // Ses credentials, obtenus une fois, se rejouent alors par pair-verify.
+        var credentials: HapCredentials?
+        if let path = airplay2CredentialsPath {
+            credentials = try HapCredentials.load(contentsOf: URL(fileURLWithPath: path))
+            note("Credentials d'appairage système chargés depuis \(path)")
+        }
+        requests.append(BridgeEngine.OutputRequest(
+            id: "AP2", proto: .airplay2, deviceName: airplay2Target,
+            volumeDB: airplay2Volume, manualDelaySeconds: airplay2DelayMs / 1000,
+            credentials: credentials
+        ))
+    }
+    guard !requests.isEmpty else { return false }
 
-    let clock = SharedPlaybackClock(captureSampleRate: format.sampleRate)
-    clock.startIfNeeded(framesAlreadyWritten: sink.ring.totalFramesWritten)
-    let raopDelay = airplayDelayMs / 1000
-    let airplay2Delay = airplay2DelayMs / 1000
+    let engine = BridgeEngine()
+    try await engine.start(
+        source: source, outputs: requests,
+        options: BridgeEngine.StartOptions(muteLocalOutput: muteLocalOutput)
+    )
+    note("Diffusion vers \(requests.count) sortie(s) pendant \(duration) s, horloge commune\n")
 
-    if let raopTarget = airplayTarget, let ap2Target = airplay2Target,
-        let secondaryRing = sink.secondaryRing {
-        // Deux sorties : chacune son ring buffer (invariant section 12), la même horloge.
-        await streamToBothOutputs(
-            airplay2CredentialsPath: airplay2CredentialsPath,
-            raopTarget: raopTarget, airplay2Target: ap2Target,
-            raopRing: sink.ring, airplay2Ring: secondaryRing,
-            format: format, raopVolume: airplayVolume,
-            airplay2Volume: airplay2Volume, duration: duration,
-            clock: clock, raopDelaySeconds: raopDelay,
-            airplay2DelaySeconds: airplay2Delay
-        )
-        return true
+    let interval = progressInterval(for: duration)
+    let deadline = Date().addingTimeInterval(duration)
+    while Date() < deadline {
+        try await Task.sleep(for: .seconds(interval))
+        for output in await engine.outputs {
+            let statistics = output.statistics
+            let residual = output.residualErrorSeconds
+                .map { String(format: "%+.2f ms", $0 * 1000) } ?? "stabilisation"
+            note(String(
+                format: "  %-4@ %6d paquets  %4d sync  %d err  dérive %@  ±%d trames  %@",
+                output.id as NSString, statistics.packetsSent, statistics.syncPacketsSent,
+                statistics.errors, residual as NSString, output.driftCorrections,
+                describe(output.phase) as NSString
+            ))
+        }
+        let health = await engine.captureHealth
+        if health.diagnosis != .healthy { note("  \(describe(health))") }
     }
-    if let target = airplayTarget {
-        try await streamToRAOP(
-            target: target, ring: sink.ring, format: format,
-            volume: airplayVolume, duration: duration,
-            clock: clock, manualDelaySeconds: raopDelay
-        )
-        return true
+
+    let final = await engine.outputs
+    let health = await engine.captureHealth
+    await engine.stop()
+
+    var anyPacketSent = false
+    for output in final {
+        let statistics = output.statistics
+        anyPacketSent = anyPacketSent || statistics.packetsSent > 0
+        note("""
+
+            Résultat de la sortie \(output.id)
+              état final         : \(describe(output.phase))
+              paquets audio      : \(statistics.packetsSent)
+              paquets de synchro : \(statistics.syncPacketsSent) dont \(statistics.anchoredSyncPackets) ancrés
+              réponses de timing : \(statistics.timingResponsesSent.map(String.init) ?? "—")
+              retransmissions    : \(statistics.retransmitRequests.map { "\($0) demandes reçues" } ?? "—")
+              canal d'événements : \(statistics.eventChannelConnected.map { $0 ? "ouvert" : "indisponible" } ?? "—")
+              trames lues        : \(statistics.framesRead)
+              erreurs            : \(statistics.errors)
+              recalages          : \(statistics.resyncs)
+              reconnexions       : \(statistics.reconnections) (dont \(statistics.reconnectionAttempts) tentatives échouées)
+              trames refusées    : \(statistics.droppedBeforeStreaming) pendant la négociation, \
+            \(output.droppedWhileStreaming) ensuite
+            """)
+        if let sync = output.sync {
+            note("Synchronisation (CDC 4.5)\n\(describe(sync))")
+        }
     }
-    if let target = airplay2Target {
-        try await streamToAirPlay2(
-            credentialsPath: airplay2CredentialsPath,
-            target: target, ring: sink.ring, format: format,
-            volume: airplay2Volume, duration: duration,
-            clock: clock, manualDelaySeconds: airplay2Delay
-        )
-        return true
+    note("\n\(describe(health)), \(health.framesCaptured) trames captées")
+    if !anyPacketSent { exit(1) }
+    return true
+}
+
+/// La demande correspondant au mode de la ligne de commande.
+@MainActor
+func requestedSource() throws -> BridgeEngine.Source {
+    switch mode {
+    case .global:
+        return .processTap(.globalExcluding(pids: []))
+    case .app:
+        guard let hint = appHint else {
+            note("--mode app exige --app <nom|pid>")
+            exit(2)
+        }
+        let process = try AudioProcessList.find(matching: hint)
+        note("Application ciblée : \(process.displayName) (pid \(process.pid), "
+            + "\(process.isPlaying ? "en lecture" : "silencieuse"))")
+        return .processTap(.processes(pids: [process.pid]))
+    case .input:
+        return .inputDevice
+    case .tone:
+        return .tone(frequency: toneFrequency, levelDBFS: toneLevelDBFS)
     }
-    return false
+}
+
+/// Source effective pour le dump `.wav`, qui se passe du moteur.
+@MainActor
+func makeSource(for request: BridgeEngine.Source) -> any AudioCaptureSource {
+    switch request {
+    case let .processTap(tapMode):
+        return ProcessTapCapture(mode: tapMode, muteLocalOutput: muteLocalOutput)
+    case .inputDevice:
+        return InputDeviceCapture()
+    case let .tone(frequency, levelDBFS):
+        return ToneCaptureSource(frequency: frequency, levelDBFS: levelDBFS)
+    }
 }
 
 // --- Capture ---
 do {
     note("Mode : \(mode.rawValue)   durée : \(duration) s   sortie : \(outputURL.path)")
+    let request = try requestedSource()
+
+    // --- Diffusion réseau au lieu du dump .wav ---
+    if try await runRequestedOutputs(source: request) {
+        exit(0)
+    }
+
+    let source = makeSource(for: request)
+    if let kind = source.requiredPermission {
+        let permission = CapturePermission.status(for: kind)
+        note("Autorisation : \(permission.rawValue)")
+        if permission != .authorized {
+            let granted = await CapturePermission.request(for: kind)
+            if !granted {
+                note(CapturePermission.guidance(for: kind))
+                exit(3)
+            }
+        }
+    }
+
+    // Le format est connu avant le premier bloc : le collecteur existe déjà quand l'IO démarre,
+    // et le callback temps réel n'a aucune référence à attendre.
+    let format = try source.prepare()
+    note("Format : \(format.sampleRate) Hz, \(format.channelCount) canaux, "
+        + "\(format.isInterleaved ? "entrelacé" : "planaire")")
+    let sink = CaptureSink(format: format)
+    try source.start(deliveringTo: sink.makeConsumer())
 
     var meter = LevelMeter()
-
-    switch mode {
-    case .global, .app:
-        let permission = CapturePermission.status(for: .systemAudio)
-        note("Autorisation « sons du système » : \(permission.rawValue)")
-        if permission != .authorized {
-            let granted = await CapturePermission.request(for: .systemAudio)
-            if !granted {
-                note(CapturePermission.guidance(for: .systemAudio))
-                exit(3)
-            }
-        }
-
-        let tapMode: ProcessTapCapture.Mode
-        if mode == .app {
-            guard let hint = appHint else {
-                note("--mode app exige --app <nom|pid>")
-                exit(2)
-            }
-            let process = try AudioProcessList.find(matching: hint)
-            note("Application ciblée : \(process.displayName) (pid \(process.pid), "
-                + "\(process.isPlaying ? "en lecture" : "silencieuse"))")
-            tapMode = .processes(pids: [process.pid])
-        } else {
-            tapMode = .globalExcluding(pids: [])
-        }
-
-        // Le sink doit exister avant le démarrage, mais son format vient du tap : on crée
-        // d'abord un tap sans consommateur pour lire le format, d'où cette indirection.
-        nonisolated(unsafe) var sink: CaptureSink?
-        let capture = ProcessTapCapture { bufferList, frames in
-            guard let sink, frames > 0 else { return }
-            let list = UnsafeMutableAudioBufferListPointer(
-                UnsafeMutablePointer(mutating: bufferList))
-            guard let data = list.first?.mData else { return }
-            // Écriture lock-free et sans allocation depuis le thread temps réel.
-            // Duplication vers chaque pipeline de sortie (invariant section 12).
-            sink.writeToAllPipelines(
-                data.assumingMemoryBound(to: Float.self), frameCount: Int(frames))
-        }
-
-        try capture.start(mode: tapMode)
-        guard let format = capture.format else { throw AudioCaptureError.tapFormatUnavailable }
-        note("Format : \(format.sampleRate) Hz, \(format.channelCount) canaux, "
-            + "\(format.isInterleaved ? "entrelacé" : "planaire")")
-        let activeSink = CaptureSink(format: format)
-        // Second pipeline armé AVANT le démarrage de la capture, et seulement si deux
-        // sorties sont demandées : le callback temps réel n'alloue jamais (invariant
-        // section 12), et une sortie unique n'a aucune raison de payer un second tampon.
-        if airplayTarget != nil && airplay2Target != nil {
-            _ = activeSink.enableSecondaryPipeline()
-        }
-        sink = activeSink
-
-        // --- Jalons 2 à 4 : diffusion réseau au lieu du dump .wav ---
-        if try await runRequestedOutputs(sink: activeSink, format: format) {
-            capture.stop()
-            exit(0)
-        }
-
-        let writer = try WAVWriter(url: outputURL, format: format)
-        let deadline = Date().addingTimeInterval(duration)
-        while Date() < deadline {
-            try await Task.sleep(for: .milliseconds(50))
-            try activeSink.drain(into: writer, meter: &meter)
-        }
-        capture.stop()
-        try activeSink.drain(into: writer, meter: &meter)
-        report(writer, meter, activeSink.ring)
-        exit(meter.isDigitalSilence ? 2 : 0)
-
-    case .input:
-        let permission = CapturePermission.status(for: .microphone)
-        note("Autorisation micro : \(permission.rawValue)")
-        if permission != .authorized {
-            let granted = await CapturePermission.request(for: .microphone)
-            if !granted {
-                note(CapturePermission.guidance(for: .microphone))
-                exit(3)
-            }
-        }
-
-        nonisolated(unsafe) var sink: CaptureSink?
-        let capture = InputDeviceCapture { buffer in
-            guard let sink else { return }
-            let frames = Int(buffer.frameLength)
-            guard frames > 0 else { return }
-            if buffer.format.isInterleaved {
-                if let data = buffer.audioBufferList.pointee.mBuffers.mData {
-                    sink.writeToAllPipelines(
-                        data.assumingMemoryBound(to: Float.self), frameCount: frames)
-                }
-            } else if let channels = buffer.floatChannelData {
-                // AVAudioEngine livre du planaire : le ring buffer attend de l'entrelacé.
-                sink.interleaveAndWrite(channels, frames: frames)
-            }
-        }
-
-        try capture.start()
-        guard let format = capture.format else { throw AudioCaptureError.noInputDevice }
-        note("Format : \(format.sampleRate) Hz, \(format.channelCount) canaux, "
-            + "\(format.isInterleaved ? "entrelacé" : "planaire")")
-        let activeSink = CaptureSink(format: format)
-        // Second pipeline armé AVANT le démarrage de la capture, et seulement si deux
-        // sorties sont demandées : le callback temps réel n'alloue jamais (invariant
-        // section 12), et une sortie unique n'a aucune raison de payer un second tampon.
-        if airplayTarget != nil && airplay2Target != nil {
-            _ = activeSink.enableSecondaryPipeline()
-        }
-        sink = activeSink
-
-        if try await runRequestedOutputs(sink: activeSink, format: format) {
-            capture.stop()
-            exit(0)
-        }
-
-        let writer = try WAVWriter(url: outputURL, format: format)
-        let deadline = Date().addingTimeInterval(duration)
-        while Date() < deadline {
-            try await Task.sleep(for: .milliseconds(50))
-            try activeSink.drain(into: writer, meter: &meter)
-        }
-        capture.stop()
-        try activeSink.drain(into: writer, meter: &meter)
-        report(writer, meter, activeSink.ring)
-        exit(meter.isDigitalSilence ? 2 : 0)
+    let writer = try WAVWriter(url: outputURL, format: format)
+    let deadline = Date().addingTimeInterval(duration)
+    while Date() < deadline {
+        try await Task.sleep(for: .milliseconds(50))
+        try sink.drain(into: writer, meter: &meter)
     }
+    source.stop()
+    try sink.drain(into: writer, meter: &meter)
+    report(writer, meter, sink.ring)
+    exit(meter.isDigitalSilence ? 2 : 0)
 } catch {
     note("ERREUR : \(error)")
     exit(1)

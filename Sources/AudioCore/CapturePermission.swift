@@ -46,12 +46,12 @@ enum TCCSPI {
 public enum CapturePermission {
     private static let log = AudioLog.capture
 
-    public enum Status: String {
+    public enum Status: String, Sendable {
         case notDetermined, restricted, denied, authorized, unknown
     }
 
     /// Les deux bascules de confidentialité distinctes décrites en CDC 4.2.
-    public enum Kind {
+    public enum Kind: Sendable {
         /// Modes Process Tap (système global, application ciblée).
         case systemAudio
         /// Mode entrée physique (micro/ligne).

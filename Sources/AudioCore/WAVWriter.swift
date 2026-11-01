@@ -26,8 +26,8 @@ public final class WAVWriter {
             AVLinearPCMIsNonInterleaved: false,
         ]
         // `interleaved` doit décrire le format des buffers fournis à `write(from:)`, pas
-        // celui du fichier sur disque : le tap livre du float32 non entrelacé, et une
-        // valeur incohérente ici fait échouer ExtAudioFileWrite avec l'OSStatus -50.
+        // celui du fichier sur disque : une valeur incohérente ici fait échouer
+        // ExtAudioFileWrite avec l'OSStatus -50.
         self.file = try AVAudioFile(
             forWriting: url,
             settings: settings,
@@ -62,10 +62,14 @@ public struct LevelMeter: Sendable {
     public mutating func consume(_ buffer: AVAudioPCMBuffer) {
         guard let channels = buffer.floatChannelData else { return }
         let frames = Int(buffer.frameLength)
+        // `stride` et non un pas de 1 : en entrelacé, les pointeurs de canaux désignent le même
+        // bloc décalé d'un échantillon. Sans lui, on ne lisait que la première moitié de chaque
+        // bloc, canaux mélangés — le test de silence pouvait donc conclure à tort.
+        let stride = buffer.stride
         for channel in 0..<Int(buffer.format.channelCount) {
             let samples = channels[channel]
             for frame in 0..<frames {
-                let value = samples[frame]
+                let value = samples[frame * stride]
                 let magnitude = abs(value)
                 if magnitude > peak { peak = magnitude }
                 sumOfSquares += Double(value) * Double(value)

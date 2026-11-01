@@ -64,6 +64,45 @@ public enum AudioLog {
     public static let sync = Logger(subsystem: subsystem, category: "sync")
 }
 
+/// Écoute les changements de sortie par défaut du système.
+///
+/// Deux propriétés et non une : `kAudioHardwarePropertyDefaultOutputDevice` est la sortie que
+/// l'utilisateur choisit, `kAudioHardwarePropertyDefaultSystemOutputDevice` celle des alertes,
+/// qui porte l'horloge de l'agrégat du tap et que Réglages Son peut épingler ailleurs. Les
+/// notifications arrivent sur une file propre, jamais sur le thread temps réel.
+///
+/// Le listener est retiré au `deinit` : Core Audio ne connaît pas la durée de vie du bloc.
+final class DefaultOutputDeviceWatcher {
+    private let queue = DispatchQueue(label: "fr.baptiste.airplaymultioutput.route-watch")
+    private let block: AudioObjectPropertyListenerBlock
+    private static let selectors = [
+        kAudioHardwarePropertyDefaultOutputDevice,
+        kAudioHardwarePropertyDefaultSystemOutputDevice,
+    ]
+
+    init(onChange: @escaping @Sendable () -> Void) {
+        self.block = { _, _ in onChange() }
+        for selector in Self.selectors {
+            var address = AudioObject.address(selector)
+            let status = AudioObjectAddPropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject), &address, queue, block
+            )
+            if status != noErr {
+                AudioLog.capture.error("Écoute de la sortie par défaut impossible : \(status)")
+            }
+        }
+    }
+
+    deinit {
+        for selector in Self.selectors {
+            var address = AudioObject.address(selector)
+            AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject), &address, queue, block
+            )
+        }
+    }
+}
+
 /// Accès typé aux propriétés d'objets Core Audio (`AudioObjectGetPropertyData`).
 ///
 /// Ces appels sont répétitifs et manipulent des pointeurs ; les centraliser ici évite de
