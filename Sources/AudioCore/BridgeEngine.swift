@@ -226,6 +226,9 @@ public actor BridgeEngine {
         public var silenceThresholdSeconds: TimeInterval = 3
         /// Immobilité de la graduation au-delà de laquelle la capture est dite interrompue.
         public var stallThresholdSeconds: TimeInterval = 1
+        /// Retard de la graduation à partir duquel un trou est reporté sur l'horloge commune, une
+        /// fois confirmé au relevé suivant (voir ``trackInterruption(deficit:clock:)``).
+        public var interruptionThresholdSeconds: TimeInterval = 0.2
         /// Regroupe la rafale de notifications d'un changement de périphérique.
         public var routeChangeDebounce: Duration = .milliseconds(300)
         public var rebuildRetryInitialDelay: Duration = .milliseconds(500)
@@ -328,7 +331,10 @@ public actor BridgeEngine {
     private var lastHealthDate = Date()
     private var lastHealthFrames = 0
     private var lastFlowDate = Date()
-    private var stallAccumulator: TimeInterval = 0
+    /// Retard de la graduation pas encore reporté sur l'horloge : un doute, jusqu'à confirmation.
+    private var pendingInterruption: TimeInterval = 0
+    /// Le trou en cours est avéré : tant qu'il dure, chaque relevé le reporte sans attendre.
+    private var interruptionConfirmed = false
     private var lastExpectationCheck: Date?
     private var lastExpectation: Bool?
 
@@ -918,7 +924,7 @@ public actor BridgeEngine {
 
     private func rebuildCapture(_ source: any AudioCaptureSource) async {
         log.info("Reconstruction de la capture")
-        let stoppedAt = Date()
+        let stoppedAt = captureWillStop()
         let compensatedBefore = health.interruptedSeconds
         source.stop()
 
@@ -1008,9 +1014,67 @@ public actor BridgeEngine {
         lastHealthDate = now
         lastHealthFrames = frames
         lastFlowDate = now
-        stallAccumulator = 0
+        pendingInterruption = 0
+        interruptionConfirmed = false
     }
 
+    /// La capture va s'arrêter pour de bon : ce qui n'était qu'un doute sur un trou n'en est plus
+    /// un. Sans cela chaque reconstruction le perdrait, et le retard s'accumulerait d'une capture
+    /// bloquée à l'autre jusqu'à manger la marge de restitution.
+    private func captureWillStop() -> Date {
+        if let clock, pendingInterruption >= tuning.interruptionThresholdSeconds {
+            reportInterruption(pendingInterruption, clock: clock)
+        }
+        pendingInterruption = 0
+        return Date()
+    }
+
+    private func reportInterruption(_ seconds: TimeInterval, clock: SharedPlaybackClock) {
+        clock.shiftOrigin(bySeconds: seconds)
+        health.interruptedSeconds += seconds
+        log.info("Interruption de capture : \(seconds) s reportées sur l'horloge commune")
+    }
+
+    /// Décide si un retard de la graduation sur l'heure est un vrai trou de capture.
+    ///
+    /// Un vrai trou se reporte sur l'horloge commune (voir `shiftOrigin`) : le tap ne livre rien
+    /// tant que rien ne joue, et les instants annoncés prendraient autant de retard sur le réel.
+    /// Mais ce report est **définitif**, et la réaction des récepteurs à un instant qui saute reste
+    /// inconnue. Il n'a donc pas lieu sur un simple doute :
+    ///
+    /// - un écart en deçà de `captureJitterTolerance` remet tout à zéro. Un gros bloc d'IO à cheval
+    ///   sur deux relevés en produit, et la dérive d'horloge, de plusieurs ordres de grandeur plus
+    ///   faible, se trouve écartée du même coup ;
+    /// - un retard qui passe le seuil **attend le relevé suivant**. Une rafale tardive le rattrape
+    ///   aussitôt, et rien n'a eu lieu ; sinon, qu'il s'aggrave ou que les blocs aient repris sans
+    ///   le rattraper, le trou est avéré ;
+    /// - tant qu'un trou avéré dure, chaque relevé le reporte sans autre attente.
+    private func trackInterruption(deficit: TimeInterval, clock: SharedPlaybackClock) {
+        let tolerance = Self.captureJitterTolerance
+        if interruptionConfirmed {
+            if deficit > tolerance {
+                reportInterruption(deficit, clock: clock)
+            } else {
+                interruptionConfirmed = false
+            }
+            return
+        }
+        if pendingInterruption >= tuning.interruptionThresholdSeconds {
+            let remaining = pendingInterruption + deficit
+            pendingInterruption = 0
+            if remaining >= tuning.interruptionThresholdSeconds {
+                reportInterruption(remaining, clock: clock)
+                interruptionConfirmed = deficit > tolerance
+            }
+        } else if deficit > tolerance {
+            pendingInterruption += deficit
+        } else {
+            pendingInterruption = 0
+        }
+    }
+
+    /// Écart entre l'heure et la graduation qu'un relevé tolère sans le compter.
+    private static let captureJitterTolerance: TimeInterval = 0.05
 
     /// Mesure la capture : interruption, silence strict, arrêt des blocs.
     ///
@@ -1021,24 +1085,10 @@ public actor BridgeEngine {
         let frames = fanout.framesCaptured
         let rate = fanout.format.sampleRate
 
-        // Interruption : la graduation prend du retard sur l'heure. L'écart est reporté sur
-        // l'horloge commune (voir `shiftOrigin`), à partir de 200 ms cumulées. Un écart plus
-        // petit peut venir d'un gros bloc d'IO à cheval sur deux relevés, et le relevé suivant
-        // le rattrape : c'est pourquoi le cumul repart de zéro dès qu'un relevé est normal, ce
-        // qui écarte aussi la dérive d'horloge, de plusieurs ordres de grandeur plus faible.
+        // Interruption : la graduation prend du retard sur l'heure.
         let elapsed = now.timeIntervalSince(lastHealthDate)
         let advanced = Double(frames - lastHealthFrames) / rate
-        let deficit = elapsed - advanced
-        if deficit > 0.05 {
-            stallAccumulator += deficit
-            if stallAccumulator >= 0.2 {
-                clock.shiftOrigin(bySeconds: stallAccumulator)
-                health.interruptedSeconds += stallAccumulator
-                stallAccumulator = 0
-            }
-        } else {
-            stallAccumulator = 0
-        }
+        trackInterruption(deficit: elapsed - advanced, clock: clock)
 
         if frames != lastHealthFrames { lastFlowDate = now }
         lastHealthDate = now
