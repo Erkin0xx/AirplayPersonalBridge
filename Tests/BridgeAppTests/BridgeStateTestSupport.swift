@@ -138,9 +138,11 @@ actor StubSender: OutputSender {
     private(set) var startedVolume: Float?
     private(set) var startedDelay: TimeInterval?
     private(set) var startedBass: Float?
+    private(set) var startedTreble: Float?
     private(set) var pushedVolumes: [Float] = []
     private(set) var pushedDelays: [TimeInterval] = []
     private(set) var pushedBass: [Float] = []
+    private(set) var pushedTreble: [Float] = []
     private(set) var stopCount = 0
     private var errorMessage: String?
     private var statistics = OutputStatistics()
@@ -164,6 +166,7 @@ actor StubSender: OutputSender {
         startedVolume = volume
         startedDelay = synchronizer.manualOffsetSeconds
         startedBass = pushedBass.last
+        startedTreble = pushedTreble.last
         if case let .fail(error) = behaviour {
             state = .failed
             throw error
@@ -190,6 +193,7 @@ actor StubSender: OutputSender {
         synchronizer.manualOffsetSeconds = seconds
     }
     func setBassBoost(decibels: Float) { pushedBass.append(decibels) }
+    func setTrebleCut(decibels: Float) { pushedTreble.append(decibels) }
 
     func currentOutputState() -> OutputSenderState { state }
     func currentOutputStatistics() -> OutputStatistics { statistics }

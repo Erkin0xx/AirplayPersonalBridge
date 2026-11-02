@@ -123,6 +123,11 @@ public actor BridgeEngine {
     public enum OutputProtocol: Sendable, Hashable {
         case raop
         case airplay2
+
+        /// Basses et aigus ne valent que pour la Geneva, seule sortie AirPlay 1 de l'installation
+        /// (ADR-002, CDC section 2) : les HomePod gardent une stéréo pleine bande intacte, et ne
+        /// reçoivent jamais ces réglages.
+        public var supportsToneControl: Bool { self == .raop }
     }
 
     /// Ce qu'on demande au moteur pour une sortie donnée.
@@ -139,6 +144,8 @@ public actor BridgeEngine {
         /// Renfort de basses, en dB (ADR-002). Ignoré hors RAOP : le CDC ne le prévoit que pour la
         /// Geneva, les HomePod gardant une pleine bande intacte.
         public var bassBoostDB: Float
+        /// Coupe des aigus, en dB, de 0 à −9. Ignorée hors RAOP, comme les basses.
+        public var trebleCutDB: Float
         /// Credentials d'appairage système, pour un récepteur qui refuse le transitoire. Sans
         /// objet en RAOP.
         public let credentials: HapCredentials?
@@ -151,6 +158,7 @@ public actor BridgeEngine {
             volumeDB: Float,
             manualDelaySeconds: TimeInterval = 0,
             bassBoostDB: Float = 0,
+            trebleCutDB: Float = 0,
             credentials: HapCredentials? = nil
         ) {
             self.id = id
@@ -160,6 +168,7 @@ public actor BridgeEngine {
             self.volumeDB = volumeDB
             self.manualDelaySeconds = manualDelaySeconds
             self.bassBoostDB = bassBoostDB
+            self.trebleCutDB = trebleCutDB
             self.credentials = credentials
         }
     }
@@ -766,8 +775,9 @@ public actor BridgeEngine {
                 sender = created
                 try Task.checkCancellation()
                 await created.setManualDelay(seconds: request.manualDelaySeconds)
-                if request.proto == .raop {
+                if request.proto.supportsToneControl {
                     await created.setBassBoost(decibels: request.bassBoostDB)
+                    await created.setTrebleCut(decibels: request.trebleCutDB)
                 }
                 try await Self.startSender(created, volume: request.volumeDB)
                 // Un `start` qui aboutit malgré l'annulation laisse une session ouverte : le
@@ -863,8 +873,8 @@ public actor BridgeEngine {
         return Double(seconds) + Double(attoseconds) / 1e18
     }
 
-    /// Rend le sender joignable par `setVolume`/`setManualDelay`/`setBassBoost`, et rattrape les
-    /// réglages faits pendant la négociation.
+    /// Rend le sender joignable par `setVolume`/`setManualDelay`/`setBassBoost`/`setTrebleCut`, et
+    /// rattrape les réglages faits pendant la négociation.
     ///
     /// Sans ce rattrapage, un volume poussé avant la fin de la connexion était perdu : l'appelant
     /// le croyait transmis et ne le renvoyait jamais.
@@ -879,8 +889,13 @@ public actor BridgeEngine {
             $0.nextAttemptAt = nil
         }
         guard let latest = entries[id]?.request else { return }
-        if latest.proto == .raop, latest.bassBoostDB != request.bassBoostDB {
-            await sender.setBassBoost(decibels: latest.bassBoostDB)
+        if latest.proto.supportsToneControl {
+            if latest.bassBoostDB != request.bassBoostDB {
+                await sender.setBassBoost(decibels: latest.bassBoostDB)
+            }
+            if latest.trebleCutDB != request.trebleCutDB {
+                await sender.setTrebleCut(decibels: latest.trebleCutDB)
+            }
         }
         if latest.manualDelaySeconds != request.manualDelaySeconds {
             await sender.setManualDelay(seconds: latest.manualDelaySeconds)
@@ -967,10 +982,23 @@ public actor BridgeEngine {
     /// les HomePod doivent recevoir le flux intact. Comme le volume, une valeur poussée pendant la
     /// négociation est appliquée à la connexion.
     public func setBassBoost(_ decibels: Float, for id: String) async {
-        guard entries[id]?.request.proto == .raop else { return }
+        guard entries[id]?.request.proto.supportsToneControl == true else { return }
         entries[id]?.request.bassBoostDB = decibels
         guard let sender = entries[id]?.sender else { return }
         await sender.setBassBoost(decibels: decibels)
+    }
+
+    /// Pousse une coupe des aigus à une sortie, sans rupture de flux.
+    ///
+    /// Calqué sur ``setBassBoost(_:for:)`` : sans effet hors RAOP, et une valeur poussée pendant la
+    /// négociation est appliquée à la connexion. C'est ce qui laisse les HomePod porter l'image stéréo
+    /// et le détail pendant que la Geneva, décalée sur eux, donne le corps sans filtrage en peigne
+    /// dans les aigus.
+    public func setTrebleCut(_ decibels: Float, for id: String) async {
+        guard entries[id]?.request.proto.supportsToneControl == true else { return }
+        entries[id]?.request.trebleCutDB = decibels
+        guard let sender = entries[id]?.sender else { return }
+        await sender.setTrebleCut(decibels: decibels)
     }
 
     private func update(_ id: String, token: UInt64, _ change: (inout OutputSnapshot) -> Void) {
