@@ -494,10 +494,13 @@ struct BridgeStatusSummaryTests {
         }
     }
 
+    /// Ceux que les vues tiennent sous un nom (`PanelMuteButton.symbol`, `PanelBassDrawer.symbol`) y
+    /// sont lus directement : renommer l'un dans la vue le fait vérifier ici.
     private static let panelSymbols = [
         "play.fill", "stop.fill", "arrow.clockwise", "hifispeaker", "speaker.slash.fill",
         "speaker.wave.3.fill", "checkmark", "waveform", "chevron.right",
         "info.circle.fill", "exclamationmark.circle.fill", "exclamationmark.triangle.fill",
+        PanelMuteButton.symbol, PanelBassDrawer.symbol, PanelBassDrawer.resetSymbol,
     ]
 
     @Test("Le symbole d'une enceinte suit le nom, puis ce que le protocole laisse supposer")

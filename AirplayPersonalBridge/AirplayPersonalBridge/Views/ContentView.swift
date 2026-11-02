@@ -85,8 +85,9 @@ struct ContentView: View {
                 .disabled(state.selectedSource.tapMode == nil)
                 .opacity(state.selectedSource.tapMode == nil ? 0.5 : 1)
                 .help(
-                    "Ne s'applique qu'à la capture du son système ou d'une application. "
-                        + "Pendant une diffusion, la change la relance."
+                    "Éteint la sortie de ce Mac, les enceintes continuent de jouer. Ne s'applique "
+                        + "qu'à la capture du son système ou d'une application. Pendant une "
+                        + "diffusion, le changer la relance."
                 )
             }
 
@@ -113,6 +114,7 @@ struct ContentView: View {
                             ShadSwitch(isOn: $state.isMuted)
                             Text("Silence").shadMuted()
                         }
+                        .help("Coupe le son des enceintes sans les déconnecter")
                     }
                     Spacer(minLength: 0)
                 }
