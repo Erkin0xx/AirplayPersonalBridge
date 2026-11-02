@@ -407,6 +407,25 @@ struct DSPToneDynamicsTests {
         #expect(tone.bassDepth < 1, "la correction du grave a dû agir")
     }
 
+    /// La profondeur calculée doit tenir la sortie sous le plafond à l'arrondi près : `dry + d·m` avec la
+    /// profondeur exacte tombe sinon un ulp au-dessus, et le limiteur de sécurité s'en mêlerait pour rien.
+    @Test("La profondeur admissible tient la crête sous le plafond, arrondi compris")
+    func allowedDepthHoldsUnderRounding() {
+        var generator = SystemRandomNumberGenerator()
+        var over = 0
+        var cases = 0
+        while cases < 100_000 {
+            let dry = Double.random(in: -0.97...0.97, using: &generator)
+            let modification = Double.random(in: -3...3, using: &generator)
+            guard abs(dry + modification) > ToneControl.ceiling else { continue }
+            let depth = ToneControl.allowedDepth(dry: dry, modification: modification)
+            #expect(depth >= 0 && depth < 1)
+            if abs(dry + depth * modification) > ToneControl.ceiling { over += 1 }
+            cases += 1
+        }
+        #expect(over == 0, "\(over) crêtes au-dessus du plafond sur 100 000")
+    }
+
     /// Sans maintien, la profondeur remonterait entre deux crêtes pour être rabattue à la suivante :
     /// le grave serait modulé à sa propre fréquence, donc déformé.
     @Test("Sous correction, un grave tenu ne se déforme pas")

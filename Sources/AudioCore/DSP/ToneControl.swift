@@ -116,6 +116,9 @@ public struct ToneControl: Sendable {
     /// Plafond de sortie. Sous 1 pour laisser au rééchantillonneur la place de ses dépassements (Gibbs),
     /// qui écrêteraient sinon à la conversion en 16 bits.
     static let ceiling: Double = 0.98
+    /// Cible de la correction du grave, un rien sous le plafond : `dry + d·m`, calculé avec la profondeur
+    /// exacte, tombe sinon une fois sur deux un ulp au-dessus, et le limiteur de sécurité s'en mêlerait.
+    private static let depthBound: Double = ceiling * (1 - 1e-12)
     /// Maintien de la correction du grave après la dernière crête qui l'a exigée : plus long que la
     /// demi-période d'un grave à 20 Hz, l'intervalle entre deux crêtes.
     static let bassHoldSeconds: Double = 0.025
@@ -316,7 +319,7 @@ public struct ToneControl: Sendable {
     static func allowedDepth(dry: Double, modification: Double) -> Double {
         let full = dry + modification
         guard abs(full) > ceiling, modification != 0 else { return 1 }
-        let bound = full > 0 ? ceiling : -ceiling
+        let bound = full > 0 ? depthBound : -depthBound
         return min(max((bound - dry) / modification, 0), 1)
     }
 
