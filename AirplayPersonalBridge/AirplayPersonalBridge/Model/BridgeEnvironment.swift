@@ -100,6 +100,8 @@ struct BridgeEnvironment {
     var streamingActivity: any StreamingActivityHolding
     var timing = Timing()
     var isProcessAlive: (pid_t) -> Bool = CaptureSource.isProcessAlive
+    /// Le volume du Mac, que les touches de volume règlent. Aucun par défaut : rien de lié.
+    var systemVolume: any SystemVolumeControlling = NoSystemVolumeControl()
 
     static var live: BridgeEnvironment {
         BridgeEnvironment(
@@ -109,7 +111,8 @@ struct BridgeEnvironment {
             loadRoomLayout: { RoomLayout.load() },
             saveRoomLayout: { $0.save() },
             availableSources: { CaptureSource.available() },
-            streamingActivity: LiveStreamingActivity()
+            streamingActivity: LiveStreamingActivity(),
+            systemVolume: LiveSystemVolumeControl()
         )
     }
 

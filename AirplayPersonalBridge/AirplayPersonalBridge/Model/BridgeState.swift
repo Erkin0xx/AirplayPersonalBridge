@@ -246,7 +246,9 @@ final class BridgeState {
         didSet {
             guard oldValue != muteLocalOutput else { return }
             scheduleSettingsSave()
-            if selectedSource.tapMode != nil { restartIfLive() }
+            // Le lien du volume du Mac le force déjà : rien à relancer si le tap n'en change pas.
+            let mutes = muteLocalOutput || systemVolume.isActive
+            if selectedSource.tapMode != nil, mutes != sessionMutesLocalOutput { restartIfLive() }
         }
     }
 
@@ -263,11 +265,41 @@ final class BridgeState {
     /// Master logiciel, en dB (décision du jalon 5 : gain appliqué au signal, plus un trim
     /// par sortie). `-60` fait office de silence.
     var masterVolumeDB: Double = BridgeState.defaultMasterVolumeDB {
-        didSet { if oldValue != masterVolumeDB { scheduleSettingsSave() } }
+        didSet {
+            guard oldValue != masterVolumeDB else { return }
+            scheduleSettingsSave()
+            systemVolume.appDidChange(masterDB: masterVolumeDB)
+        }
     }
 
     var isMuted = false {
-        didSet { if oldValue != isMuted { scheduleSettingsSave() } }
+        didSet {
+            guard oldValue != isMuted else { return }
+            scheduleSettingsSave()
+            systemVolume.appDidChange(isMuted: isMuted)
+        }
+    }
+
+    /// Option « Touches de volume du Mac → enceintes » : le volume et le silence du Mac règlent le
+    /// master et le silence des enceintes, et inversement (`SystemVolumeLink`).
+    var followsSystemVolume = true {
+        didSet {
+            guard oldValue != followsSystemVolume else { return }
+            scheduleSettingsSave()
+            systemVolumeOptionDidChange()
+        }
+    }
+
+    /// Le lien avec le volume du Mac (`BridgeState+SystemVolume.swift`).
+    @ObservationIgnored let systemVolume: SystemVolumeLink
+    /// Le tap de la diffusion en cours coupe-t-il le son du Mac ? Décidé au démarrage.
+    @ObservationIgnored private(set) var sessionMutesLocalOutput = false
+
+    /// Le lien ne vaut qu'avec le son système global : le tap y coupe tout le Mac. Avec une application,
+    /// les autres joueraient sur le Mac au volume du master ; l'entrée physique n'a pas de tap.
+    var sourceAllowsSystemVolumeLink: Bool {
+        selectedSource.id == CaptureSource.systemWide.id
+            && preferredSourceID == CaptureSource.systemWide.id
     }
 
     /// Gain effectif d'une sortie, master et trim confondus. C'est cette valeur, et elle
@@ -444,12 +476,17 @@ final class BridgeState {
             maximum: environment.timing.sourceFollowMaximumSpacing
         )
         let settings = environment.settingsStore.load()
+        self.systemVolume = SystemVolumeLink(
+            control: environment.systemVolume, writeInterval: environment.timing.pollInterval,
+            memory: settings.systemVolumeMemory
+        )
         self.settings = settings
         self.lastSavedSettings = settings
         self.roomLayout = environment.loadRoomLayout()
         self.masterVolumeDB = settings.masterVolumeDB
         self.isMuted = settings.isMuted
         self.muteLocalOutput = settings.muteLocalOutput
+        self.followsSystemVolume = settings.followsSystemVolume
         self.preferredSourceID = settings.sourceID
         if settings.sourceID == CaptureSource.inputDevice.id { selectedSource = .inputDevice }
 
@@ -470,6 +507,10 @@ final class BridgeState {
             .sorted {
                 $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
             }
+        systemVolume.isEnabled = settings.followsSystemVolume
+        systemVolume.onUpdate = { [weak self] in self?.applySystemVolume($0) }
+        // Écrite tout de suite : c'est elle qui rend son volume au Mac après un plantage.
+        systemVolume.onMemoryChange = { [weak self] in self?.flushSettings() }
     }
 
     private static func displayName(fromOutputID id: String) -> String {
@@ -504,6 +545,7 @@ final class BridgeState {
     /// sources et la recherche périodique. Idempotent.
     func startBackgroundWork() {
         guard discoveryLoop == nil else { return }
+        restoreLeftoverSystemVolume()
         refreshSources()
         let interval = environment.timing.discoveryInterval
         discoveryLoop = Task { [weak self] in
@@ -739,7 +781,7 @@ final class BridgeState {
         return task
     }
 
-    private func restartIfLive() {
+    func restartIfLive() {
         guard isLive, !isRestarting else { return }
         isRestarting = true
         enqueueLifecycle { [weak self] in
@@ -777,10 +819,13 @@ final class BridgeState {
 
         let source: BridgeEngine.Source =
             selectedSource.tapMode.map { .processTap($0) } ?? .inputDevice
+        // Relié au volume du Mac, le tap coupe le son local : décidé ici, pour n'avoir rien à relancer.
+        let linksSystemVolume = sourceAllowsSystemVolumeLink && systemVolume.canLink()
+        sessionMutesLocalOutput = muteLocalOutput || linksSystemVolume
         do {
             try await engine.start(
                 source: source, outputs: requests,
-                options: BridgeEngine.StartOptions(muteLocalOutput: muteLocalOutput)
+                options: BridgeEngine.StartOptions(muteLocalOutput: sessionMutesLocalOutput)
             )
         } catch {
             resetAfterSession()
@@ -793,6 +838,7 @@ final class BridgeState {
         environment.streamingActivity.begin()
         streamingSince = .now
         streamingPhase = .running
+        if linksSystemVolume { systemVolume.beginSession(masterDB: masterVolumeDB, isMuted: isMuted) }
         startPollingEngine()
     }
 
@@ -816,6 +862,8 @@ final class BridgeState {
         streamingPhase = .stopping
         pollTask?.cancel()
         pollTask = nil
+        // Avant le tap : le Mac retrouve son volume pendant que son son est encore coupé.
+        systemVolume.endSession()
         await engine.stop()
         resetAfterSession()
     }
@@ -838,6 +886,8 @@ final class BridgeState {
         )
         captureHealth = BridgeEngine.CaptureHealth()
         captureAlert = nil
+        systemVolume.endSession()
+        sessionMutesLocalOutput = false
         for output in outputs where output.connection != .idle { output.connection = .idle }
         environment.streamingActivity.end()
         streamingPhase = .idle
@@ -1211,6 +1261,8 @@ final class BridgeState {
         result.isMuted = isMuted
         result.sourceID = preferredSourceID
         result.muteLocalOutput = muteLocalOutput
+        result.followsSystemVolume = followsSystemVolume
+        result.systemVolumeMemory = systemVolume.memory
         for output in outputs {
             result.outputs[output.id] = BridgeSettings.Output(
                 isEnabled: output.isEnabled, trimDB: output.trimDB, delayMS: output.delayMS,

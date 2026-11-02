@@ -518,6 +518,8 @@ struct MenuBarPanelContent: View {
                     + "Pendant une diffusion, le changer la relance."
             )
 
+            PanelSystemVolumeOption(state: state)
+
             PanelOptionToggle(
                 title: "Démarrer à l'ouverture de session",
                 isOn: Binding(
