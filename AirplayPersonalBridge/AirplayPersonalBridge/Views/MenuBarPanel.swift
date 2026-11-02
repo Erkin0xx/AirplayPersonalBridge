@@ -7,14 +7,20 @@ import AppKit
 import AudioCore
 import SwiftUI
 
-/// L'icône de la barre de menus. La barre est monochrome : seule la forme dit où on en est.
+/// L'icône de la barre de menus. La barre est monochrome : seule la forme dit où on en est, et la
+/// vague qu'un son passe.
 struct MenuBarLabel: View {
     let state: BridgeState
 
     var body: some View {
         let status = state.status.menuBar
-        Image(nsImage: MenuBarGlyphImage.image(for: status.glyph))
+        MenuBarGlyphLabel(status: status, isAudible: Self.isAudible(state))
             .accessibilityLabel(status.accessibilityLabel)
+    }
+
+    /// La règle de `MenuBarPanelContent.isAudible` : l'icône s'immobilise avec le panneau.
+    static func isAudible(_ state: BridgeState) -> Bool {
+        state.captureAlert == nil && !state.isMuted
     }
 }
 

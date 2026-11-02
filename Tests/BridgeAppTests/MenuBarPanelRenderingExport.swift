@@ -187,20 +187,43 @@ private enum MenuBarGlyphSheet {
     private static let neighbours = ["airplayaudio", "wifi", "moon.fill", "battery.75percent", "switch.2"]
 
     static func write(to directory: URL) throws {
+        let symbols = neighbours.compactMap {
+            NSImage(systemSymbolName: $0, accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 15, weight: .regular))
+        }
+        let glyphs = BridgeGlyph.Variant.allCases.map(MenuBarGlyphImage.image(for:))
+        let wave = MenuBarGlyphImage.waveFrames
         for isDark in [true, false] {
             let name = isDark ? "fonce" : "clair"
             for scale in [1, 2] {
-                let rep = try strip(scale: scale, isDark: isDark)
+                let rep = try strip(glyphs + symbols, scale: scale, isDark: isDark)
                 try png(rep).write(to: directory.appending(path: "glyphes-\(name)-\(scale)x.png"))
                 try png(magnified(rep, by: 12 / scale))
                     .write(to: directory.appending(path: "glyphes-\(name)-\(scale)x-grossi.png"))
+
+                // La vague image par image, précédée de l'icône fixe de la diffusion.
+                let sheet = try strip(
+                    [MenuBarGlyphImage.image(for: .streaming)] + wave, scale: scale, isDark: isDark
+                )
+                try png(magnified(sheet, by: 12 / scale))
+                    .write(to: directory.appending(path: "vague-\(name)-\(scale)x-images-grossi.png"))
+
+                // La boucle à sa cadence, parmi les voisins système, puis grossie seule.
+                let frames = try wave.map { try strip([$0] + symbols, scale: scale, isDark: isDark) }
+                try gif(frames, to: directory.appending(path: "vague-\(name)-\(scale)x.gif"))
+                let alone = try wave.map {
+                    try magnified(strip([$0], scale: scale, isDark: isDark), by: 12 / scale)
+                }
+                try gif(alone, to: directory.appending(path: "vague-\(name)-\(scale)x-grossi.gif"))
             }
         }
     }
 
-    private static func strip(scale: Int, isDark: Bool) throws -> NSBitmapImageRep {
+    private static func strip(
+        _ images: [NSImage], scale: Int, isDark: Bool
+    ) throws -> NSBitmapImageRep {
         let cell: CGFloat = 30
-        let count = BridgeGlyph.Variant.allCases.count + neighbours.count
+        let count = images.count
         let size = CGSize(width: cell * CGFloat(count), height: 24)
         let rep = try #require(
             NSBitmapImageRep(
@@ -219,11 +242,6 @@ private enum MenuBarGlyphSheet {
         CGRect(origin: .zero, size: size).fill()
 
         let tint: NSColor = isDark ? .white : .black
-        let symbols = neighbours.compactMap {
-            NSImage(systemSymbolName: $0, accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: 15, weight: .regular))
-        }
-        let images = BridgeGlyph.Variant.allCases.map(MenuBarGlyphImage.image(for:)) + symbols
         for (index, image) in images.enumerated() {
             let origin = CGPoint(
                 x: cell * CGFloat(index) + (cell - image.size.width) / 2,
@@ -261,5 +279,29 @@ private enum MenuBarGlyphSheet {
 
     private static func png(_ rep: NSBitmapImageRep) throws -> Data {
         try #require(rep.representation(using: .png, properties: [:]))
+    }
+
+    /// Une boucle sans fin, à la cadence de l'app. Le GIF compte en centièmes : 12 au lieu de 12,5.
+    private static func gif(_ frames: [NSBitmapImageRep], to url: URL) throws {
+        let destination = try #require(
+            CGImageDestinationCreateWithURL(url as CFURL, "com.compuserve.gif" as CFString, frames.count, nil)
+        )
+        CGImageDestinationSetProperties(
+            destination,
+            [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary
+        )
+        let delay = 1 / BridgeGlyph.Wave.framesPerSecond
+        for frame in frames {
+            let image = try #require(frame.cgImage)
+            CGImageDestinationAddImage(
+                destination, image,
+                [
+                    kCGImagePropertyGIFDictionary: [
+                        kCGImagePropertyGIFDelayTime: delay, kCGImagePropertyGIFUnclampedDelayTime: delay,
+                    ]
+                ] as CFDictionary
+            )
+        }
+        try #require(CGImageDestinationFinalize(destination))
     }
 }
