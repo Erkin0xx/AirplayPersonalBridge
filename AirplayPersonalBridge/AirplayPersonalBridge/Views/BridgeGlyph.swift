@@ -15,7 +15,8 @@ import CoreGraphics
 ///
 /// **L'état se lit à la forme, jamais à la couleur**, la barre de menus étant monochrome. La pastille
 /// se remplit à mesure que la session s'établit : rien au repos, un contour pendant la connexion,
-/// pleine en diffusion, pleine aussi en panne mais avec une seule marque au lieu de cinq.
+/// pleine en diffusion, pleine aussi en panne mais avec une seule marque au lieu de cinq. Quand un son
+/// passe vraiment, les suspentes de la pastille pleine ondulent (`Wave`) ; tout le reste est immobile.
 ///
 /// Géométrie pure, CoreGraphics et rien d'autre : `scripts/make-app-icon.swift` compile ce même
 /// fichier pour que l'icône d'app et le glyphe ne puissent pas diverger.
@@ -52,6 +53,11 @@ nonisolated enum BridgeGlyph {
     private static let pillRadius: CGFloat = 4.5
     private static let ringWidth: CGFloat = 1.5
 
+    /// Les barres découpées dans la pastille pleine de la diffusion. Resserrées : elles doivent laisser
+    /// 2 pt de pastille tout autour, sans quoi les pylônes rongent le bord et la forme se défait.
+    private static let streamingCenters: [CGFloat] = [3, 6.5, 10, 13.5, 17]
+    private static let streamingPylonHeight: CGFloat = 10
+
     /// Le glyphe complet de la barre de menus, à remplir en règle **pair-impair** : les marques se
     /// découpent ainsi dans la pastille pleine, et l'anneau de la connexion s'évide tout seul.
     static func path(_ variant: Variant) -> CGPath {
@@ -69,11 +75,10 @@ nonisolated enum BridgeGlyph {
             path.addPath(marks(.connecting))
         case .streaming:
             path.addRoundedRect(in: pill, cornerWidth: pillRadius, cornerHeight: pillRadius)
-            // Resserrées : elles doivent laisser 2 pt de pastille tout autour, sans quoi les pylônes
-            // rongent le bord et la forme se défait.
-            let centers: [CGFloat] = [3, 6.5, 10, 13.5, 17]
-            let heights: [CGFloat] = [10, 6, 2, 6, 10]
-            for (center, height) in zip(centers, heights) {
+            let heights: [CGFloat] = [
+                streamingPylonHeight, sideHeight, barWidth, sideHeight, streamingPylonHeight,
+            ]
+            for (center, height) in zip(streamingCenters, heights) {
                 addBar(to: path, x: center, height: height, width: barWidth)
             }
         case .trouble:
@@ -120,6 +125,80 @@ nonisolated enum BridgeGlyph {
         addBar(to: path, x: barCenters[2], height: center, width: barWidth)
         addBar(to: path, x: barCenters[3], height: side, width: barWidth)
         return path
+    }
+
+    // MARK: - La vague de la diffusion
+
+    /// La grille de pixels d'un écran : un pixel par point, ou deux.
+    enum PixelScale: Int, CaseIterable, Sendable {
+        case single = 1
+        case double = 2
+    }
+
+    /// Les suspentes qui ondulent dans la barre de menus, tant qu'un son passe vraiment.
+    ///
+    /// Une onde qui court de gauche à droite, chaque suspente un quart de cycle derrière sa voisine :
+    /// on lit une vague qui avance, là où un tiers de cycle se lirait comme un égaliseur au hasard.
+    /// Les pylônes ne bougent pas et dépassent toujours les suspentes : la vague vit entre eux, la
+    /// silhouette du pont demeure.
+    ///
+    /// Douze images à huit par seconde, soit un cycle d'une seconde et demie : assez lent pour passer
+    /// pour un mouvement de fond, assez rare pour ne coûter presque rien.
+    enum Wave {
+        static let frameCount = 12
+        static let framesPerSecond: Double = 8
+        static var period: Double { Double(frameCount) / framesPerSecond }
+
+        /// D'un point à 8 pt : 2 pt de moins que les pylônes, qui restent ce qui dépasse.
+        static let lowest: CGFloat = 2
+        static let highest: CGFloat = 8
+        static let phaseLag = Double.pi / 2
+
+        /// Les hauteurs des trois suspentes, de gauche à droite, avant leur calage sur une grille.
+        ///
+        /// Échantillonnées au milieu de chaque image : aucune ne tombe alors à égale distance de
+        /// deux crans, où l'arrondi trancherait au hasard des flottants.
+        static func heights(frame: Int) -> [CGFloat] {
+            let middle = Double(lowest + highest) / 2
+            let amplitude = Double(highest - lowest) / 2
+            let phase = 2 * Double.pi * (Double(frame) + 0.5) / Double(frameCount)
+            return (0..<3).map { index in
+                CGFloat(middle + amplitude * sin(phase - phaseLag * Double(index)))
+            }
+        }
+    }
+
+    /// Une image de la vague : la pastille pleine de la diffusion, ses barres découpées à la hauteur
+    /// de cette image et calées sur la grille demandée. À remplir en règle pair-impair.
+    static func wavePath(frame: Int, scale: PixelScale) -> CGPath {
+        let path = CGMutablePath()
+        path.addRoundedRect(in: pill, cornerWidth: pillRadius, cornerHeight: pillRadius)
+        for bar in waveBars(frame: frame, scale: scale) {
+            addBar(to: path, x: bar.midX, top: bar.minY, bottom: bar.maxY, width: bar.width)
+        }
+        return path
+    }
+
+    /// Les cinq barres d'une image de la vague, de gauche à droite, avant l'arrondi de leurs bouts.
+    ///
+    /// **Chaque grille a son dessin**, comme les icônes de Apple ont le leur en 1x. En 2x, l'espacement
+    /// de l'icône fixe (des intervalles de 1,5 pt), et des hauteurs au point près. En 1x, ces
+    /// intervalles mettraient les suspentes à cheval sur deux pixels : elles se resserrent d'un
+    /// demi-point vers le centre, et leurs hauteurs vont de deux en deux, pour que haut et bas restent
+    /// symétriques autour de la ligne médiane sur des pixels entiers.
+    static func waveBars(frame: Int, scale: PixelScale) -> [CGRect] {
+        let centers: [CGFloat] = scale == .single ? [3, 7, 10, 13, 17] : streamingCenters
+        let step = 2 / CGFloat(scale.rawValue)
+        let hangers = Wave.heights(frame: frame).map { height in
+            let snapped = Wave.lowest + step * ((height - Wave.lowest) / step).rounded()
+            return min(max(snapped, Wave.lowest), Wave.highest)
+        }
+        let heights = [streamingPylonHeight] + hangers + [streamingPylonHeight]
+        return zip(centers, heights).map { center, height in
+            CGRect(
+                x: center - barWidth / 2, y: midline - height / 2, width: barWidth, height: height
+            )
+        }
     }
 
     private static func addBar(
