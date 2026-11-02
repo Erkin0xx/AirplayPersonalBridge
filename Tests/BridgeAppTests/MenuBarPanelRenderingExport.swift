@@ -150,8 +150,9 @@ struct MenuBarPanelExport {
     }
 }
 
-/// Une approximation du matériau du panneau, pour les rendus d'essai uniquement.
-private struct SimulatedGlass<Content: View>: View {
+/// Une approximation du matériau du panneau, pour les rendus d'essai uniquement. Partagée avec
+/// `SpeakerMuteRenderingExport`.
+struct SimulatedGlass<Content: View>: View {
     let scheme: ColorScheme
     @ViewBuilder var content: Content
 

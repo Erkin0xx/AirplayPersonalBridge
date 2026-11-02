@@ -28,7 +28,7 @@ struct PanelSpeakerMuteButton: View {
 
     var body: some View {
         Button {
-            output.isMuted.toggle()
+            PanelSpeakerMute.toggle(output)
         } label: {
             Image(systemName: Self.symbol)
                 .font(.system(size: 9, weight: .semibold))
@@ -64,8 +64,15 @@ struct PanelSpeakerMuteButton: View {
     }
 }
 
-/// Ce que le bouton et la rangée disent du silence d'une enceinte : hors des vues pour être testé.
+/// Ce que le bouton fait, et ce que le bouton et la rangée disent du silence d'une enceinte : hors des
+/// vues pour être testé.
 enum PanelSpeakerMute {
+    /// Le geste du bouton. Il n'écrit que dans `OutputState.isMuted` : c'est la boucle de `BridgeState`
+    /// qui le fait suivre au moteur, sans jamais décocher l'enceinte.
+    static func toggle(_ output: OutputState) {
+        output.isMuted.toggle()
+    }
+
     static func accessibilityLabel(for output: OutputState) -> String {
         "Couper le son de \(output.displayName)"
     }
