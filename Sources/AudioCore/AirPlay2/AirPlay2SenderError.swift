@@ -42,6 +42,15 @@ public enum AirPlay2SenderError: Error, CustomStringConvertible, LocalizedError,
     /// Le récepteur refuse explicitement le pairing : mauvaise preuve, nombre maximal d'appairages
     /// atteint, ou pairing indisponible.
     case pairingRefused(receiver: String, detail: String)
+    /// Le pair-setup **transitoire** a échoué à l'authentification SRP : TLV d'erreur
+    /// « authentification », ou réponse SRP du récepteur qui ne vérifie pas.
+    ///
+    /// **Passager**, contrairement à `pairingRefused` : en transitoire, le mot de passe est fixe
+    /// (`3939`), personne ne saisit de code, et aucun geste de l'utilisateur ne lèverait ce refus.
+    /// Relevé sur un HomePod d'une paire stéréo, quand les deux pair-setups de la paire partaient
+    /// ensemble ; le pair-setup suivant aboutissait. Le sender en refait déjà quelques-uns avant de
+    /// rendre cette erreur, le moteur continue ensuite avec son repli.
+    case transientPairingRejected(receiver: String, step: String)
     /// Le pairing a échoué pour une autre raison qu'un refus explicite.
     case pairingFailed(receiver: String, detail: String)
     /// Tout le reste : le message d'origine, déjà en français, faute de mieux à en dire.
@@ -50,7 +59,9 @@ public enum AirPlay2SenderError: Error, CustomStringConvertible, LocalizedError,
     /// Réessayer sans intervention ne servira à rien : il faut un geste de l'utilisateur.
     ///
     /// Reprend le partage de `isPermanentOutputFailure` du moteur : ne sont permanents que les
-    /// refus explicites de capacité ou d'authentification.
+    /// refus explicites de capacité ou d'authentification. Un refus d'authentification au
+    /// pair-setup transitoire n'en est pas un (`transientPairingRejected`) : aucun code n'y est en
+    /// jeu, donc rien que l'utilisateur puisse corriger.
     public var isPermanent: Bool {
         switch self {
         case .pairingRequired, .credentialsRejected, .pairingRefused: return true
@@ -131,6 +142,12 @@ public enum AirPlay2SenderError: Error, CustomStringConvertible, LocalizedError,
             return "La connexion à « \(receiver) » s'est rompue."
         case let .pairingRefused(receiver, detail):
             return "« \(receiver) » refuse le pairing : \(detail)."
+        case let .transientPairingRejected(receiver, step):
+            return """
+                « \(receiver) » a refusé l'authentification du pairing sans code (étape \(step)). \
+                Ce mode n'emploie aucun code à saisir : le refus est passager, et la connexion est \
+                retentée automatiquement.
+                """
         case let .pairingFailed(receiver, detail):
             return "Le pairing avec « \(receiver) » a échoué : \(detail)."
         case let .other(receiver, detail):
@@ -235,6 +252,8 @@ public enum AirPlay2SenderError: Error, CustomStringConvertible, LocalizedError,
                 return .pairingBackoff(receiver: receiver)
             case .authentication where hasCredentials:
                 return .credentialsRejected(receiver: receiver, detail: tlv.description)
+            // Le pair-setup transitoire ne remonte pas ce TLV sous cette forme : il le traduit en
+            // `transientAuthenticationFailed`. Reste un refus d'authentification hors transitoire.
             case .authentication, .maxPeers, .unavailable:
                 return .pairingRefused(receiver: receiver, detail: tlv.description)
             case .unknown:
@@ -246,6 +265,9 @@ public enum AirPlay2SenderError: Error, CustomStringConvertible, LocalizedError,
             return hasCredentials
                 ? .credentialsRejected(receiver: receiver, detail: "réponse \(status)")
                 : .pairingRequired(receiver: receiver, status: status)
+        case let .transientAuthenticationFailed(step, _):
+            // Sans rapport avec des credentials : le transitoire ne s'emploie que sans eux.
+            return .transientPairingRejected(receiver: receiver, step: step)
         }
     }
 }

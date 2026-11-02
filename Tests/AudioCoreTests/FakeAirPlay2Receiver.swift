@@ -48,6 +48,21 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         let headerNames: [String]
         let body: Data
         let wasEncrypted: Bool
+
+        /// Étape d'un message de pairing (M1, M3), `nil` pour tout le reste.
+        var pairingState: PairingTLV8.State? {
+            guard uri == "/pair-setup" || uri == "/pair-verify",
+                let items = PairingTLV8.decode(body)
+            else { return nil }
+            return PairingTLV8.state(in: items)
+        }
+    }
+
+    /// Un pair-setup vu du récepteur : de l'arrivée de M1 à l'envoi de sa dernière réponse (M4, ou
+    /// un refus). `end` reste `nil` tant que le pair-setup n'est pas conclu.
+    struct PairSetupSpan: Sendable {
+        let start: ContinuousClock.Instant
+        var end: ContinuousClock.Instant?
     }
 
     /// Ce que le récepteur fait d'une requête.
@@ -64,6 +79,12 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         case respondThenClose
         /// Répond normalement, mais plus tard.
         case delayed(TimeInterval)
+        /// Répond à un message de pairing par un TLV d'erreur, à l'étape suivante : M2 pour M1, M4
+        /// pour M3. C'est le refus relevé sur un HomePod d'une paire stéréo, à M4.
+        case pairingError(PairingTLV8.PairingError)
+        /// Répond à M3 par un M4 dont la preuve ne vérifie pas : le récepteur ne prouve pas son
+        /// identité.
+        case invalidServerProof
     }
 
     /// Réaction à un `pair-verify` qui n'annonce pas `X-Apple-HKP: 3`.
@@ -141,6 +162,8 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         var closedAt: ContinuousClock.Instant?
         /// Requêtes refusées pour une identité de contrôleur étrangère à la session.
         var forbiddenRequests: [Request] = []
+        /// Pair-setups reçus sur cette connexion, dans l'ordre.
+        var pairSetups: [PairSetupSpan] = []
     }
 
     let options: Options
@@ -188,12 +211,14 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         }
     }
 
-    func device(name: String = "Récepteur simulé") -> AirPlay2Device {
-        AirPlay2Device(
-            serviceName: name, host: "127.0.0.1", port: port,
-            // Le pairing transitoire annoncé : bit 48 du mot de poids fort.
-            txt: ["features": "0x405f4200,0x1c300", "deviceid": "AA:BB:CC:DD:EE:FF"]
-        )
+    /// - Parameter extra: clés TXT ajoutées ou remplacées, `tsid` d'une paire stéréo par exemple.
+    func device(
+        name: String = "Récepteur simulé", txt extra: [String: String] = [:]
+    ) -> AirPlay2Device {
+        // Le pairing transitoire annoncé : bit 48 du mot de poids fort.
+        var txt = ["features": "0x405f4200,0x1c300", "deviceid": "AA:BB:CC:DD:EE:FF"]
+        txt.merge(extra) { _, new in new }
+        return AirPlay2Device(serviceName: name, host: "127.0.0.1", port: port, txt: txt)
     }
 
     // MARK: - Observation
@@ -269,6 +294,11 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
 
     /// Une requête est arrivée alors que la précédente n'avait pas reçu sa réponse.
     var overlappingRequestCount: Int { queue.sync { overlappingRequests } }
+
+    /// Tous les pair-setups reçus, toutes connexions confondues, dans l'ordre d'arrivée de leur M1.
+    func pairSetupSpans() -> [PairSetupSpan] {
+        queue.sync { sessions.flatMap(\.pairSetups).sorted { $0.start < $1.start } }
+    }
 
     // MARK: - Actions à la demande
 
@@ -400,6 +430,12 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         let occurrence = occurrences[key, default: 0]
         occurrences[key] = occurrence + 1
 
+        // Avant le script : un M1 retardé compte dès son arrivée, comme sur un vrai récepteur qui
+        // calcule sa réponse.
+        if request.uri == "/pair-setup", request.pairingState == .m1 {
+            session.pairSetups.append(PairSetupSpan(start: .now))
+        }
+
         switch storedScript?(request, occurrence) ?? .normal {
         case .normal:
             route(request, session: session)
@@ -417,6 +453,22 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
             queue.asyncAfter(deadline: .now() + delay) { [weak self] in
                 self?.route(request, session: session)
             }
+        case let .pairingError(error):
+            let next = (request.pairingState?.rawValue ?? PairingTLV8.State.m1.rawValue) &+ 1
+            respond(
+                to: request, session: session,
+                body: PairingTLV8.encode([
+                    (.state, PairingTLV8.byte(next)),
+                    (.error, PairingTLV8.byte(error.rawValue)),
+                ]))
+        case .invalidServerProof:
+            var generator = SystemRandomNumberGenerator()
+            respond(
+                to: request, session: session,
+                body: PairingTLV8.encode([
+                    (.state, PairingTLV8.byte(PairingTLV8.State.m4.rawValue)),
+                    (.proof, Data((0..<64).map { _ in UInt8.random(in: 0...255, using: &generator) })),
+                ]))
         }
     }
 
@@ -480,6 +532,12 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         enableEncryptionAfterwards: Data? = nil
     ) {
         requestInProgress[ObjectIdentifier(session)] = false
+        if request.uri == "/pair-setup", let index = session.pairSetups.lastIndex(where: { $0.end == nil }) {
+            // Conclu par M4, ou par un refus à n'importe quelle étape.
+            let refused =
+                status != 200 || PairingTLV8.decode(body).flatMap(PairingTLV8.error(in:)) != nil
+            if request.pairingState == .m3 || refused { session.pairSetups[index].end = .now }
+        }
         var text = "\(request.protocolVersion) \(status) \(reason)\r\n"
         text += "Server: AirTunes/366.0\r\n"
         if let cseq = request.headers["cseq"] { text += "CSeq: \(cseq)\r\n" }
@@ -947,17 +1005,20 @@ struct SenderHarness {
 
     init(
         receiver: FakeAirPlay2Receiver,
+        name: String = "Récepteur simulé",
         reconnects: Bool = true,
-        credentials: HapCredentials? = nil
+        credentials: HapCredentials? = nil,
+        pairingGate: (any PairingGate)? = nil
     ) throws {
         ring = AudioRingBuffer(capacityFrames: 48_000, channelCount: 2)
         feeder = SineFeeder(ring: ring)
         sender = AirPlay2Sender(
-            device: receiver.device(),
+            device: receiver.device(name: name),
             ring: ring,
             captureFormat: try Self.captureFormat(),
             reconnects: reconnects,
-            credentials: credentials
+            credentials: credentials,
+            pairingGate: pairingGate
         )
         feeder.start()
     }

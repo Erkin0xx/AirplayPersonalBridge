@@ -58,6 +58,20 @@ public struct AirPlay2Device: Sendable {
     /// Identifiant matériel (`deviceid`), au format d'une adresse MAC.
     public var deviceIdentifier: String { txt["deviceid"] ?? "" }
 
+    /// Identifiant de synchronisation serrée (`tsid`), commun aux membres d'une paire stéréo : les
+    /// deux HomePod « Salon » et « Salon (2) » annoncent le même. `nil` s'il est absent ou vide.
+    ///
+    /// Lu pour le diagnostic seulement : le tour de pairing ne s'en sert pas, voir ``PairingGate``.
+    public var tightSyncIdentifier: String? { Self.nonEmpty(txt["tsid"]) }
+    /// Identifiant du groupe AirPlay auquel appartient le récepteur (`gid`). `nil` s'il est absent
+    /// ou vide.
+    public var groupIdentifier: String? { Self.nonEmpty(txt["gid"]) }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        return value
+    }
+
     public init(serviceName: String, host: String, port: UInt16, txt: [String: String]) {
         self.serviceName = serviceName
         self.host = host

@@ -50,6 +50,17 @@ public actor AirPlay2PairingSession {
         /// pairing, où il refuse l'appairage, et sur une requête de session, où l'appairage a
         /// abouti et c'est cette requête qui est refusée (`AirPlay2SenderError.requestForbidden`).
         case authorizationRequired(status: Int, step: String)
+        /// Le pair-setup **transitoire** a échoué à l'authentification SRP : TLV d'erreur
+        /// « authentification » en réponse à M1 ou M3, ou réponse SRP du récepteur inutilisable
+        /// (clé publique invalide, preuve qui ne vérifie pas).
+        ///
+        /// Distingué de ``receiverRejected(_:step:)`` parce que la cause ne peut pas être la même
+        /// qu'au `pair-verify` : en transitoire, le mot de passe est la constante
+        /// ``AirPlay2PairingSession/transientPassword``, personne ne saisit de code, il n'y a donc
+        /// pas de « mauvais code » à corriger. Relevé sur un HomePod d'une paire stéréo, quand les
+        /// deux pair-setups de la paire partaient dans la même milliseconde. **Passager** : un
+        /// nouveau pair-setup peut aboutir, et le sender en refait quelques-uns.
+        case transientAuthenticationFailed(step: String, reason: String)
 
         public var description: String {
             switch self {
@@ -72,6 +83,11 @@ public actor AirPlay2PairingSession {
                 return "signature du récepteur invalide — credentials périmés ou usurpation"
             case let .authorizationRequired(status, step):
                 return "le récepteur exige un appairage (réponse \(status) à l'étape \(step))"
+            case let .transientAuthenticationFailed(step, reason):
+                return """
+                    authentification du pair-setup transitoire refusée à l'étape \(step) (\(reason)) \
+                    — aucun code n'est saisi dans ce mode, refus passager
+                    """
             }
         }
     }
@@ -151,7 +167,7 @@ public actor AirPlay2PairingSession {
             (.method, PairingTLV8.byte(PairingTLV8.Method.pairSetup.rawValue)),
             (.flags, PairingTLV8.flagsValue(.transient)),
         ])
-        let m2Items = try await exchange(m1, step: "M1", domain: .transient)
+        let m2Items = try await transientExchange(m1, step: "M1", answer: "M2")
 
         guard PairingTLV8.state(in: m2Items) == .m2 else {
             throw Failure.unexpectedState(step: "M2")
@@ -166,14 +182,19 @@ public actor AirPlay2PairingSession {
         // --- M3 : preuve du client ---
         let srp = try SRPClient(password: Self.transientPassword)
         let publicA = try srp.startAuthentication()
-        let proofM1 = try srp.processChallenge(salt: salt, serverPublicKey: serverPublicKey)
+        let proofM1: Data
+        do {
+            proofM1 = try srp.processChallenge(salt: salt, serverPublicKey: serverPublicKey)
+        } catch let failure as SRPClient.Failure {
+            throw Failure.transientAuthenticationFailed(step: "M2", reason: Self.describe(failure))
+        }
 
         let m3 = PairingTLV8.encode([
             (.state, PairingTLV8.byte(PairingTLV8.State.m3.rawValue)),
             (.publicKey, publicA),
             (.proof, proofM1),
         ])
-        let m4Items = try await exchange(m3, step: "M3", domain: .transient)
+        let m4Items = try await transientExchange(m3, step: "M3", answer: "M4")
 
         guard PairingTLV8.state(in: m4Items) == .m4 else {
             throw Failure.unexpectedState(step: "M4")
@@ -183,8 +204,13 @@ public actor AirPlay2PairingSession {
         }
 
         // Authentifie le **récepteur** : sans cette vérification, n'importe quel
-        // interlocuteur se disant Apple TV serait accepté.
-        try srp.verifyServerProof(serverProof)
+        // interlocuteur se disant Apple TV serait accepté. Un échec n'est jamais contourné : il
+        // fait seulement l'objet d'un nouveau pair-setup complet, comme un refus du récepteur.
+        do {
+            try srp.verifyServerProof(serverProof)
+        } catch let failure as SRPClient.Failure {
+            throw Failure.transientAuthenticationFailed(step: "M4", reason: Self.describe(failure))
+        }
         let sharedSecret = try srp.sessionKey()
 
         log.info("pair-setup transitoire abouti (clé de session \(sharedSecret.count) o)")
@@ -315,6 +341,30 @@ public actor AirPlay2PairingSession {
     /// canal de contrôle.
     private static func nonce(_ label: String) -> Data {
         Data(repeating: 0, count: 4) + Data(label.utf8)
+    }
+
+    /// Un échange du pair-setup transitoire.
+    ///
+    /// Un TLV d'erreur « authentification » y devient ``Failure/transientAuthenticationFailed(step:reason:)``,
+    /// nommé par la réponse qui le porte (M2, M4) : en transitoire, il ne peut pas désigner un code
+    /// mal saisi. Les autres TLV d'erreur (occupé, attente, nombre maximal) gardent leur sens.
+    private func transientExchange(
+        _ body: Data, step: String, answer: String
+    ) async throws -> [PairingTLV8.Tag: Data] {
+        do {
+            return try await exchange(body, step: step, domain: .transient)
+        } catch Failure.receiverRejected(.authentication, _) {
+            throw Failure.transientAuthenticationFailed(
+                step: answer, reason: "TLV d'erreur « authentification »")
+        }
+    }
+
+    private static func describe(_ failure: SRPClient.Failure) -> String {
+        switch failure {
+        case .serverProofRejected: return "preuve du récepteur invalide"
+        case .invalidServerPublicKey: return "clé publique SRP du récepteur invalide"
+        case .allocationFailed, .startFailed, .sessionNotEstablished: return "échange SRP invalide"
+        }
     }
 
     /// Poste un message TLV8 de pairing et décode la réponse.

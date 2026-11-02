@@ -1262,9 +1262,15 @@ struct AirPlay2SenderSessionTests {
         #expect(failure(AirPlay2PairingSession.Failure.transientPairingUnsupported(features: 0)).isPermanent)
         #expect(failure(AirPlay2PairingSession.Failure.receiverIdentityMismatch).isPermanent)
         #expect(failure(AirPlay2PairingSession.Failure.receiverSignatureInvalid).isPermanent)
+        // Hors transitoire : le pair-setup transitoire traduit ce TLV en
+        // `transientAuthenticationFailed`, passager (plus bas).
         for reason in [PairingTLV8.PairingError.authentication, .maxPeers, .unavailable] {
             #expect(failure(rejected(reason)).isPermanent, "\(reason)")
         }
+        let transient = AirPlay2PairingSession.Failure.transientAuthenticationFailed(
+            step: "M4", reason: "TLV d'erreur « authentification »")
+        #expect(!failure(transient).isPermanent)
+        #expect(!failure(transient, credentials: true).isPermanent)
 
         for code in [400, 404, 453, 500, 503] {
             #expect(!failure(status(code)).isPermanent, "\(code)")
