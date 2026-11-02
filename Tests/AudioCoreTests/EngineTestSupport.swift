@@ -303,6 +303,8 @@ actor FakeSender: OutputSender {
     private(set) var pushedDelays: [TimeInterval] = []
     private(set) var pushedBassBoosts: [Float] = []
     private(set) var startedBassBoost: Float?
+    private(set) var pushedLevels: [OutputLevel] = []
+    private(set) var startedLevel: OutputLevel?
     private var errorMessage: String?
     private(set) var stopCount = 0
     private var statistics = OutputStatistics()
@@ -328,6 +330,7 @@ actor FakeSender: OutputSender {
         startedVolume = volume
         startedDelay = synchronizer.manualOffsetSeconds
         startedBassBoost = pushedBassBoosts.last
+        startedLevel = pushedLevels.last
         state = .connecting
         switch behaviour {
         case .succeed:
@@ -378,6 +381,7 @@ actor FakeSender: OutputSender {
     }
 
     func setBassBoost(decibels: Float) { pushedBassBoosts.append(decibels) }
+    func setOutputLevel(_ level: OutputLevel) { pushedLevels.append(level) }
 
     func currentOutputError() -> String? { errorMessage }
     func currentOutputState() -> OutputSenderState { state }

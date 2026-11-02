@@ -106,6 +106,16 @@ final class OutputState: Identifiable {
         didSet { if oldValue != bassBoostDB { onSettingsChange?() } }
     }
 
+    /// Silence de cette seule enceinte, **numérique** (`VolumeGroups`) : elle reste cochée et en
+    /// session, son flux continue de partir. Indépendant du silence général.
+    var isMuted = false {
+        didSet { if oldValue != isMuted { onSettingsChange?() } }
+    }
+
+    /// `tsid` annoncé par le récepteur : commun aux membres d'une paire stéréo, qui n'ont qu'un seul
+    /// volume (`VolumeGroups`). `nil` sans paire, et pour toute sortie RAOP.
+    fileprivate(set) var tightSyncIdentifier: String?
+
     var connection: OutputConnectionState = .idle
     fileprivate(set) var presence: OutputPresence
     /// Pourquoi elle ne jouera pas sans intervention, d'après ce qu'elle annonce.
@@ -201,6 +211,7 @@ final class BridgeState {
         var volume: Float
         var delay: TimeInterval
         var bass: Float
+        var level: OutputLevel
     }
 
     static let silenceDB: Double = -60
@@ -250,14 +261,25 @@ final class BridgeState {
         didSet { if oldValue != isMuted { scheduleSettingsSave() } }
     }
 
-    /// Gain effectif d'une sortie, master et trim confondus. C'est cette valeur, et elle
-    /// seule, que le moteur appliquera — la vue n'en calcule aucune autre.
+    /// Gain effectif d'une sortie, master, trim et silences confondus : ce qu'elle restitue. La vue
+    /// n'en calcule aucune autre.
+    ///
+    /// Le moteur l'obtient par deux chemins, le volume AirPlay de son groupe et son gain numérique
+    /// (`VolumeGroups`) : seule dans son groupe, c'est tout entier son volume AirPlay.
     ///
     /// Un master au minimum vaut silence, quel que soit le trim : un trim positif le ferait repartir
     /// au-dessus du seuil, et −29 dB sur le fil pour un bouton tourné à fond vers la gauche.
     func effectiveGainDB(for output: OutputState) -> Double {
-        guard !isMuted, masterVolumeDB > Self.silenceDB else { return Self.silenceDB }
+        guard !isMuted, !output.isMuted, masterVolumeDB > Self.silenceDB else { return Self.silenceDB }
         return min(max(masterVolumeDB + output.trimDB, Self.silenceDB), 0)
+    }
+
+    /// Le volume AirPlay et le niveau propre de chaque sortie, groupes de volume compris. Recalculé à
+    /// chaque tour de la boucle : trim, master, silence, `tsid` découvert, sortie cochée ou décochée.
+    private func volumePlan() -> [String: VolumeGroups.Setting] {
+        VolumeGroups.settings(
+            for: outputs.map(\.volumeGroupMember), masterVolumeDB: masterVolumeDB, isMuted: isMuted
+        )
     }
 
     // MARK: - Diffusion
@@ -450,7 +472,21 @@ final class BridgeState {
         output.trimDB = record.trimDB
         output.delayMS = record.delayMS
         output.bassBoostDB = record.bassBoostDB
+        output.isMuted = record.isMuted
+        output.tightSyncIdentifier = record.tightSyncIdentifier
         output.onSettingsChange = { [weak self] in self?.scheduleSettingsSave() }
+    }
+
+    /// Ce que la découverte dit de la paire. Seule une annonce dont le TXT a été lu fait foi : une
+    /// annonce sans TXT ne prouve pas que la paire a disparu, et l'oublier ferait sauter les volumes.
+    /// Rend vrai si le `tsid` a changé.
+    @discardableResult
+    private static func adoptTightSync(of found: DiscoveredOutput, on output: OutputState) -> Bool {
+        guard found.confirmsTransientPairing || found.tightSyncIdentifier != nil,
+            output.tightSyncIdentifier != found.tightSyncIdentifier
+        else { return false }
+        output.tightSyncIdentifier = found.tightSyncIdentifier
+        return true
     }
 
     /// Lance ce qui doit tourner dès l'ouverture, avec ou sans fenêtre : le rafraîchissement des
@@ -531,6 +567,7 @@ final class BridgeState {
         var byID = Dictionary(uniqueKeysWithValues: outputs.map { ($0.id, $0) })
         settings = currentSettings()
         let isFirstEverDiscovery = settings.outputs.isEmpty
+        var tightSyncChanged = false
         for id in reconciliation.removed { byID[id] = nil }
         for id in reconciliation.superseded { settings.outputs[id] = nil }
         for found in reconciliation.added {
@@ -544,6 +581,8 @@ final class BridgeState {
                 output.unavailability = found.unavailability
             }
             if found.confirmsTransientPairing { output.confirmsTransientPairing = true }
+            // Le tour suivant de la boucle en tire les nouveaux groupes de volume.
+            if Self.adoptTightSync(of: found, on: output) { tightSyncChanged = true }
         }
         for (id, presence) in reconciliation.presence {
             guard let output = byID[id], output.presence != presence else { continue }
@@ -553,7 +592,7 @@ final class BridgeState {
 
         let reconciled = reconciliation.order.compactMap { byID[$0] }
         if reconciled.map(\.id) != outputs.map(\.id) { outputs = reconciled }
-        if !reconciliation.added.isEmpty || !reconciliation.superseded.isEmpty {
+        if !reconciliation.added.isEmpty || !reconciliation.superseded.isEmpty || tightSyncChanged {
             scheduleSettingsSave()
         }
 
@@ -596,6 +635,7 @@ final class BridgeState {
         )
         restore(settings.outputs[found.id] ?? fallback, on: output)
         output.confirmsTransientPairing = found.confirmsTransientPairing
+        Self.adoptTightSync(of: found, on: output)
         return output
     }
 
@@ -716,7 +756,8 @@ final class BridgeState {
         startFailure = nil
 
         sessionGeneration += 1
-        let requests = selected.map(makeRequest)
+        let plan = volumePlan()
+        let requests = selected.map { makeRequest(for: $0, plan: plan) }
         activeOutputIDs = Set(selected.map(\.id))
         pushed = Dictionary(
             uniqueKeysWithValues: requests.map { ($0.id, Self.pushedSettings(for: $0)) }
@@ -791,21 +832,33 @@ final class BridgeState {
         streamingPhase = .idle
     }
 
-    private func makeRequest(for output: OutputState) -> BridgeEngine.OutputRequest {
-        BridgeEngine.OutputRequest(
+    /// - Parameter plan: les groupes de volume du tour (`volumePlan()`), calculés une fois pour toutes
+    ///   les sorties : le volume d'une sortie dépend des autres membres de son groupe.
+    private func makeRequest(
+        for output: OutputState, plan: [String: VolumeGroups.Setting]
+    ) -> BridgeEngine.OutputRequest {
+        let volume =
+            plan[output.id]
+            ?? VolumeGroups.soloSetting(
+                trimDB: output.trimDB, isOutputMuted: output.isMuted,
+                masterVolumeDB: masterVolumeDB, isMuted: isMuted
+            )
+        return BridgeEngine.OutputRequest(
             id: output.id,
             proto: output.proto == .raop ? .raop : .airplay2,
             deviceName: output.serviceInstanceName,
             nameMatching: .exact,
-            volumeDB: Self.receiverVolume(forGainDB: effectiveGainDB(for: output)),
+            volumeDB: volume.volumeDB,
             manualDelaySeconds: effectiveDelayMS(for: output) / 1000,
-            bassBoostDB: Float(output.supportsBassBoost ? output.bassBoostDB : 0)
+            bassBoostDB: Float(output.supportsBassBoost ? output.bassBoostDB : 0),
+            outputLevel: volume.level
         )
     }
 
     private static func pushedSettings(for request: BridgeEngine.OutputRequest) -> PushedSettings {
         PushedSettings(
-            volume: request.volumeDB, delay: request.manualDelaySeconds, bass: request.bassBoostDB
+            volume: request.volumeDB, delay: request.manualDelaySeconds, bass: request.bassBoostDB,
+            level: request.outputLevel
         )
     }
 
@@ -921,21 +974,22 @@ final class BridgeState {
     /// consigne — fenêtre, panneau, master, trim, silence, plan.
     private func syncOutputsWithEngine() {
         guard streamingPhase == .running else { return }
+        let plan = volumePlan()
         for output in outputs where outputWork[output.id] == nil {
             let isActive = activeOutputIDs.contains(output.id)
             if output.isEnabled, !isActive {
-                addToSession(output)
+                addToSession(output, plan: plan)
             } else if !output.isEnabled, isActive {
                 removeFromSession(output)
             } else if isActive {
-                pushChanges(of: output)
+                pushChanges(of: output, plan: plan)
             }
         }
         updateEmptySelectionStop()
     }
 
-    private func addToSession(_ output: OutputState) {
-        let request = makeRequest(for: output)
+    private func addToSession(_ output: OutputState, plan: [String: VolumeGroups.Setting]) {
+        let request = makeRequest(for: output, plan: plan)
         activeOutputIDs.insert(output.id)
         pushed[output.id] = Self.pushedSettings(for: request)
         output.connection = .connecting
@@ -964,18 +1018,22 @@ final class BridgeState {
         runOutputWork(id: id) { await engine.removeOutput(id: id) }
     }
 
-    private func pushChanges(of output: OutputState) {
+    private func pushChanges(of output: OutputState, plan: [String: VolumeGroups.Setting]) {
         guard let last = pushed[output.id] else { return }
-        let target = Self.pushedSettings(for: makeRequest(for: output))
+        let target = Self.pushedSettings(for: makeRequest(for: output, plan: plan))
         let volume = target.volume != last.volume ? target.volume : nil
         let delay = target.delay != last.delay ? target.delay : nil
         let bass = target.bass != last.bass ? target.bass : nil
-        guard volume != nil || delay != nil || bass != nil else { return }
+        let level = target.level != last.level ? target.level : nil
+        guard volume != nil || delay != nil || bass != nil || level != nil else { return }
 
         pushed[output.id] = target
         let engine = self.engine
         let id = output.id
         runOutputWork(id: id) {
+            // Le gain d'abord : il ne s'entend qu'au bout du délai de restitution, quand le volume
+            // AirPlay agit chez le récepteur dès réception.
+            if let level { await engine.setOutputLevel(level, for: id) }
             if let volume { await engine.setVolume(volume, for: id) }
             if let delay { await engine.setManualDelay(delay, for: id) }
             if let bass { await engine.setBassBoost(bass, for: id) }
@@ -1133,7 +1191,8 @@ final class BridgeState {
         for output in outputs {
             result.outputs[output.id] = BridgeSettings.Output(
                 isEnabled: output.isEnabled, trimDB: output.trimDB, delayMS: output.delayMS,
-                bassBoostDB: output.bassBoostDB, displayName: output.displayName
+                bassBoostDB: output.bassBoostDB, displayName: output.displayName,
+                isMuted: output.isMuted, tightSyncIdentifier: output.tightSyncIdentifier
             )
         }
         return result

@@ -141,6 +141,10 @@ actor StubSender: OutputSender {
     private(set) var pushedVolumes: [Float] = []
     private(set) var pushedDelays: [TimeInterval] = []
     private(set) var pushedBass: [Float] = []
+    /// Niveaux reçus par `setOutputLevel`, celui d'avant `start` compris : le moteur le règle
+    /// toujours juste avant.
+    private(set) var pushedLevels: [OutputLevel] = []
+    private(set) var startedLevel: OutputLevel?
     private(set) var stopCount = 0
     private var errorMessage: String?
     private var statistics = OutputStatistics()
@@ -164,6 +168,7 @@ actor StubSender: OutputSender {
         startedVolume = volume
         startedDelay = synchronizer.manualOffsetSeconds
         startedBass = pushedBass.last
+        startedLevel = pushedLevels.last
         if case let .fail(error) = behaviour {
             state = .failed
             throw error
@@ -190,6 +195,7 @@ actor StubSender: OutputSender {
         synchronizer.manualOffsetSeconds = seconds
     }
     func setBassBoost(decibels: Float) { pushedBass.append(decibels) }
+    func setOutputLevel(_ level: OutputLevel) { pushedLevels.append(level) }
 
     func currentOutputState() -> OutputSenderState { state }
     func currentOutputStatistics() -> OutputStatistics { statistics }

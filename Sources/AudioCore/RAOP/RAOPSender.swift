@@ -116,6 +116,8 @@ public actor RAOPSender {
     private let retransmitter = RAOPRetransmitResponder()
     /// Renfort de basses (ADR-002), appliqué à la copie propre à ce sender. Transparent à 0 dB.
     private var bassBoost: LowShelfFilter
+    /// Gain numérique et silence de cette sortie (``OutputGainStage``), en bout de chaîne DSP.
+    private var outputGain: OutputGainStage
     /// Avance à chaque `stop()`. Une négociation qui se termine sous une autre valeur que celle
     /// de son départ a été rendue caduque, et ne doit surtout pas démarrer le flux.
     private var sessionGeneration = 0
@@ -212,6 +214,10 @@ public actor RAOPSender {
             sampleRate: captureFormat.sampleRate,
             channelCount: Int(captureFormat.channelCount)
         )
+        self.outputGain = OutputGainStage(
+            sampleRate: captureFormat.sampleRate,
+            channelCount: Int(captureFormat.channelCount)
+        )
         let effectiveClock =
             clock ?? SharedPlaybackClock(captureSampleRate: captureFormat.sampleRate)
         (effectiveClock as? SharedPlaybackClock)?.startIfNeeded()
@@ -240,6 +246,14 @@ public actor RAOPSender {
     public func setBassBoost(decibels: Float) {
         bassBoost.setGain(decibels: Double(decibels))
         counters.bassBoostDecibels = Float(bassBoost.gainDecibels)
+    }
+
+    /// Gain numérique et silence de cette sortie (``OutputGainStage``), en bout de chaîne DSP.
+    ///
+    /// Applicable à tout moment, conservé d'une reconnexion à l'autre, et sans effet sur la
+    /// session : le flux continue de partir, silence compris. Le changement glisse sans clic.
+    public func setOutputLevel(_ level: OutputLevel) {
+        outputGain.setLevel(level)
     }
 
     /// Voir ``simulatedLossInterval``. Interne : uniquement accessible aux tests.
@@ -314,6 +328,7 @@ public actor RAOPSender {
         // la session d'avant. La numérotation continuant d'une session à l'autre, un paquet resté
         // dans l'historique répondrait à une demande sur un numéro qui n'est plus le sien.
         bassBoost.reset()
+        outputGain.reset()
         retransmitter.clear()
         if firstSession {
             // Photographie du compteur de refus au moment précis où la diffusion démarre.
@@ -906,6 +921,9 @@ public actor RAOPSender {
                 // Sur `readScratch`, donc sur la copie propre à ce sender. Avant la conversion
                 // en 16 bits, où un dépassement serait déjà un écrêtage. Sans effet à 0 dB.
                 bassBoost.process(base, frameCount: read)
+                // En bout de chaîne DSP, comme le volume du récepteur (``OutputGainStage``).
+                // Contourné au bit près à 0 dB hors silence.
+                outputGain.process(base, frameCount: read)
                 return try resampler.convert(base, frameCount: read)
             }
             guard !converted.isEmpty else { break }

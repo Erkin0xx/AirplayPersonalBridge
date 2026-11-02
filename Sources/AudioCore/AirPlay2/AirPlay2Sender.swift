@@ -194,6 +194,10 @@ public actor AirPlay2Sender {
     /// Tampon de lecture du ring buffer, alloué une fois pour éviter toute allocation en
     /// régime établi.
     private var readScratch: [Float]
+    /// Gain numérique et silence de cette sortie (``OutputGainStage``). Seul traitement du flux des
+    /// HomePod, qui gardent sinon une pleine bande intacte : c'est lui qui rend à chaque membre d'une
+    /// paire stéréo son propre niveau, le volume AirPlay étant commun à la paire.
+    private var outputGain: OutputGainStage
 
     public private(set) var statistics = AirPlay2Statistics()
 
@@ -241,12 +245,25 @@ public actor AirPlay2Sender {
         self.readScratch = [Float](
             repeating: 0, count: 8_192 * Int(captureFormat.channelCount)
         )
+        self.outputGain = OutputGainStage(
+            sampleRate: captureFormat.sampleRate,
+            channelCount: Int(captureFormat.channelCount)
+        )
     }
 
     /// Décalage manuel de cette sortie, en secondes (CDC 4.5 : fine-tune et filet de
     /// sécurité). Positif = restituer plus tard. Applicable en cours de diffusion.
     public func setManualDelay(seconds: TimeInterval) {
         synchronizer.manualOffsetSeconds = seconds
+    }
+
+    /// Gain numérique et silence de cette sortie (``OutputGainStage``).
+    ///
+    /// Applicable à tout moment, conservé d'une reconnexion à l'autre, et sans effet sur la
+    /// session : le flux continue de partir, silence compris. C'est ce qui coupe un membre d'une
+    /// paire stéréo sans couper l'autre, ce qu'un volume AirPlay à −144 ferait.
+    public func setOutputLevel(_ level: OutputLevel) {
+        outputGain.setLevel(level)
     }
 
     // MARK: - Session
@@ -342,6 +359,8 @@ public actor AirPlay2Sender {
             log.info("Arriéré de \(staleFrames) trames écarté avant le début de la diffusion")
         }
         pendingSamples.removeAll(keepingCapacity: true)
+        // Rien de ce qui a précédé ne sera joué : la reprise part de la consigne, sans glissement.
+        outputGain.reset()
         if firstSession {
             // Photographie du compteur de refus au démarrage réel de la diffusion : tout ce
             // qui précède est imputable à la fenêtre de négociation, pendant laquelle la
@@ -1072,6 +1091,9 @@ public actor AirPlay2Sender {
                 guard let base = buffer.baseAddress else { return [] }
                 let read = ring.read(into: base, frameCount: frames)
                 guard read > 0 else { return [] }
+                // Sur `readScratch`, copie propre à ce sender, en flottant : avant la conversion en
+                // 16 bits, l'atténuation ne coûte aucune résolution. Contourné au bit près à 0 dB.
+                outputGain.process(base, frameCount: read)
                 return try resampler.convert(base, frameCount: read)
             }
             guard !converted.isEmpty else { break }
