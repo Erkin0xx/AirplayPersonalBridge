@@ -22,6 +22,24 @@ struct TestListenerPortTests {
         #expect(!Self.ephemeral.contains(airplay2.port), "\(airplay2.port)")
     }
 
+    /// `NWListener` échoue parfois sur `EADDRINUSE` : sans repli, un faux récepteur ne répondait
+    /// jamais à son `SETUP`, et un test sans rapport échouait 10 s plus tard. Provoqué ici sur un
+    /// port réellement pris.
+    @Test("Une écoute refusée passe au port suivant, et elle fonctionne")
+    func refusedListenerMovesToAnotherPort() async throws {
+        let taken = try LateTCPPort()
+        try taken.open()
+
+        let opened = try await startLoopbackListener(
+            on: DispatchQueue(label: "test.listener-fallback"), firstPort: taken.port
+        ) { $0.cancel() }
+        defer { opened.listener.cancel() }
+
+        #expect(opened.port != taken.port)
+        #expect(!Self.ephemeral.contains(opened.port), "\(opened.port)")
+        #expect(opened.listener.state == .ready)
+    }
+
     /// Deux tests parallèles ne doivent pas se disputer un port entre sa vérification et son
     /// ouverture, ce qui ferait échouer l'une des deux écoutes.
     @Test("Un même process ne se voit jamais proposer deux fois le même port")

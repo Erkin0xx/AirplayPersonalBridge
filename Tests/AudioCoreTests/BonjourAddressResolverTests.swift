@@ -456,7 +456,7 @@ private struct LocalRecordRefused: Error {
 /// Une écoute TCP sur la boucle locale, qui ne fait que compter ce qu'elle accepte.
 private final class CountingListener: @unchecked Sendable {
     private let lock = NSLock()
-    private let listener: NWListener
+    private var listener: NWListener?
     private var count = 0
     private(set) var port: UInt16 = 0
 
@@ -465,27 +465,13 @@ private final class CountingListener: @unchecked Sendable {
     /// Son port est hors de la plage éphémère : sur un numéro quelconque, le témoin pouvait être
     /// refusé sur `EADDRINUSE` (voir `LateTCPPort`).
     init() async throws {
-        listener = try NWListener(using: loopbackListenerParameters())
-        listener.newConnectionHandler = { [weak self] connection in
+        let queue = DispatchQueue(label: "test.counting-listener")
+        let opened = try await startLoopbackListener(on: queue) { [weak self] connection in
             self?.lock.withLock { self?.count += 1 }
             connection.cancel()
         }
-        let queue = DispatchQueue(label: "test.counting-listener")
-        port = await withCheckedContinuation { continuation in
-            let once = OneShotRelease()
-            listener.stateUpdateHandler = { [listener] state in
-                switch state {
-                case .ready:
-                    if once.fire() { continuation.resume(returning: listener.port?.rawValue ?? 0) }
-                case .failed:
-                    // Un port pris entre-temps : 0 fait échouer le test, là où il resterait bloqué.
-                    if once.fire() { continuation.resume(returning: 0) }
-                default:
-                    break
-                }
-            }
-            listener.start(queue: queue)
-        }
+        listener = opened.listener
+        port = opened.port
     }
 
     /// Le témoin : une vraie connexion, attendue jusqu'à ce que l'écoute l'ait comptée.
@@ -503,9 +489,9 @@ private final class CountingListener: @unchecked Sendable {
     }
 
     func shutdown() {
-        listener.newConnectionHandler = nil
-        listener.stateUpdateHandler = nil
-        listener.cancel()
+        listener?.newConnectionHandler = nil
+        listener?.stateUpdateHandler = nil
+        listener?.cancel()
     }
 }
 

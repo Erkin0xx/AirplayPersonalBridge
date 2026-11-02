@@ -166,12 +166,11 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
 
     /// Ouvre l'écoute et rend la main une fois le port connu.
     func start() async throws {
-        let listener = try Self.makeLoopbackListener()
-        self.listener = listener
-        let assigned = await Self.waitUntilReady(listener, queue: queue) { [weak self] connection in
+        let opened = try await startLoopbackListener(on: queue) { [weak self] connection in
             self?.accept(connection)
         }
-        port = assigned
+        listener = opened.listener
+        port = opened.port
     }
 
     func stop() {
@@ -708,21 +707,16 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
                 answer(0)
                 return
             }
-            self.queue.async {
-                guard let listener = try? Self.makeLoopbackListener() else {
-                    answer(0)
-                    return
-                }
-                session.eventListener = listener
-                listener.newConnectionHandler = { [weak self] connection in
+            Task { [weak self] in
+                guard let self else { return }
+                let opened = try? await startLoopbackListener(on: self.queue) {
+                    [weak self] connection in
                     self?.acceptEvents(connection, session: session)
                 }
-                listener.stateUpdateHandler = { state in
-                    if case .ready = state, let port = listener.port?.rawValue {
-                        answer(port)
-                    }
+                self.queue.async {
+                    session.eventListener = opened?.listener
+                    answer(opened?.port ?? 0)
                 }
-                listener.start(queue: self.queue)
             }
         }
 
@@ -838,33 +832,6 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
     }
 
     // MARK: - Outils
-
-    private static func makeLoopbackListener() throws -> NWListener {
-        try NWListener(using: loopbackListenerParameters())
-    }
-
-    private static func waitUntilReady(
-        _ listener: NWListener,
-        queue: DispatchQueue,
-        onConnection: @escaping @Sendable (NWConnection) -> Void
-    ) async -> UInt16 {
-        await withCheckedContinuation { continuation in
-            let resumed = ManagedFlag()
-            listener.newConnectionHandler = onConnection
-            listener.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    if resumed.claim() { continuation.resume(returning: listener.port?.rawValue ?? 0) }
-                case .failed:
-                    // Port rendu indisponible entre-temps : 0 fait échouer le test, sans le bloquer.
-                    if resumed.claim() { continuation.resume(returning: 0) }
-                default:
-                    break
-                }
-            }
-            listener.start(queue: queue)
-        }
-    }
 
     private static func parseRequest(_ data: Data, encrypted: Bool) -> (Request, Int)? {
         guard let parsed = try? AirPlay2EventRequest.parse(data) else { return nil }

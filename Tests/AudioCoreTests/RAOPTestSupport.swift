@@ -52,7 +52,7 @@ final class FakeRAOPReceiver: @unchecked Sendable {
 
     private let lock = NSLock()
     private let queue = DispatchQueue(label: "fr.baptiste.airplaymultioutput.tests.fake-raop")
-    private let listener: NWListener
+    private var listener: NWListener?
     private var connections: [NWConnection] = []
     private var buffers: [ObjectIdentifier: Data] = [:]
     private var script: @Sendable (Request) -> Reply
@@ -82,25 +82,12 @@ final class FakeRAOPReceiver: @unchecked Sendable {
         control = try UDPChannel(label: "fake-control")
         timing = try UDPChannel(label: "fake-timing")
 
-        let parameters = try loopbackListenerParameters()
-        parameters.allowLocalEndpointReuse = true
-        let listener = try NWListener(using: parameters)
-        self.listener = listener
-
-        let ready = PortBox()
-        listener.stateUpdateHandler = { state in
-            switch state {
-            case .ready: ready.resolve(listener.port?.rawValue)
-            case .failed, .cancelled: ready.resolve(nil)
-            default: break
-            }
-        }
-        listener.newConnectionHandler = { [weak self] connection in
+        let opened = try await startLoopbackListener(on: queue, reusingAddress: true) {
+            [weak self] connection in
             self?.accept(connection)
         }
-        listener.start(queue: queue)
-        let actualPort = await ready.value()
-        boundPort = actualPort ?? 0
+        listener = opened.listener
+        boundPort = opened.port
 
         audio.onReceive = { [weak self] data, _ in self?.storeAudio(data) }
         control.onReceive = { [weak self] data, _ in self?.storeControl(data) }
@@ -109,7 +96,7 @@ final class FakeRAOPReceiver: @unchecked Sendable {
     }
 
     deinit {
-        listener.cancel()
+        listener?.cancel()
     }
 
     /// Récepteur tel que le verrait la découverte : TXT de la vraie Geneva par défaut.
@@ -218,7 +205,7 @@ final class FakeRAOPReceiver: @unchecked Sendable {
 
     func shutdown() {
         closeConnections()
-        listener.cancel()
+        listener?.cancel()
         audio.stop()
         control.stop()
         timing.stop()
@@ -403,38 +390,6 @@ final class FakeRAOPReceiver: @unchecked Sendable {
     }
 }
 
-private final class PortBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<UInt16?, Never>?
-    private var resolved: UInt16??
-
-    func resolve(_ port: UInt16?) {
-        lock.lock()
-        guard resolved == nil else {
-            lock.unlock()
-            return
-        }
-        resolved = .some(port)
-        let pending = continuation
-        continuation = nil
-        lock.unlock()
-        pending?.resume(returning: port)
-    }
-
-    func value() async -> UInt16? {
-        await withCheckedContinuation { continuation in
-            lock.lock()
-            if let resolved {
-                lock.unlock()
-                continuation.resume(returning: resolved)
-            } else {
-                self.continuation = continuation
-                lock.unlock()
-            }
-        }
-    }
-}
-
 /// Alimente un ring buffer en sinusoïde à la cadence réelle, comme le ferait la capture.
 final class ToneFeeder: @unchecked Sendable {
     private let task: Task<Void, Never>
@@ -493,14 +448,57 @@ func raopEventually(
 /// sort pour qu'une autre exécution de la suite, dans un autre worktree, soit ailleurs.
 private let nextOutOfRangePort = Mutex(UInt16.random(in: 20_000..<45_000))
 
-/// Paramètres d'une écoute de test sur la boucle locale, sur un port hors de la plage éphémère.
+private func takeOutOfRangePort() -> UInt16 {
+    nextOutOfRangePort.withLock { next -> UInt16 in
+        defer { next = next >= 44_999 ? 20_000 : next + 1 }
+        return next
+    }
+}
+
+/// Ouvre une écoute de test sur la boucle locale, hors de la plage éphémère (voir ``LateTCPPort``),
+/// et rend la main quand elle est prête. **Toute écoute de test passe par ici, jamais par `.any`.**
 ///
-/// À employer pour **toute** écoute de test, jamais `.any` : voir ``LateTCPPort``.
-func loopbackListenerParameters() throws -> NWParameters {
-    let parameters = NWParameters.tcp
-    let port = NWEndpoint.Port(rawValue: try LateTCPPort().port) ?? .any
-    parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: port)
-    return parameters
+/// Un port refusé n'est qu'un numéro à passer : `NWListener` échoue parfois sur `EADDRINUSE` alors
+/// que le port est libre (`NECP_CLIENT_ACTION_ADD`, 1 écoute sur plusieurs milliers). Un faux récepteur
+/// qui ne suivrait que `.ready` ne répondrait alors jamais à son `SETUP` : 10 s, puis « ne répond
+/// plus », dans un test sans rapport.
+///
+/// - Parameter firstPort: le premier numéro à essayer, pour le test de ce repli.
+func startLoopbackListener(
+    on queue: DispatchQueue,
+    firstPort: UInt16? = nil,
+    reusingAddress: Bool = false,
+    onConnection: @escaping @Sendable (NWConnection) -> Void
+) async throws -> (listener: NWListener, port: UInt16) {
+    var candidate = firstPort ?? takeOutOfRangePort()
+    for _ in 0..<32 {
+        let parameters = NWParameters.tcp
+        parameters.allowLocalEndpointReuse = reusingAddress
+        let wanted = NWEndpoint.Port(rawValue: candidate) ?? .any
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: wanted)
+        let listener = try NWListener(using: parameters)
+        listener.newConnectionHandler = onConnection
+        let opened: Bool = await withCheckedContinuation { continuation in
+            let resumed = ManagedFlag()
+            listener.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    if resumed.claim() { continuation.resume(returning: true) }
+                case .failed:
+                    if resumed.claim() { continuation.resume(returning: false) }
+                default:
+                    break
+                }
+            }
+            listener.start(queue: queue)
+        }
+        if opened, let port = listener.port?.rawValue {
+            return (listener, port)
+        }
+        listener.cancel()
+        candidate = takeOutOfRangePort()
+    }
+    throw LateTCPPort.Failure(description: "aucune écoute possible entre 20000 et 45000")
 }
 
 /// Un port TCP de la boucle locale où rien n'écoute, jusqu'à ce qu'on l'ouvre.
@@ -519,7 +517,8 @@ func loopbackListenerParameters() throws -> NWParameters {
 ///   moins d'une milliseconde, et une écoute compte sa connexion en 2 ms, 64 fils bloqués ou non.
 /// - **Écoute refusée.** Un numéro tiré par un socket UDP n'est libre que côté UDP. Côté TCP il peut
 ///   servir à une connexion active ou en `TIME_WAIT` (la suite en laisse ~300, pendant 30 s), et
-///   `NWListener` échoue alors sur `EADDRINUSE`.
+///   `NWListener` échoue alors sur `EADDRINUSE`. ``startLoopbackListener(on:firstPort:reusingAddress:onConnection:)``
+///   couvre le reliquat.
 ///
 /// Un socket lié qui n'écoute pas encore n'aurait pas convenu pour simuler un port fermé : le noyau
 /// ignore alors le SYN au lieu de le refuser, et la connexion reste en préparation sans fin.
@@ -534,10 +533,7 @@ final class LateTCPPort: @unchecked Sendable {
     init() throws {
         // Un autre programme peut occuper un port fixe de cette plage : on en essaie plusieurs.
         for _ in 0..<64 {
-            let candidate = nextOutOfRangePort.withLock { next -> UInt16 in
-                defer { next = next >= 44_999 ? 20_000 : next + 1 }
-                return next
-            }
+            let candidate = takeOutOfRangePort()
             let probe = try Self.boundSocket(port: candidate, reusingAddress: false)
             if let probe {
                 close(probe)

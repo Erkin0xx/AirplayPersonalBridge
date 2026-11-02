@@ -7,34 +7,22 @@ import Testing
 /// Récepteur RAOP minimal, dans le processus du test : il répond 200 à tout, et le test décide
 /// quand il coupe la connexion. Les mocks n'offrent pas ce contrôle et sont partagés.
 private final class LoopbackRAOPReceiver: @unchecked Sendable {
-    private let listener: NWListener
+    private var listener: NWListener?
     private let queue = DispatchQueue(label: "fr.baptiste.airplaymultioutput.tests.loopback-raop")
     private var connections: [NWConnection] = []
     private var answerDelay: TimeInterval = 0
     /// Statut rendu aux `ANNOUNCE` suivants, à la place d'un `200`.
     private var announceRefusal: String?
 
-    init() throws {
-        listener = try NWListener(using: loopbackListenerParameters())
-    }
+    init() throws {}
 
     /// Démarre l'écoute et rend le port attribué.
     func start() async throws -> UInt16 {
-        let once = OnceThrowingResumer<UInt16>()
-        return try await withCheckedThrowingContinuation { continuation in
-            once.attach(continuation)
-            listener.newConnectionHandler = { [weak self] connection in
-                self?.accept(connection)
-            }
-            listener.stateUpdateHandler = { [listener] state in
-                switch state {
-                case .ready: once.resume(returning: listener.port?.rawValue ?? 0)
-                case let .failed(error): once.resume(throwing: error)
-                default: break
-                }
-            }
-            listener.start(queue: queue)
+        let opened = try await startLoopbackListener(on: queue) { [weak self] connection in
+            self?.accept(connection)
         }
+        listener = opened.listener
+        return opened.port
     }
 
     func stop() {
@@ -42,7 +30,7 @@ private final class LoopbackRAOPReceiver: @unchecked Sendable {
             for connection in connections { connection.cancel() }
             connections = []
         }
-        listener.cancel()
+        listener?.cancel()
     }
 
     /// Coupe brutalement les sessions en cours, et retarde les réponses des suivantes.
