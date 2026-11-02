@@ -49,11 +49,13 @@ struct RunMocksScriptTests {
         script.standardError = pipe
         try script.run()
 
-        // Hors du pool coopératif : la lecture bloque jusqu'à la fin du script.
+        // Hors du pool coopératif : la lecture bloque jusqu'à la fin du script. Elle suffit, la fin de
+        // fichier disant que le script a terminé. `waitUntilExit()` en plus de cela a bloqué une
+        // exécution à jamais (1 fois sur ~30), le process déjà récolté : cette attente tourne une
+        // boucle d'événements qui peut manquer le signal de fin, ici sur un fil sans autre activité.
         let output = await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
             DispatchQueue.global().async {
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                script.waitUntilExit()
                 continuation.resume(returning: String(decoding: data, as: UTF8.self))
             }
         }

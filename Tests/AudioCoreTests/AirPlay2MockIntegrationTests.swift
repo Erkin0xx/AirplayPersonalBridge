@@ -28,7 +28,8 @@ struct AirPlay2MockIntegrationTests {
         let output = Pipe()
         process.standardOutput = output
         try process.run()
-        process.waitUntilExit()
+        // La fin de fichier dit que le process a terminé. `waitUntilExit()` peut bloquer à jamais,
+        // sur un fil qui ne fait rien d'autre tourner (voir `RunMocksScriptTests`).
         let data = output.fileHandleForReading.readDataToEndOfFile()
         return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
