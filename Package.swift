@@ -127,6 +127,16 @@ let package = Package(
             exclude: ["Assets.xcassets", "AirplayPersonalBridgeApp.swift"],
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
+        // Sonde de test, jamais installée : un vrai process AppKit, sans moteur ni réseau, qui reçoit
+        // SIGTERM pendant un arrêt différé. Un interblocage de `terminate` tient à la boucle
+        // d'événements d'AppKit, que le process de `swift test` ne fait pas tourner, et un
+        // `terminate` qui aboutit y mettrait fin à toute la suite. `TerminationSignalTests` la lance.
+        .executableTarget(
+            name: "TerminationProbe",
+            dependencies: ["BridgeApp"],
+            path: "Tests/TerminationProbe",
+            swiftSettings: [.defaultIsolation(MainActor.self)]
+        ),
         .testTarget(
             name: "BridgeAppTests",
             dependencies: ["BridgeApp", "AudioCore"],
