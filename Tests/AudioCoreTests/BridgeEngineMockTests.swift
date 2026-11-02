@@ -113,8 +113,7 @@ struct BridgeEngineMockTests {
             Issue.record("\(label) : ancrage indisponible")
             return
         }
-        let internalLatency = synchronizer.snapshot().receiverLatencySeconds
-        let lag = Date().timeIntervalSince1970 - anchor - internalLatency
+        let lag = Date().timeIntervalSince1970 - anchor
         #expect(abs(lag) < 0.25, "\(label) : l'ancrage retarde de \(lag) s sur le direct")
     }
 
