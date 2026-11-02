@@ -298,24 +298,22 @@ public final class OutputSynchronizer: @unchecked Sendable {
         let consumed = consumedOutputFrames
         let gap = captureGapFrames
         let offset = manualOffset
-        let internalLatency = receiverLatencyFrames
         lock.unlock()
         guard let start else { return nil }
         let captureFrame = start + gap + consumed * (clock.captureSampleRate / outputSampleRate)
         guard let presentation = clock.presentationUnixTime(forCaptureFrame: captureFrame) else {
             return nil
         }
-        // La latence **interne** du récepteur est retranchée, au même titre que celle qu'on
-        // annonce : elle s'ajoute à la restitution sans que rien ne la compense autrement.
+        // La latence **interne** annoncée par le récepteur (`Audio-Latency` de RAOP) n'est **pas**
+        // retranchée : le récepteur la prend déjà en compte pour tenir l'instant annoncé.
         //
-        // C'est ce qui manquait pour aligner des récepteurs inégaux. La Geneva annonce
-        // `Audio-Latency: 4096` trames, soit 92,88 ms ; les HomePod n'annoncent rien. Sans
-        // cette soustraction la Geneva jouait 93 ms après eux — très au-dessus du seuil
-        // d'audibilité de 20 à 30 ms, et parfaitement audible en écho (relevé le 2026-08-12).
-        // La valeur était mesurée et affichée, mais n'entrait dans aucun calcul.
-        return presentation + offset
-            - Double(latencyFrames) / outputSampleRate
-            - Double(internalLatency) / outputSampleRate
+        // Mesuré au micro le 2026-11-02 (`scripts/measure-clicks.py`), à table : avec cette
+        // soustraction, introduite au commit 0cf8a31, la Geneva (`Audio-Latency: 4096`, 92,88 ms)
+        // jouait 84 ms **avant** le HomePod de gauche (+206 ms contre +290 ms, son direct), un écho
+        // net à l'oreille. Sans elle, +298 ms, au niveau des HomePod. L'écart d'août que 0cf8a31
+        // corrigeait suivait en réalité la durée de négociation, défaut réglé par c41b2ac.
+        // La valeur reste relevée et affichée (`receiverLatencySeconds`), à titre d'information.
+        return presentation + offset - Double(latencyFrames) / outputSampleRate
     }
 
     // MARK: - Compte rendu

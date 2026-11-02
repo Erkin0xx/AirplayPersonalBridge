@@ -461,11 +461,13 @@ struct OutputSynchronizerTests {
         #expect(abs((advanced - neutral) + 0.2) < 1e-6)
     }
 
-    /// Le calcul introduit au commit 0cf8a31, sans test jusqu'ici. La Geneva annonce
-    /// `Audio-Latency: 4096` : pour qu'elle restitue en même temps qu'un récepteur qui n'annonce
-    /// rien, son ancrage doit partir 92,88 ms plus tôt.
-    @Test("La latence interne annoncée par le récepteur avance l'ancrage d'autant")
-    func receiverLatencyAdvancesAnchor() {
+    /// Le calcul du commit 0cf8a31 avançait l'ancrage de la Geneva de son `Audio-Latency: 4096`
+    /// (92,88 ms). Mesuré au micro sur le vrai matériel le 2026-11-02, elle jouait alors 84 ms avant
+    /// les HomePod : le récepteur tient déjà compte de cette latence pour l'instant annoncé. Deux
+    /// sorties qui ne diffèrent que par la latence interne annoncée doivent donc annoncer le même
+    /// ancrage.
+    @Test("La latence interne annoncée par le récepteur ne déplace pas l'ancrage")
+    func receiverLatencyLeavesAnchor() {
         let clock = makeClock()
         let geneva = OutputSynchronizer(label: "g", clock: clock, outputSampleRate: outputRate)
         let homePod = OutputSynchronizer(label: "h", clock: clock, outputSampleRate: outputRate)
@@ -479,8 +481,9 @@ struct OutputSynchronizerTests {
             Issue.record("ancrage indisponible")
             return
         }
-        #expect(abs((homePodAnchor - genevaAnchor) - 4_096.0 / outputRate) < 1e-6)
-        #expect(abs((homePodAnchor - genevaAnchor) - 0.09288) < 1e-4)
+        #expect(abs(homePodAnchor - genevaAnchor) < 1e-6)
+        // Toujours relevée, pour le diagnostic.
+        #expect(abs(geneva.snapshot().receiverLatencySeconds - 4_096.0 / outputRate) < 1e-6)
     }
 
     /// Reconnexion : la session repart sur des tampons neufs, avec un délai de pipeline qui n'a
