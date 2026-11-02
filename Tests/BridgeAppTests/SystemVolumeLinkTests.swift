@@ -256,8 +256,10 @@ struct SystemVolumeKeysTests {
         harness.state.masterVolumeDB = 0
         #expect(await eventually { system.volumeWrites == [1] })
         harness.state.masterVolumeDB = -0.2
-        #expect(await eventually { system.volumeWrites.count == 2 })
-        #expect(abs(Double(system.volumeWrites[1]) - (1 - 0.2 / 60)) < 1e-6)
+        let target = 1 - 0.2 / 60
+        #expect(await eventually {
+            system.volumeWrites.count == 2 && abs(Double(system.volumeWrites.last ?? 0) - target) < 1e-6
+        })
         // L'écho de ces écritures n'a rien déplacé.
         #expect(await staysFalse(during: .milliseconds(60)) { harness.state.masterVolumeDB != -0.2 })
     }
