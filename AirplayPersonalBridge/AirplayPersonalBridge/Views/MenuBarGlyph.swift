@@ -40,6 +40,21 @@ enum MenuBarGlyphImage {
     /// macOS prend d'office celle de l'écran où se trouve la barre.
     static let waveFrames: [NSImage] = (0..<BridgeGlyph.Wave.frameCount).map(makeWaveFrame)
 
+    /// Une image vide de la taille du glyphe : ce que montre le bouton quand Core Animation joue la
+    /// vague par-dessus. L'élément de la barre garde ainsi sa largeur.
+    static let spacer: NSImage = {
+        let image = NSImage(size: BridgeGlyph.canvas)
+        image.isTemplate = true
+        return image
+    }()
+
+    /// L'une des images de l'icône, comparée par identité : c'est ainsi qu'on retrouve le bouton de
+    /// la barre de menus qui la montre.
+    static func isGlyph(_ image: NSImage) -> Bool {
+        image === spacer || waveFrames.contains { $0 === image }
+            || images.values.contains { $0 === image }
+    }
+
     private nonisolated static func makeWaveFrame(_ frame: Int) -> NSImage {
         let image = NSImage(size: BridgeGlyph.canvas)
         for scale in BridgeGlyph.PixelScale.allCases {
@@ -95,6 +110,9 @@ enum MenuBarGlyphMotion: Equatable {
     }
 }
 
+
+// MARK: - Faire défiler la vague
+
 /// Un réveil périodique, derrière un protocole : les tests comptent les réveils sans attendre.
 protocol GlyphFrameClock {
     /// `tick` dit s'il faut continuer : `false` arrête le réveil pour de bon.
@@ -106,7 +124,7 @@ protocol GlyphFrameTimer: AnyObject {
     func invalidate()
 }
 
-/// Le réveil de l'app : un `Timer` de la boucle principale, avec assez de tolérance pour que macOS
+/// Le réveil de secours : un `Timer` de la boucle principale, avec assez de tolérance pour que macOS
 /// le regroupe avec ses autres réveils.
 struct RunLoopGlyphFrameClock: GlyphFrameClock {
     func repeating(every interval: TimeInterval, _ tick: @escaping @MainActor () -> Bool)
@@ -135,31 +153,202 @@ final class RunLoopGlyphFrameTimer: GlyphFrameTimer {
     }
 }
 
+/// Là où Core Animation peut jouer la vague à la place de l'app. Derrière un protocole : les tests
+/// n'ont pas de barre de menus.
+protocol MenuBarWaveStage {
+    /// Monte la vague sur le bouton de la barre de menus, ou `nil` s'il ne se trouve pas.
+    func mount() -> (any MenuBarWaveMount)?
+}
+
+protocol MenuBarWaveMount: AnyObject {
+    func unmount()
+}
+
+/// Le bouton de la barre de menus que porte le `MenuBarExtra` de l'app.
+///
+/// SwiftUI ne le donne pas : on le reconnaît parmi les fenêtres de l'app à l'image qu'il montre,
+/// l'une de celles de `MenuBarGlyphImage`, comparées par identité. Aucun autre bouton ne peut la
+/// porter, et les répliques de la barre (une par bureau) sont des instantanés, pas des boutons.
+struct StatusBarWaveStage: MenuBarWaveStage {
+    func mount() -> (any MenuBarWaveMount)? {
+        guard let button = Self.button(in: NSApp.windows) else { return nil }
+        return MenuBarWaveLayer(button: button)
+    }
+
+    static func button(in windows: [NSWindow]) -> NSButton? {
+        for window in windows where window.screen != nil {
+            guard let content = window.contentView else { continue }
+            if let button = firstButton(in: content) { return button }
+        }
+        return nil
+    }
+
+    private static func firstButton(in view: NSView) -> NSButton? {
+        if let button = view as? NSStatusBarButton, let image = button.image,
+            MenuBarGlyphImage.isGlyph(image)
+        {
+            return button
+        }
+        for subview in view.subviews {
+            if let button = firstButton(in: subview) { return button }
+        }
+        return nil
+    }
+}
+
+/// La vague jouée par Core Animation dans le bouton de la barre : **l'app ne se réveille plus du
+/// tout**, le serveur de rendu fait défiler les images.
+///
+/// Changer l'image d'un `NSStatusItem` coûte cher, chaque fois : AppKit redessine l'instantané du
+/// bouton pour chaque bureau, et chaque instantané renvoie SwiftUI mettre le libellé à jour. Mesuré
+/// sur un vrai `MenuBarExtra` à huit images par seconde, 6,4 % d'un cœur, et 2,4 % encore en
+/// changeant l'image sans SwiftUI ; avec ce calque, 0,1 %.
+///
+/// Les images sont celles que **la cellule du bouton** dessine elle-même, sous son apparence : même
+/// teinte que l'icône fixe, sans rien imiter. Le bouton montre pendant ce temps une image vide de
+/// même taille (`MenuBarGlyphImage.spacer`), et garde son fond de sélection. Les répliques des autres
+/// bureaux reçoivent l'image de repos du calque.
+final class MenuBarWaveLayer: MenuBarWaveMount {
+    private weak var button: NSButton?
+    private let overlay = CALayer()
+    private var appearanceObservation: NSKeyValueObservation?
+    private var backingObserver: (any NSObjectProtocol)?
+
+    init?(button: NSButton) {
+        self.button = button
+        button.wantsLayer = true
+        guard let host = button.layer else { return nil }
+        // Ni fondu ni glissement : les images se succèdent, comme dans une barre de menus.
+        overlay.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
+        guard capture() else { return nil }
+        host.addSublayer(overlay)
+
+        appearanceObservation = button.observe(\.effectiveAppearance) { [weak self] _, _ in
+            MainActor.assumeIsolated { _ = self?.capture() }
+        }
+        backingObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeBackingPropertiesNotification, object: button.window,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { _ = self?.capture() }
+        }
+    }
+
+    /// Redessine les images sous l'apparence et à l'échelle du moment, et relance la boucle.
+    private func capture() -> Bool {
+        guard let button, let cell = button.cell as? NSButtonCell else { return false }
+        let rect = cell.imageRect(forBounds: button.bounds)
+        let scale = button.window?.backingScaleFactor ?? 2
+        let frames = MenuBarGlyphImage.waveFrames.compactMap { frame -> CGImage? in
+            Self.render(frame, in: rect.size, scale: scale, appearance: button.effectiveAppearance) {
+                cell.drawImage(frame, withFrame: CGRect(origin: .zero, size: rect.size), in: button)
+            }
+        }
+        guard frames.count == MenuBarGlyphImage.waveFrames.count else { return false }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        overlay.frame = rect
+        overlay.contentsScale = scale
+        overlay.contents = frames.first
+        let animation = CAKeyframeAnimation(keyPath: "contents")
+        animation.values = frames
+        animation.calculationMode = .discrete
+        animation.duration = BridgeGlyph.Wave.period
+        animation.repeatCount = .infinity
+        overlay.add(animation, forKey: Self.animationKey)
+        CATransaction.commit()
+        return true
+    }
+
+    static let animationKey = "vague"
+
+    /// Ce que dessine `draw`, dans un bitmap de cette taille et de cette échelle.
+    private static func render(
+        _ image: NSImage, in size: CGSize, scale: CGFloat, appearance: NSAppearance,
+        draw: () -> Void
+    ) -> CGImage? {
+        guard
+            size.width > 0, size.height > 0,
+            let rep = NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: Int((size.width * scale).rounded()),
+                pixelsHigh: Int((size.height * scale).rounded()), bitsPerSample: 8,
+                samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                bytesPerRow: 0, bitsPerPixel: 0
+            )
+        else { return nil }
+        // Avant le contexte, qui en tire son échelle : posée après, le dessin sort en 1x dans un coin.
+        rep.size = size
+        guard let context = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        appearance.performAsCurrentDrawingAppearance(draw)
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.cgImage
+    }
+
+    /// Le calque que joue Core Animation : ce que vérifient les tests.
+    var layer: CALayer { overlay }
+
+    func unmount() {
+        appearanceObservation = nil
+        if let backingObserver { NotificationCenter.default.removeObserver(backingObserver) }
+        backingObserver = nil
+        overlay.removeAllAnimations()
+        overlay.removeFromSuperlayer()
+    }
+
+    /// Une vague oubliée sur le bouton tournerait pour toujours par-dessus l'icône fixe.
+    isolated deinit {
+        unmount()
+    }
+}
+
 /// Fait défiler les images de la vague, et rien d'autre.
 ///
-/// **Aucun réveil tant que l'icône est fixe** : le minuteur n'existe que pendant la vague, et seule
-/// l'image courante est observée. Une icône fixe ne coûte donc rien, ni minuteur ni nouveau rendu.
+/// **Aucun réveil tant que l'icône est fixe.** Pendant la vague, Core Animation la joue dans le bouton
+/// de la barre (`MenuBarWaveStage`), sans réveiller l'app ; à défaut de bouton, un minuteur à huit
+/// coups par seconde change l'image du libellé. Seul ce qui change l'image est observé.
 @Observable
 final class MenuBarGlyphAnimator {
-    /// L'image de la vague à montrer. Ne change que pendant la vague.
+    enum Drive: Equatable {
+        case off
+        /// La vague est demandée, la scène pas encore cherchée : l'image de repos de la vague.
+        case pending
+        /// Core Animation la joue : le libellé ne montre qu'une image vide.
+        case layer
+        /// Le minuteur de secours fait défiler `frame`.
+        case timer
+    }
+
+    /// L'image de la vague à montrer quand le minuteur la fait défiler.
     private(set) var frame = 0
+    private(set) var drive = Drive.off
     /// Réveils servis depuis la création : ce que comptent les tests.
     @ObservationIgnored private(set) var ticks = 0
     @ObservationIgnored private let clock: any GlyphFrameClock
+    @ObservationIgnored private let stage: (any MenuBarWaveStage)?
     @ObservationIgnored private var timer: (any GlyphFrameTimer)?
+    @ObservationIgnored private var mount: (any MenuBarWaveMount)?
 
-    init(clock: any GlyphFrameClock = RunLoopGlyphFrameClock()) {
+    init(
+        clock: any GlyphFrameClock = RunLoopGlyphFrameClock(),
+        stage: (any MenuBarWaveStage)? = StatusBarWaveStage()
+    ) {
         self.clock = clock
+        self.stage = stage
     }
 
-    var isAnimating: Bool { timer != nil }
+    var isAnimating: Bool { timer != nil || mount != nil }
 
-    /// Pure : ne lit l'image courante que pendant la vague, et n'observe donc rien d'autre tant que
+    /// Pure : ne lit l'état de la vague que pendant la vague, et n'observe donc rien tant que
     /// l'icône est fixe.
     func image(for motion: MenuBarGlyphMotion) -> NSImage {
         switch motion {
         case let .still(variant):
             MenuBarGlyphImage.image(for: variant)
+        case .wave where drive == .layer:
+            MenuBarGlyphImage.spacer
         case .wave:
             MenuBarGlyphImage.waveFrames[frame % MenuBarGlyphImage.waveFrames.count]
         }
@@ -170,7 +359,24 @@ final class MenuBarGlyphAnimator {
     }
 
     private func start() {
-        guard timer == nil else { return }
+        guard drive == .off else { return }
+        drive = .pending
+        // Au tour de boucle suivant : l'appel vient de la mise à jour des vues, où l'on ne touche pas
+        // au bouton que SwiftUI est en train de remplir. Par la boucle plutôt que par une tâche, qui
+        // n'aurait pas sa place tant qu'un travail du MainActor fait tourner une boucle imbriquée.
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in
+            MainActor.assumeIsolated { self?.settle() }
+        }
+    }
+
+    private func settle() {
+        guard drive == .pending else { return }
+        if let mount = stage?.mount() {
+            self.mount = mount
+            drive = .layer
+            return
+        }
+        drive = .timer
         // Le réveil ne retient pas l'animateur : disparu, il s'arrête au coup suivant.
         timer = clock.repeating(every: 1 / BridgeGlyph.Wave.framesPerSecond) { [weak self] in
             guard let self else { return false }
@@ -181,9 +387,12 @@ final class MenuBarGlyphAnimator {
     }
 
     private func stop() {
-        guard let timer else { return }
-        timer.invalidate()
-        self.timer = nil
+        guard drive != .off else { return }
+        timer?.invalidate()
+        timer = nil
+        mount?.unmount()
+        mount = nil
+        drive = .off
         // L'icône fixe ne lit plus `frame` : la remettre à zéro ne redessine rien, et la prochaine
         // vague repart de l'image la plus proche du repos.
         frame = 0
@@ -192,8 +401,8 @@ final class MenuBarGlyphAnimator {
 
 /// L'icône de la barre de menus : le glyphe de l'état, ou la vague quand un son passe vraiment.
 ///
-/// Une suite d'images modèle qui défilent, plutôt qu'une animation SwiftUI, que le libellé d'un
-/// `MenuBarExtra` rend mal : une image n'y est qu'une image, et la barre la teinte comme les autres.
+/// Des images modèle plutôt qu'une animation SwiftUI, que le libellé d'un `MenuBarExtra` rend mal :
+/// une image n'y est qu'une image, et la barre la teinte comme les autres.
 struct MenuBarGlyphLabel: View {
     let status: MenuBarStatus
     /// La règle du panneau : la capture ne signale rien, et le son n'est pas coupé.

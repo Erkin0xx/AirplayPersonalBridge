@@ -314,33 +314,97 @@ private func invalidates(_ read: () -> Void, during action: () -> Void) -> Bool 
     return flag.raised
 }
 
+/// Une scène qu'on règle : elle trouve un bouton ou non, et compte ce qu'on lui demande.
+private final class FakeWaveStage: MenuBarWaveStage {
+    final class Mount: MenuBarWaveMount {
+        private(set) var isMounted = true
+        func unmount() { isMounted = false }
+    }
+
+    let findsButton: Bool
+    private(set) var mounts: [Mount] = []
+
+    init(findsButton: Bool) {
+        self.findsButton = findsButton
+    }
+
+    func mount() -> (any MenuBarWaveMount)? {
+        guard findsButton else { return nil }
+        let mount = Mount()
+        mounts.append(mount)
+        return mount
+    }
+}
+
 @Suite("Icône de la barre de menus — rafraîchissements")
 struct MenuBarGlyphAnimatorTests {
-    @Test("Fixe : aucun minuteur, aucune image nouvelle, l'icône d'aujourd'hui")
-    func stillCostsNothing() {
+    @Test("Fixe : ni minuteur ni calque, aucune image nouvelle, l'icône d'aujourd'hui")
+    func stillCostsNothing() async {
         let clock = ManualGlyphClock()
-        let animator = MenuBarGlyphAnimator(clock: clock)
+        let stage = FakeWaveStage(findsButton: true)
+        let animator = MenuBarGlyphAnimator(clock: clock, stage: stage)
         for variant in BridgeGlyph.Variant.allCases {
             let motion = MenuBarGlyphMotion.still(variant)
             animator.follow(motion)
+            await Task.yield()
             #expect(animator.image(for: motion) === MenuBarGlyphImage.image(for: variant))
             let changed = invalidates({ _ = animator.image(for: motion) }) { clock.fire(20) }
             #expect(!changed, "\(variant)")
         }
         #expect(clock.timers.isEmpty)
+        #expect(stage.mounts.isEmpty)
         #expect(!animator.isAnimating)
+        #expect(animator.drive == .off)
         #expect(animator.ticks == 0)
     }
 
-    @Test("La vague : un seul minuteur à huit coups par seconde, une image neuve à chaque coup")
-    func waveScrollsTheFrames() {
+    /// Le chemin de l'app : Core Animation joue la vague, l'app ne se réveille jamais.
+    @Test("La vague dans la barre : un calque, aucun minuteur, et le libellé ne change plus")
+    func layerPathWakesNothing() async {
         let clock = ManualGlyphClock()
-        let animator = MenuBarGlyphAnimator(clock: clock)
+        let stage = FakeWaveStage(findsButton: true)
+        let animator = MenuBarGlyphAnimator(clock: clock, stage: stage)
         animator.follow(.wave)
         animator.follow(.wave)
+        #expect(await eventually { animator.drive == .layer })
+        #expect(stage.mounts.count == 1)
+        #expect(clock.timers.isEmpty)
+        #expect(animator.image(for: .wave) === MenuBarGlyphImage.spacer)
+
+        let changed = invalidates({ _ = animator.image(for: .wave) }) { clock.fire(20) }
+        #expect(!changed)
+        #expect(animator.ticks == 0)
+
+        animator.follow(.still(.streaming))
+        #expect(stage.mounts.first?.isMounted == false)
+        #expect(animator.drive == .off)
+        #expect(!animator.isAnimating)
+        #expect(animator.image(for: .still(.streaming)) === MenuBarGlyphImage.image(for: .streaming))
+    }
+
+    @Test("Une vague annulée avant d'avoir trouvé sa scène ne monte rien")
+    func cancelledBeforeSettling() async {
+        let clock = ManualGlyphClock()
+        let stage = FakeWaveStage(findsButton: true)
+        let animator = MenuBarGlyphAnimator(clock: clock, stage: stage)
+        animator.follow(.wave)
+        animator.follow(.still(.streaming))
+        #expect(await staysFalse(during: .milliseconds(50)) { !stage.mounts.isEmpty })
+        #expect(clock.timers.isEmpty)
+        #expect(animator.drive == .off)
+    }
+
+    /// Sans bouton de barre (les tests, ou un macOS qui l'aurait caché autrement) : le minuteur.
+    @Test("Sans bouton : un seul minuteur à huit coups par seconde, une image neuve à chaque coup")
+    func timerFallbackScrollsTheFrames() async {
+        let clock = ManualGlyphClock()
+        let animator = MenuBarGlyphAnimator(clock: clock, stage: FakeWaveStage(findsButton: false))
+        animator.follow(.wave)
+        animator.follow(.wave)
+        #expect(animator.image(for: .wave) === MenuBarGlyphImage.waveFrames[0])
+        #expect(await eventually { animator.drive == .timer })
         #expect(clock.timers.count == 1)
         #expect(clock.timers.first?.interval == 1 / BridgeGlyph.Wave.framesPerSecond)
-        #expect(animator.image(for: .wave) === MenuBarGlyphImage.waveFrames[0])
 
         var shown: [Int] = []
         for _ in 0..<BridgeGlyph.Wave.frameCount {
@@ -354,10 +418,11 @@ struct MenuBarGlyphAnimatorTests {
     }
 
     @Test("Revenue fixe, l'icône arrête son minuteur et ne se redessine plus")
-    func stoppingCancelsTheTimer() {
+    func stoppingCancelsTheTimer() async {
         let clock = ManualGlyphClock()
-        let animator = MenuBarGlyphAnimator(clock: clock)
+        let animator = MenuBarGlyphAnimator(clock: clock, stage: nil)
         animator.follow(.wave)
+        #expect(await eventually { animator.drive == .timer })
         clock.fire(5)
         let still = MenuBarGlyphMotion.still(.streaming)
         animator.follow(still)
@@ -371,34 +436,36 @@ struct MenuBarGlyphAnimatorTests {
 
         // Et repart de la première image, la plus proche du repos.
         animator.follow(.wave)
-        #expect(clock.active.count == 1)
+        #expect(await eventually { clock.active.count == 1 })
         #expect(animator.image(for: .wave) === MenuBarGlyphImage.waveFrames[0])
     }
 
     @Test("Un animateur disparu arrête son minuteur au coup suivant")
-    func releasedAnimatorStopsItsTimer() {
+    func releasedAnimatorStopsItsTimer() async {
         let clock = ManualGlyphClock()
-        var animator: MenuBarGlyphAnimator? = MenuBarGlyphAnimator(clock: clock)
+        var animator: MenuBarGlyphAnimator? = MenuBarGlyphAnimator(clock: clock, stage: nil)
         animator?.follow(.wave)
-        #expect(clock.active.count == 1)
+        #expect(await eventually { clock.active.count == 1 })
         animator = nil
         clock.fire(1)
         #expect(clock.active.isEmpty)
     }
 
-    /// Le vrai minuteur de l'app, sur la boucle principale : compté sur une seconde de vague, et
+    /// Le vrai minuteur de secours, sur la boucle principale : compté sur une seconde de vague, et
     /// aucun coup quand l'icône est fixe.
     ///
     /// La durée réelle est mesurée plutôt que supposée : un autre test du MainActor peut tourner
     /// dans cette boucle et la prolonger.
     @Test("Avec le vrai minuteur : zéro réveil à l'arrêt, huit par seconde en vague")
     func realTimerWakesOnlyWhileWaving() {
-        let animator = MenuBarGlyphAnimator(clock: RunLoopGlyphFrameClock())
+        let animator = MenuBarGlyphAnimator(clock: RunLoopGlyphFrameClock(), stage: nil)
         animator.follow(.still(.streaming))
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
         #expect(animator.ticks == 0)
 
         animator.follow(.wave)
+        // La tâche qui choisit le minuteur passe au premier tour de boucle.
+        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
         let start = Date()
         RunLoop.main.run(until: start.addingTimeInterval(1.0))
         let elapsed = Date().timeIntervalSince(start)
@@ -414,8 +481,9 @@ struct MenuBarGlyphAnimatorTests {
         #expect(animator.ticks == waved)
     }
 
-    /// Le libellé tel que la barre l'héberge : rendu à intervalles réguliers, il ne change jamais
-    /// quand l'icône est fixe, et change sans cesse pendant la vague.
+    /// Le libellé hébergé hors de toute barre de menus : pas de bouton, donc le minuteur de
+    /// secours. Rendu à intervalles réguliers, il ne change jamais quand l'icône est fixe, et change
+    /// sans cesse pendant la vague.
     @Test("Hébergé, le libellé ne change pas quand il est fixe, et défile pendant la vague")
     func hostedLabelRefreshesOnlyWhileWaving() throws {
         let still = try snapshots(of: MenuBarGlyphLabel(status: .streaming, isAudible: false))
@@ -448,6 +516,106 @@ struct MenuBarGlyphAnimatorTests {
             images.append(Data(try GlyphBitmap(bitmap).alphas))
         }
         return images
+    }
+}
+
+// MARK: - Le calque de la barre de menus
+
+/// Le calque monté sur un vrai bouton AppKit, dans une fenêtre hors écran : pas de barre de menus en
+/// test, mais la même cellule, la même capture et la même animation.
+@Suite("Icône de la barre de menus — la vague jouée par Core Animation")
+struct MenuBarWaveLayerTests {
+    private func button(showing image: NSImage, statusBar: Bool = false) -> (NSWindow, NSButton) {
+        let frame = CGRect(x: 0, y: 0, width: 36, height: 22)
+        let button = statusBar ? NSStatusBarButton(frame: frame) : NSButton(frame: frame)
+        button.isBordered = false
+        button.imagePosition = .imageOnly
+        button.image = image
+        let window = NSWindow(
+            contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView?.addSubview(button)
+        return (window, button)
+    }
+
+    @Test("Douze images de la cellule du bouton, en boucle discrète d'une seconde et demie")
+    func mountsTheLoop() throws {
+        let (window, button) = button(showing: MenuBarGlyphImage.image(for: .streaming))
+        defer { window.contentView = nil }
+        let wave = try #require(MenuBarWaveLayer(button: button))
+        defer { wave.unmount() }
+
+        #expect(wave.layer.superlayer === button.layer)
+        let animation = try #require(
+            wave.layer.animation(forKey: MenuBarWaveLayer.animationKey) as? CAKeyframeAnimation
+        )
+        #expect(animation.calculationMode == .discrete)
+        #expect(animation.duration == BridgeGlyph.Wave.period)
+        #expect(animation.repeatCount == .infinity)
+
+        let images = try #require(animation.values as? [CGImage])
+        let frames = try images.map { image -> [UInt8] in
+            let scale = window.backingScaleFactor
+            #expect(CGFloat(image.width) == wave.layer.bounds.width * scale)
+            #expect(CGFloat(image.height) == wave.layer.bounds.height * scale)
+            return try GlyphBitmap(image).alphas
+        }
+        #expect(frames.count == BridgeGlyph.Wave.frameCount)
+        #expect(Set(frames).count == frames.count, "chaque image diffère")
+        #expect(frames.allSatisfy { $0.contains { $0 > 0 } }, "aucune image vide")
+        // Le glyphe tient dans le cadre que la cellule réserve à l'image.
+        #expect(wave.layer.bounds.size == BridgeGlyph.canvas)
+    }
+
+    @Test("Démonté, le calque quitte le bouton et ne joue plus rien")
+    func unmountRemovesTheLayer() throws {
+        let (window, button) = button(showing: MenuBarGlyphImage.image(for: .streaming))
+        defer { window.contentView = nil }
+        let wave = try #require(MenuBarWaveLayer(button: button))
+        wave.unmount()
+        #expect(wave.layer.superlayer == nil)
+        #expect(wave.layer.animationKeys()?.isEmpty ?? true)
+        #expect(!(button.layer?.sublayers ?? []).contains { $0 === wave.layer })
+    }
+
+    @Test("Libéré sans être démonté, le calque quitte quand même le bouton")
+    func releaseRemovesTheLayer() throws {
+        let (window, button) = button(showing: MenuBarGlyphImage.image(for: .streaming))
+        defer { window.contentView = nil }
+        weak var layer: CALayer?
+        do {
+            let wave = try #require(MenuBarWaveLayer(button: button))
+            layer = wave.layer
+            #expect(layer?.superlayer != nil)
+        }
+        #expect(!(button.layer?.sublayers ?? []).contains { $0 === layer })
+    }
+
+    /// Le bouton se reconnaît à l'image qu'il porte : seulement un bouton de barre de menus, et
+    /// seulement s'il montre l'une des images de l'icône.
+    @Test("La scène trouve le bouton de barre qui montre l'icône, et lui seul")
+    func stageFindsOnlyTheGlyphButton() {
+        let (barWindow, barButton) = button(
+            showing: MenuBarGlyphImage.image(for: .streaming), statusBar: true
+        )
+        let (plainWindow, _) = button(showing: MenuBarGlyphImage.image(for: .streaming))
+        let (otherWindow, _) = button(
+            showing: NSImage(size: BridgeGlyph.canvas), statusBar: true
+        )
+        defer {
+            for window in [barWindow, plainWindow, otherWindow] { window.contentView = nil }
+        }
+        #expect(StatusBarWaveStage.button(in: [plainWindow, otherWindow, barWindow]) === barButton)
+        #expect(StatusBarWaveStage.button(in: [plainWindow, otherWindow]) == nil)
+
+        for image in MenuBarGlyphImage.waveFrames + [MenuBarGlyphImage.spacer] {
+            #expect(MenuBarGlyphImage.isGlyph(image))
+        }
+        for variant in BridgeGlyph.Variant.allCases {
+            #expect(MenuBarGlyphImage.isGlyph(MenuBarGlyphImage.image(for: variant)))
+        }
+        #expect(!MenuBarGlyphImage.isGlyph(NSImage(size: BridgeGlyph.canvas)))
     }
 }
 
