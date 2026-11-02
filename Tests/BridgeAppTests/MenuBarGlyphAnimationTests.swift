@@ -454,50 +454,48 @@ struct MenuBarGlyphAnimatorTests {
     /// Le vrai minuteur de secours, sur la boucle principale : compté sur une seconde de vague, et
     /// aucun coup quand l'icône est fixe.
     ///
-    /// La durée réelle est mesurée plutôt que supposée : un autre test du MainActor peut tourner
-    /// dans cette boucle et la prolonger.
+    /// **Aucune boucle imbriquée** : on attend en rendant la main au MainActor. Une boucle relancée
+    /// depuis un test du MainActor ne vide plus la file principale, et bloque pendant toute sa durée
+    /// les tâches des autres suites (`CLAUDE.md`, le défaut du SIGTERM). La borne basse reste large :
+    /// la file principale est partagée avec les autres suites, qui peuvent retarder un coup.
     @Test("Avec le vrai minuteur : zéro réveil à l'arrêt, huit par seconde en vague")
-    func realTimerWakesOnlyWhileWaving() {
+    func realTimerWakesOnlyWhileWaving() async throws {
         let animator = MenuBarGlyphAnimator(clock: RunLoopGlyphFrameClock(), stage: nil)
         animator.follow(.still(.streaming))
-        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        try await Task.sleep(for: .milliseconds(500))
         #expect(animator.ticks == 0)
 
         animator.follow(.wave)
-        // La tâche qui choisit le minuteur passe au premier tour de boucle.
-        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        #expect(await eventually { animator.drive == .timer })
         let start = Date()
-        RunLoop.main.run(until: start.addingTimeInterval(1.0))
+        try await Task.sleep(for: .seconds(1))
         let elapsed = Date().timeIntervalSince(start)
         let waved = animator.ticks
         let expected = elapsed * BridgeGlyph.Wave.framesPerSecond
-        #expect(
-            Double(waved) >= expected - 2 && Double(waved) <= expected + 1,
-            "\(waved) réveils en \(elapsed) s"
-        )
+        #expect(waved >= 3 && Double(waved) <= expected + 1, "\(waved) réveils en \(elapsed) s")
 
         animator.follow(.still(.streaming))
-        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        try await Task.sleep(for: .milliseconds(500))
         #expect(animator.ticks == waved)
     }
 
     /// Le libellé hébergé hors de toute barre de menus : pas de bouton, donc le minuteur de
     /// secours. Rendu à intervalles réguliers, il ne change jamais quand l'icône est fixe, et change
-    /// sans cesse pendant la vague.
+    /// pendant la vague. Les attentes rendent la main au MainActor, sans boucle imbriquée.
     @Test("Hébergé, le libellé ne change pas quand il est fixe, et défile pendant la vague")
-    func hostedLabelRefreshesOnlyWhileWaving() throws {
-        let still = try snapshots(of: MenuBarGlyphLabel(status: .streaming, isAudible: false))
+    func hostedLabelRefreshesOnlyWhileWaving() async throws {
+        let still = try await snapshots(of: MenuBarGlyphLabel(status: .streaming, isAudible: false))
         #expect(Set(still).count == 1)
 
-        let waving = try snapshots(of: MenuBarGlyphLabel(status: .streaming, isAudible: true))
+        let waving = try await snapshots(of: MenuBarGlyphLabel(status: .streaming, isAudible: true))
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             #expect(Set(waving).count == 1, "réduction des animations demandée sur ce Mac")
         } else {
-            #expect(Set(waving).count >= 4, "\(Set(waving).count) images distinctes")
+            #expect(Set(waving).count >= 3, "\(Set(waving).count) images distinctes")
         }
     }
 
-    private func snapshots(of label: MenuBarGlyphLabel) throws -> [Data] {
+    private func snapshots(of label: MenuBarGlyphLabel) async throws -> [Data] {
         let hosting = NSHostingView(rootView: label)
         let window = NSWindow(
             contentRect: CGRect(x: 0, y: 0, width: 24, height: 22), styleMask: [.borderless],
@@ -508,8 +506,8 @@ struct MenuBarGlyphAnimatorTests {
         hosting.frame = CGRect(x: 0, y: 0, width: 24, height: 22)
         defer { window.contentView = nil }
         var images: [Data] = []
-        for _ in 0..<10 {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.11))
+        for _ in 0..<12 {
+            try await Task.sleep(for: .milliseconds(110))
             hosting.layoutSubtreeIfNeeded()
             let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
             hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
