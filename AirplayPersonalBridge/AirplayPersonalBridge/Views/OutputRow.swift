@@ -87,9 +87,13 @@ struct OutputRow: View {
                 .foregroundStyle(Theme.mutedForeground)
                 .help("Compensation du lieu d'écoute, appliquée d'elle-même. Le curseur s'y ajoute.")
             }
-            if output.supportsBassBoost {
+            if output.supportsToneControl {
                 settingRow(
                     "Basses", value: $output.bassBoostDB, in: BridgeSettings.Limits.bassBoostDB,
+                    format: { String(format: "%+.1f dB", $0) }
+                )
+                settingRow(
+                    "Aigus", value: $output.trebleCutDB, in: BridgeSettings.Limits.trebleCutDB,
                     format: { String(format: "%+.1f dB", $0) }
                 )
             }

@@ -106,7 +106,7 @@ struct MenuBarPanelExport {
                 to: directory.appending(path: "panneau-son-coupe-\(suffix).png")
             )
 
-            // Le tiroir des basses de la Geneva, en diffusion puis décochée : il agit dans les deux cas.
+            // Le tiroir des basses et des aigus de la Geneva, en diffusion puis décochée : il agit dans les deux cas.
             let genevaID = "raop/AABBCCDDEEFF@Geneva"
             try writeHosted(
                 SimulatedGlass(scheme: scheme) {
@@ -116,7 +116,7 @@ struct MenuBarPanelExport {
                         preview: PanelPreviewOptions(openDrawerSpeakerID: genevaID)
                     )
                 }, scheme: scheme,
-                to: directory.appending(path: "panneau-basses-ouvert-\(suffix).png")
+                to: directory.appending(path: "panneau-basses-aigus-ouvert-\(suffix).png")
             )
 
             let unchecked = BridgeState.preview(.idle)
@@ -129,7 +129,7 @@ struct MenuBarPanelExport {
                         preview: PanelPreviewOptions(openDrawerSpeakerID: genevaID)
                     )
                 }, scheme: scheme,
-                to: directory.appending(path: "panneau-basses-decochee-\(suffix).png")
+                to: directory.appending(path: "panneau-basses-aigus-decochee-\(suffix).png")
             )
 
             let mutedWithDrawer = BridgeState.preview(.streaming)
@@ -142,7 +142,7 @@ struct MenuBarPanelExport {
                         preview: PanelPreviewOptions(expandsOptions: true, openDrawerSpeakerID: genevaID)
                     )
                 }, scheme: scheme,
-                to: directory.appending(path: "panneau-son-coupe-basses-options-\(suffix).png")
+                to: directory.appending(path: "panneau-son-coupe-basses-aigus-options-\(suffix).png")
             )
         }
 

@@ -245,6 +245,42 @@ struct BridgeStatePushTests {
         await harness.stopStreaming()
     }
 
+    @Test("Aigus : valeur de départ, puis sur changement seulement, sans toucher aux basses")
+    func trebleCut() async throws {
+        let harness = BridgeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP])
+        let geneva = try #require(harness.output(Devices.genevaID))
+        geneva.bassBoostDB = 6
+        geneva.trebleCutDB = -3
+        await harness.startStreaming(expecting: [Devices.genevaID])
+
+        let sender = try #require(harness.factory.latest(Devices.genevaID))
+        #expect(await sender.startedTreble == -3)
+        #expect(await staysFalse { await sender.pushedTreble.count > 1 })
+
+        geneva.trebleCutDB = -7.5
+        #expect(await eventually { await sender.pushedTreble.last == -7.5 })
+        #expect(await sender.pushedBass == [6])
+        await harness.stopStreaming()
+    }
+
+    @Test("Aigus : une sortie AirPlay 2 n'en reçoit jamais")
+    func trebleCutSkipsAirPlay2() async throws {
+        let harness = BridgeHarness()
+        await harness.discover(airplay2: [Devices.left])
+        let left = try #require(harness.output(Devices.leftID))
+        left.trebleCutDB = -6
+        await harness.startStreaming(expecting: [Devices.leftID])
+        let sender = try #require(harness.factory.latest(Devices.leftID))
+
+        left.trebleCutDB = -9
+        left.trimDB = 1
+        #expect(await eventually { await sender.pushedVolumes.count == 1 })
+        #expect(await sender.pushedTreble.isEmpty)
+        #expect(harness.factory.lastRequest(Devices.leftID)?.trebleCutDB == 0)
+        await harness.stopStreaming()
+    }
+
     @Test("Basses : une sortie AirPlay 2 n'en reçoit jamais")
     func bassBoostSkipsAirPlay2() async throws {
         let harness = BridgeHarness()
