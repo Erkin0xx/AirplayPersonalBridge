@@ -167,6 +167,78 @@ struct AirPlay2SenderSessionTests {
         #expect(await harness.sender.state == .idle)
     }
 
+    // MARK: - Identité du contrôleur
+
+    /// Le défaut relevé sur les HomePod (firmware 27.2) : le volume, le `RECORD` et le `TEARDOWN`
+    /// partaient sans l'identité du `SETUP`, et le HomePod refusait le volume en `403`. Le
+    /// récepteur simulé applique la même règle, si bien que sans le correctif la session échoue dès
+    /// le `SET_PARAMETER`.
+    @Test("Toutes les requêtes de session portent l'identité du SETUP, une fois chacune")
+    func identiteDuControleur() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        try await harness.sender.start(volume: -20)
+        try await harness.sender.setVolume(-10)
+        #expect(await waitUntil { receiver.count(method: "POST", uri: "/feedback") >= 1 })
+        await harness.sender.stop()
+
+        #expect(receiver.forbiddenRequests().isEmpty)
+        let session = receiver.requests(inSession: 0).filter { $0.protocolVersion == "RTSP/1.0" }
+        #expect(
+            Set(session.map(\.method)) == ["SETUP", "SET_PARAMETER", "RECORD", "POST", "TEARDOWN"])
+        let reference = try #require(session.first)
+        let dacp = try #require(reference.headers["dacp-id"])
+        let remote = try #require(reference.headers["active-remote"])
+        for request in session {
+            let label = "\(request.method) \(request.uri)"
+            #expect(request.headers["user-agent"] == "AirPlay/550.10", "\(label)")
+            #expect(request.headers["dacp-id"] == dacp, "\(label)")
+            #expect(request.headers["client-instance"] == dacp, "\(label)")
+            #expect(request.headers["active-remote"] == remote, "\(label)")
+        }
+        // `RTSPClient` ajoute `User-Agent` et `Client-Instance` quand ils manquent : rien ne doit
+        // partir deux fois, pairing compris. Un HomePod ne répond pas à un `SETUP` qui en double un.
+        for request in receiver.requests() {
+            let names = request.headerNames
+            #expect(names.count == Set(names).count, "\(request.method) \(request.uri) : \(names)")
+        }
+    }
+
+    /// La règle elle-même, hors du sender : sans quoi le test précédent pourrait passer à vide.
+    @Test("Le récepteur simulé refuse en 403 une requête qui ne porte pas l'identité du SETUP")
+    func regleDIdentiteDuRecepteur() async throws {
+        var options = FakeAirPlay2Receiver.Options()
+        options.requiresTimingBeforeSetup = false
+        options.eventChannelEnabled = false
+        let receiver = try await makeReceiver(options: options)
+        defer { receiver.stop() }
+        let client = RTSPClient(host: "127.0.0.1", port: receiver.port)
+        try await client.connect()
+
+        let identity = [("DACP-ID", "ABCDEF"), ("Client-Instance", "ABCDEF")]
+        let plist = try PropertyListSerialization.data(
+            fromPropertyList: ["timingPort": 0], format: .binary, options: 0)
+        _ = try await client.send(
+            RTSPRequest(
+                method: "SETUP", uri: "rtsp://127.0.0.1/1",
+                headers: identity + [("Content-Length", String(plist.count))], body: plist))
+
+        // Sans identité, `RTSPClient` pose son propre `Client-Instance` : un autre contrôleur.
+        do {
+            _ = try await client.send(RTSPRequest(method: "RECORD", uri: "rtsp://127.0.0.1/1"))
+            Issue.record("RECORD accepté sous une autre identité")
+        } catch let error as RTSPError {
+            #expect(error.statusCode == 403)
+        }
+        _ = try await client.send(
+            RTSPRequest(method: "RECORD", uri: "rtsp://127.0.0.1/1", headers: identity))
+        #expect(receiver.forbiddenRequests(inSession: 0).map(\.method) == ["RECORD"])
+        await client.disconnect()
+    }
+
     // MARK: - Retransmission
 
     /// Le cœur du point 1 : ce que le récepteur reçoit doit être le paquet d'origine, à l'octet
@@ -844,14 +916,55 @@ struct AirPlay2SenderSessionTests {
         #expect(error.description.contains("--credentials2"))
     }
 
-    @Test("401 et 403 : même marche à suivre")
+    @Test("401, et 403 au pairing : même marche à suivre")
     func erreur401() async throws {
-        for code in [401, 403] {
-            let error = try await startFailure { request, _ in
-                request.method == "SETUP" ? .status(code, "Unauthorized") : .normal
-            }
-            #expect(error == .pairingRequired(receiver: "Récepteur simulé", status: code))
+        let unauthorized = try await startFailure { request, _ in
+            request.method == "SETUP" ? .status(401, "Unauthorized") : .normal
         }
+        #expect(unauthorized == .pairingRequired(receiver: "Récepteur simulé", status: 401))
+
+        let forbidden = try await startFailure { request, _ in
+            request.uri == "/pair-setup" ? .status(403, "Forbidden") : .normal
+        }
+        #expect(forbidden == .pairingRequired(receiver: "Récepteur simulé", status: 403))
+        #expect(forbidden.isPermanent)
+        #expect(forbidden.description.contains("atvremote"))
+    }
+
+    /// Le symptôme relevé sur les HomePod : un `403` au volume, présenté comme un appairage à faire
+    /// avec atvremote, et la sortie abandonnée pour de bon. L'appairage avait pourtant abouti.
+    @Test("403 sur le volume ou le RECORD : accès refusé à cette requête, pas un appairage")
+    func erreur403EnSession() async throws {
+        for step in ["SET_PARAMETER", "RECORD", "SETUP"] {
+            let error = try await startFailure { request, _ in
+                request.method == step ? .status(403, "Forbidden") : .normal
+            }
+            #expect(
+                error == .requestForbidden(receiver: "Récepteur simulé", step: step, reason: "Forbidden"))
+            #expect(!error.isPermanent, "\(step)")
+            #expect(!isPermanentOutputFailure(error), "\(step)")
+            #expect(error.minimumRetryDelay >= .seconds(10))
+            #expect(error.description.contains(step))
+            #expect(error.description.contains("403"))
+            #expect(error.description.contains("refusé l'accès"))
+            #expect(!error.description.contains("atvremote"))
+            #expect(!error.description.contains("--credentials2"))
+        }
+    }
+
+    /// Avec des credentials, un refus au `pair-verify` reste un refus de credentials, et un `403` en
+    /// session reste un accès refusé : l'appairage, lui, a abouti.
+    @Test("Avec des credentials, le 403 se classe de même")
+    func erreur403AvecCredentials() {
+        func failure(_ error: Error) -> AirPlay2SenderError {
+            AirPlay2SenderError(classifying: error, receiver: "R", address: "a", hasCredentials: true)
+        }
+        let verify = failure(AirPlay2PairingSession.Failure.authorizationRequired(status: 403, step: "verify-M1"))
+        #expect(verify == .credentialsRejected(receiver: "R", detail: "réponse 403"))
+        #expect(verify.isPermanent)
+        let session = failure(RTSPError.unexpectedStatus(method: "RECORD", code: 403, reason: ""))
+        #expect(session == .requestForbidden(receiver: "R", step: "RECORD", reason: ""))
+        #expect(!session.isPermanent)
     }
 
     @Test("453 : occupé, et un délai d'attente d'au moins dix secondes")
@@ -964,10 +1077,18 @@ struct AirPlay2SenderSessionTests {
             .receiverRejected(reason, step: "M1")
         }
 
-        for code in [401, 403, 470] {
+        for code in [401, 470] {
             #expect(failure(status(code)).isPermanent)
             #expect(failure(status(code), credentials: true).isPermanent)
         }
+        for code in [401, 403, 470] {
+            let pairing = AirPlay2PairingSession.Failure.authorizationRequired(status: code, step: "M1")
+            #expect(failure(pairing).isPermanent, "\(code)")
+            #expect(failure(pairing, credentials: true).isPermanent, "\(code)")
+        }
+        // Un 403 sur une requête de session : l'appairage a abouti, ce n'est pas lui qui est refusé.
+        #expect(!failure(status(403)).isPermanent)
+        #expect(!failure(status(403), credentials: true).isPermanent)
         #expect(failure(AirPlay2PairingSession.Failure.transientPairingUnsupported(features: 0)).isPermanent)
         #expect(failure(AirPlay2PairingSession.Failure.receiverIdentityMismatch).isPermanent)
         #expect(failure(AirPlay2PairingSession.Failure.receiverSignatureInvalid).isPermanent)

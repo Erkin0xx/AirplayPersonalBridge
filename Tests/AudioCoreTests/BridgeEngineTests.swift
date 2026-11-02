@@ -360,6 +360,12 @@ struct BridgeEngineRetryTests {
         #expect(isPermanentOutputFailure(
             AirPlay2SenderError.pairingRequired(receiver: "x", status: 470)))
         #expect(!isPermanentOutputFailure(AirPlay2SenderError.receiverBusy(receiver: "x")))
+        // Un 403 au pairing refuse l'appairage ; sur une requête de session, il ne refuse que
+        // cette requête, l'appairage ayant abouti.
+        #expect(isPermanentOutputFailure(
+            AirPlay2PairingSession.Failure.authorizationRequired(status: 403, step: "M1")))
+        #expect(!isPermanentOutputFailure(
+            AirPlay2SenderError.requestForbidden(receiver: "x", step: "SET_PARAMETER", reason: "")))
     }
 
     /// Un AAAA arrivé seul dans les 3 s de la résolution, et la sortie était abandonnée pour de bon
