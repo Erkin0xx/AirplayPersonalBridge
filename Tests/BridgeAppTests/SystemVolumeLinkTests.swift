@@ -242,6 +242,26 @@ struct SystemVolumeKeysTests {
         #expect(await staysFalse(during: .milliseconds(150)) { harness.state.masterVolumeDB != 0 })
     }
 
+    /// La tolérance ne vaut que pour ce qui revient du Mac : un geste de l'app plus fin qu'un demi-cran
+    /// doit arriver, sans quoi un glissement fini au maximum laisserait le Mac à 99 %.
+    @Test("Un réglage plus fin que la tolérance atteint quand même le Mac, jusqu'aux bornes")
+    func fineGestureReachesTheMac() async {
+        let system = FakeSystemVolume(
+            FakeSystemVolume.Device(id: 83, name: "Haut-parleurs", volume: 0.995, isMuted: false)
+        )
+        let harness = BridgeHarness(systemVolume: system)
+        harness.state.startFollowingSystemVolume()
+        #expect(abs(harness.state.masterVolumeDB - -0.3) < 1e-4)
+
+        harness.state.masterVolumeDB = 0
+        #expect(await eventually { system.volumeWrites == [1] })
+        harness.state.masterVolumeDB = -0.2
+        #expect(await eventually { system.volumeWrites.count == 2 })
+        #expect(abs(Double(system.volumeWrites[1]) - (1 - 0.2 / 60)) < 1e-6)
+        // L'écho de ces écritures n'a rien déplacé.
+        #expect(await staysFalse(during: .milliseconds(60)) { harness.state.masterVolumeDB != -0.2 })
+    }
+
     /// Comme le bouton du panneau (commit 213cf2c) : le silence n'est qu'une consigne de volume.
     @Test("La touche silence bascule le silence des enceintes, sans arrêt, retrait ni relance")
     func muteKeyKeepsSessions() async throws {

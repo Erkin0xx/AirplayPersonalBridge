@@ -214,10 +214,14 @@ final class SystemVolumeLink {
     // MARK: - De l'app vers le Mac
 
     /// Le master a bougé dans l'app : le Mac suit, au prochain tour.
+    ///
+    /// Comparé à la valeur connue sans la tolérance, qui ne vaut que pour ce qui revient du Mac : un
+    /// glissement qui finit à moins d'un demi-cran de la dernière écriture doit quand même arriver, sans
+    /// quoi le Mac resterait à 99 % quand le master est au maximum. Le débit, lui, reste borné.
     func appDidChange(masterDB: Double) {
         guard isObserving, !isApplying, device != nil, let known = knownScalar else { return }
         let scalar = Self.scalar(forMasterDB: masterDB)
-        pendingScalar = Self.matches(scalar, known) ? nil : scalar
+        pendingScalar = abs(scalar - known) < 1e-9 ? nil : scalar
         if pendingScalar != nil { scheduleFlush() }
     }
 
