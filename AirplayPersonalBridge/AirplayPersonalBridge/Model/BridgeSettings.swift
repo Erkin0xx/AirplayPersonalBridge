@@ -36,9 +36,16 @@ struct BridgeSettings: Codable, Equatable {
         /// Pour montrer une sortie cochée avant que la découverte l'ait revue. Facultatif : à
         /// défaut, le nom se lit dans l'identifiant.
         var displayName: String?
+        /// Silence de cette seule enceinte (`OutputState.isMuted`). Absent d'un fichier ancien : non
+        /// coupée.
+        var isMuted = false
+        /// `tsid` de la paire stéréo, pour grouper les volumes d'une paire avant que la découverte
+        /// l'ait revue (`VolumeGroups`). Facultatif, comme le nom.
+        var tightSyncIdentifier: String?
 
         private enum CodingKeys: String, CodingKey {
             case isEnabled, trimDB, delayMS, bassBoostDB, trebleCutDB, displayName
+            case isMuted, tightSyncIdentifier
         }
 
         init(
@@ -62,6 +69,8 @@ struct BridgeSettings: Codable, Equatable {
             bassBoostDB = fields.value(.bassBoostDB, default: 0).clamped(to: Limits.bassBoostDB)
             trebleCutDB = fields.value(.trebleCutDB, default: 0).clamped(to: Limits.trebleCutDB)
             displayName = fields.value(.displayName, default: nil)
+            isMuted = fields.value(.isMuted, default: false)
+            tightSyncIdentifier = fields.value(.tightSyncIdentifier, default: nil)
         }
     }
 

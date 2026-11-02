@@ -179,7 +179,15 @@ struct PanelSpeakerRow: View {
                 }
                 .frame(height: Self.nameLineHeight)
                 if output.isEnabled {
-                    volume.transition(.opacity)
+                    // Le silence de l'enceinte au bout de son curseur, dans la colonne du chevron s'il
+                    // y en a une, sinon sous le témoin : les boutons restent l'un sous l'autre.
+                    HStack(spacing: 6) {
+                        volume
+                        PanelSpeakerMuteButton(
+                            output: output, width: reservesDrawerColumn ? Self.drawerColumn : 16
+                        )
+                    }
+                    .transition(.opacity)
                 }
                 if let message = output.panelMessage {
                     PanelStatusMessage(text: message.text, tone: message.tone, isMuted: output.isInRetreat)
@@ -254,6 +262,7 @@ struct PanelSpeakerRow: View {
 
     private var accessibilityStateValue: String {
         var parts = [output.isEnabled ? "cochée" : "décochée"]
+        if let muted = PanelSpeakerMute.rowStateWord(for: output) { parts.append(muted) }
         switch output.connection {
         case .streaming: parts.append("en diffusion")
         case .connecting: parts.append("connexion en cours")
@@ -322,7 +331,7 @@ struct PanelSpeakerRow: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.red)
                 .accessibilityHidden(true)
-        case .streaming where output.isEnabled && isAudible:
+        case .streaming where output.isEnabled && isAudible && !output.isMuted:
             // Elle reçoit, et un son passe : le seul cas où l'indicateur a le droit de bouger.
             Image(systemName: "waveform")
                 .font(.system(size: 12, weight: .semibold))
@@ -359,7 +368,11 @@ struct PanelSpeakerRow: View {
         .labelsHidden()
         .controlSize(.mini)
         .tint(.secondary)
-        .help("Volume de cette enceinte, en plus du volume master")
+        // Coupée, l'enceinte reste dans la diffusion : son curseur reste là, grisé. Le curseur mini est
+        // déjà gris au repos : l'opacité rend l'état lisible d'un coup d'œil.
+        .disabled(output.isMuted)
+        .opacity(output.isMuted ? PanelSpeakerMute.mutedSliderOpacity : 1)
+        .help(PanelSpeakerMute.sliderHelp(for: output))
         .accessibilityValue(PanelFormat.decibels(output.trimDB, fractionDigits: 1, signed: true))
     }
 }

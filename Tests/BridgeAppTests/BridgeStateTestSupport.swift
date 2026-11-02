@@ -135,6 +135,10 @@ actor StubSender: OutputSender {
     nonisolated let context: OutputSenderContext
 
     private(set) var state = OutputSenderState.idle
+    /// Niveaux reçus par `setOutputLevel`, celui d'avant `start` compris : le moteur le règle
+    /// toujours juste avant.
+    private(set) var pushedLevels: [OutputLevel] = []
+    private(set) var startedLevel: OutputLevel?
     private(set) var startedVolume: Float?
     private(set) var startedDelay: TimeInterval?
     private(set) var startedBass: Float?
@@ -164,6 +168,7 @@ actor StubSender: OutputSender {
 
     func start(volume: Float) async throws {
         startedVolume = volume
+        startedLevel = pushedLevels.last
         startedDelay = synchronizer.manualOffsetSeconds
         startedBass = pushedBass.last
         startedTreble = pushedTreble.last
@@ -187,6 +192,7 @@ actor StubSender: OutputSender {
     }
 
     func setVolume(_ volume: Float) async throws { pushedVolumes.append(volume) }
+    func setOutputLevel(_ level: OutputLevel) { pushedLevels.append(level) }
     /// Le moteur règle le délai juste avant `start` : seul ce qui suit est une poussée.
     func setManualDelay(seconds: TimeInterval) {
         if startedVolume != nil { pushedDelays.append(seconds) }

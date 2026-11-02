@@ -140,6 +140,9 @@ public actor BridgeEngine {
         /// ses sorties, seule la ligne de commande demande une partie du nom.
         public let nameMatching: ReceiverNameMatching
         public var volumeDB: Float
+        /// Gain numérique et silence propres à cette sortie (``OutputGainStage``), les deux
+        /// protocoles confondus. `unity` par défaut : l'étage est contourné.
+        public var outputLevel: OutputLevel
         public var manualDelaySeconds: TimeInterval
         /// Renfort de basses, en dB (ADR-002). Ignoré hors RAOP : le CDC ne le prévoit que pour la
         /// Geneva, les HomePod gardant une pleine bande intacte.
@@ -156,6 +159,7 @@ public actor BridgeEngine {
             deviceName: String,
             nameMatching: ReceiverNameMatching = .exact,
             volumeDB: Float,
+            outputLevel: OutputLevel = .unity,
             manualDelaySeconds: TimeInterval = 0,
             bassBoostDB: Float = 0,
             trebleCutDB: Float = 0,
@@ -166,6 +170,7 @@ public actor BridgeEngine {
             self.deviceName = deviceName
             self.nameMatching = nameMatching
             self.volumeDB = volumeDB
+            self.outputLevel = outputLevel
             self.manualDelaySeconds = manualDelaySeconds
             self.bassBoostDB = bassBoostDB
             self.trebleCutDB = trebleCutDB
@@ -779,6 +784,7 @@ public actor BridgeEngine {
                     await created.setBassBoost(decibels: request.bassBoostDB)
                     await created.setTrebleCut(decibels: request.trebleCutDB)
                 }
+                await created.setOutputLevel(request.outputLevel)
                 try await Self.startSender(created, volume: request.volumeDB)
                 // Un `start` qui aboutit malgré l'annulation laisse une session ouverte : le
                 // `catch` ci-dessous la referme.
@@ -900,6 +906,10 @@ public actor BridgeEngine {
         if latest.manualDelaySeconds != request.manualDelaySeconds {
             await sender.setManualDelay(seconds: latest.manualDelaySeconds)
         }
+        // Le niveau propre (`setOutputLevel`), rattrapé comme le reste.
+        if latest.outputLevel != request.outputLevel {
+            await sender.setOutputLevel(latest.outputLevel)
+        }
         if latest.volumeDB != request.volumeDB {
             do { try await sender.setVolume(latest.volumeDB) } catch {
                 log.error("Volume refusé par la sortie \(id, privacy: .public) : \(error)")
@@ -961,6 +971,19 @@ public actor BridgeEngine {
         } catch {
             log.error("Volume refusé par la sortie \(id, privacy: .public) : \(error)")
         }
+    }
+
+    /// Pousse un gain numérique et un silence à une sortie, sans rupture de flux ni de session.
+    ///
+    /// Les deux protocoles : c'est ce qui donne à chaque membre d'une paire stéréo son propre niveau,
+    /// et ce qui en coupe un sans couper l'autre, leur volume AirPlay étant commun. Comme le volume,
+    /// une valeur poussée pendant la négociation est appliquée à la connexion, et le sender suivant
+    /// repart de la dernière consigne.
+    public func setOutputLevel(_ level: OutputLevel, for id: String) async {
+        guard entries[id] != nil else { return }
+        entries[id]?.request.outputLevel = level
+        guard let sender = entries[id]?.sender else { return }
+        await sender.setOutputLevel(level)
     }
 
     /// Pousse un décalage manuel à une sortie.

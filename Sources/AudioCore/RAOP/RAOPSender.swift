@@ -159,6 +159,8 @@ public actor RAOPSender {
     private var pendingSamples: [Int16] = []
     /// Tampon de lecture du ring buffer, alloué une fois.
     private var readScratch: [Float]
+    /// Gain numérique et silence de cette sortie (``OutputGainStage``), en bout de chaîne DSP.
+    private var outputGain: OutputGainStage
 
     private var counters = RAOPStatistics()
 
@@ -212,6 +214,10 @@ public actor RAOPSender {
             sampleRate: captureFormat.sampleRate,
             channelCount: Int(captureFormat.channelCount)
         )
+        self.outputGain = OutputGainStage(
+            sampleRate: captureFormat.sampleRate,
+            channelCount: Int(captureFormat.channelCount)
+        )
         let effectiveClock =
             clock ?? SharedPlaybackClock(captureSampleRate: captureFormat.sampleRate)
         (effectiveClock as? SharedPlaybackClock)?.startIfNeeded()
@@ -255,6 +261,14 @@ public actor RAOPSender {
     /// Voir ``simulatedLossInterval``. Interne : uniquement accessible aux tests.
     func simulateLoss(everyNthPacket interval: Int) {
         simulatedLossInterval = interval
+    }
+
+    /// Gain numérique et silence de cette sortie (``OutputGainStage``), en bout de chaîne DSP.
+    ///
+    /// Applicable à tout moment, conservé d'une reconnexion à l'autre, et sans effet sur la
+    /// session : le flux continue de partir, silence compris. Le changement glisse sans clic.
+    public func setOutputLevel(_ level: OutputLevel) {
+        outputGain.setLevel(level)
     }
 
     /// Négociation en cours ou dernière en date. Interne : uniquement lu par les tests, pour
@@ -320,6 +334,8 @@ public actor RAOPSender {
             log.info("Arriéré de \(staleFrames) trames écarté avant le début de la diffusion")
         }
         pendingSamples.removeAll(keepingCapacity: true)
+        // La reprise part de la consigne de niveau, sans glissement : rien n'est plus à fondre.
+        outputGain.reset()
         // Rien de ce qui a précédé ne sera plus joué : ni la queue du filtre, ni les paquets de
         // la session d'avant. La numérotation continuant d'une session à l'autre, un paquet resté
         // dans l'historique répondrait à une demande sur un numéro qui n'est plus le sien.
@@ -917,6 +933,9 @@ public actor RAOPSender {
                 // avant le rééchantillonnage. Avant la conversion en 16 bits, où un dépassement serait
                 // déjà un écrêtage. Sans effet à 0 dB / 0 dB.
                 toneControl.process(base, frameCount: read)
+                // En bout de chaîne DSP, comme le volume du récepteur (``OutputGainStage``).
+                // Contourné au bit près à 0 dB hors silence.
+                outputGain.process(base, frameCount: read)
                 return try resampler.convert(base, frameCount: read)
             }
             guard !converted.isEmpty else { break }
