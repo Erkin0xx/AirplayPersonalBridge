@@ -167,6 +167,248 @@ struct AirPlay2SenderSessionTests {
         #expect(await harness.sender.state == .idle)
     }
 
+    // MARK: - Identité du contrôleur
+
+    /// Le défaut relevé sur les HomePod (firmware 27.2) : le volume, le `RECORD` et le `TEARDOWN`
+    /// partaient sans l'identité du `SETUP`, et le HomePod refusait le volume en `403`. Le
+    /// récepteur simulé applique la même règle, si bien que sans le correctif la session échoue dès
+    /// le `SET_PARAMETER`.
+    @Test("Toutes les requêtes de session portent l'identité du SETUP, une fois chacune")
+    func identiteDuControleur() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        try await harness.sender.start(volume: -20)
+        try await harness.sender.setVolume(-10)
+        #expect(await waitUntil { receiver.count(method: "POST", uri: "/feedback") >= 1 })
+        await harness.sender.stop()
+
+        #expect(receiver.forbiddenRequests().isEmpty)
+        let session = receiver.requests(inSession: 0).filter { $0.protocolVersion == "RTSP/1.0" }
+        #expect(
+            Set(session.map(\.method)) == ["SETUP", "SET_PARAMETER", "RECORD", "POST", "TEARDOWN"])
+        let reference = try #require(session.first)
+        let dacp = try #require(reference.headers["dacp-id"])
+        let remote = try #require(reference.headers["active-remote"])
+        for request in session {
+            let label = "\(request.method) \(request.uri)"
+            #expect(request.headers["user-agent"] == "AirPlay/550.10", "\(label)")
+            #expect(request.headers["dacp-id"] == dacp, "\(label)")
+            #expect(request.headers["client-instance"] == dacp, "\(label)")
+            #expect(request.headers["active-remote"] == remote, "\(label)")
+        }
+        // `RTSPClient` ajoute `User-Agent` et `Client-Instance` quand ils manquent : rien ne doit
+        // partir deux fois, pairing compris. Un HomePod ne répond pas à un `SETUP` qui en double un.
+        for request in receiver.requests() {
+            let names = request.headerNames
+            #expect(names.count == Set(names).count, "\(request.method) \(request.uri) : \(names)")
+        }
+    }
+
+    /// La règle elle-même, hors du sender : sans quoi le test précédent pourrait passer à vide.
+    @Test("Le récepteur simulé refuse en 403 une requête qui ne porte pas l'identité du SETUP")
+    func regleDIdentiteDuRecepteur() async throws {
+        var options = FakeAirPlay2Receiver.Options()
+        options.requiresTimingBeforeSetup = false
+        options.eventChannelEnabled = false
+        let receiver = try await makeReceiver(options: options)
+        defer { receiver.stop() }
+        let client = RTSPClient(host: "127.0.0.1", port: receiver.port)
+        try await client.connect()
+
+        let identity = [("DACP-ID", "ABCDEF"), ("Client-Instance", "ABCDEF")]
+        let plist = try PropertyListSerialization.data(
+            fromPropertyList: ["timingPort": 0], format: .binary, options: 0)
+        _ = try await client.send(
+            RTSPRequest(
+                method: "SETUP", uri: "rtsp://127.0.0.1/1",
+                headers: identity + [("Content-Length", String(plist.count))], body: plist))
+
+        // Sans identité, `RTSPClient` pose son propre `Client-Instance` : un autre contrôleur.
+        do {
+            _ = try await client.send(RTSPRequest(method: "RECORD", uri: "rtsp://127.0.0.1/1"))
+            Issue.record("RECORD accepté sous une autre identité")
+        } catch let error as RTSPError {
+            #expect(error.statusCode == 403)
+        }
+        _ = try await client.send(
+            RTSPRequest(method: "RECORD", uri: "rtsp://127.0.0.1/1", headers: identity))
+        #expect(receiver.forbiddenRequests(inSession: 0).map(\.method) == ["RECORD"])
+        await client.disconnect()
+    }
+
+    // MARK: - Fermeture du récepteur en début de session
+
+    /// Ferme la première connexion de contrôle juste après la réponse à `method` — `occurrence` 1
+    /// d'un `SETUP` est celui du flux, l'URI de session changeant à chaque connexion.
+    private func closingOnce(
+        after method: String, occurrence wanted: Int = 0, every: Bool = false
+    ) -> @Sendable (FakeAirPlay2Receiver.Request, Int) -> FakeAirPlay2Receiver.Action {
+        let closed = LockedFlag()
+        return { request, occurrence in
+            guard request.method == method, occurrence == wanted, every || !closed.value else {
+                return .normal
+            }
+            closed.set()
+            return .respondThenClose
+        }
+    }
+
+    /// Le défaut relevé sur les HomePod : la première connexion après une session terminée reçoit
+    /// un `FIN` dans la milliseconde qui suit la réponse au `SETUP` du flux. Le moteur relançait 7 s
+    /// plus tard ; le sender renégocie lui-même, aussitôt.
+    @Test("Une fermeture juste après le SETUP du flux est rattrapée aussitôt, dans start()")
+    func fermetureApresSetupFlux() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        receiver.script = closingOnce(after: "SETUP", occurrence: 1)
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        // `start()` aboutit : la relance a eu lieu en lui, sans repasser par le moteur.
+        try await harness.sender.start(volume: -20)
+        let finished = ContinuousClock.now
+
+        #expect(await harness.sender.state == .streaming)
+        #expect(receiver.sessionCount == 2)
+        // Le délai qui compte est celui de la relance, du FIN à la connexion suivante : 500 ms, là où
+        // le moteur attendait au moins 2 s plus la résolution. La durée totale de `start()` ajoute
+        // deux pair-setup SRP, de 0,1 à 4 s chacun en debug sur une machine chargée ; depuis le FIN,
+        // il n'en reste qu'un.
+        let closed = try #require(receiver.closedAt(session: 0))
+        let reopened = try #require(receiver.acceptedAt(session: 1))
+        #expect(reopened - closed >= .milliseconds(450))
+        #expect(reopened - closed < .milliseconds(1_200), "\(reopened - closed)")
+        #expect(finished - closed < .seconds(2), "\(finished - closed)")
+        #expect(await waitUntil { receiver.audioPackets(inSession: 1).count >= 5 })
+        #expect(receiver.volumes(inSession: 1) == ["volume: -20.0\r\n"])
+        // Pair-setup refait : une nouvelle connexion, une négociation complète.
+        #expect(receiver.requests(inSession: 1).filter { $0.uri == "/pair-setup" }.count == 2)
+        let statistics = await harness.sender.statistics
+        #expect(statistics.earlyCloseRenegotiations == 1)
+        // Aucune session n'avait tenu : ce n'est pas une reconnexion.
+        #expect(statistics.reconnections == 0)
+        #expect(statistics.lastFailure == nil)
+        #expect(await harness.sender.currentOutputStatistics().earlyCloseRenegotiations == 1)
+        await harness.sender.stop()
+    }
+
+    /// L'autre forme du même défaut, une fois sur trois : le `FIN` suit de 6 à 200 ms un `RECORD`
+    /// accepté. La supervision attendait 2 s avant de reconnecter.
+    @Test("Une fermeture juste après le RECORD est rattrapée aussitôt, par la supervision")
+    func fermetureApresRecord() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        receiver.script = closingOnce(after: "RECORD")
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        try await harness.sender.start(volume: -20)
+        #expect(
+            await waitUntil(timeout: .milliseconds(1_500)) {
+                receiver.audioPackets(inSession: 1).count >= 5
+            })
+        #expect(await harness.sender.state == .streaming)
+        #expect(receiver.sessionCount == 2)
+        let statistics = await harness.sender.statistics
+        #expect(statistics.earlyCloseRenegotiations == 1)
+        #expect(statistics.reconnections == 1)
+        await harness.sender.stop()
+    }
+
+    /// Passé la première seconde, une fermeture est une perte ordinaire : le repli d'avant, pas de
+    /// relance rapide. Sans cette borne, la parade masquerait de vraies pertes en régime établi.
+    @Test("Une fermeture en régime établi garde le repli ordinaire")
+    func fermetureEnRegimeEtabli() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        await harness.sender.setKeepAlivePolicy(.init(interval: .milliseconds(100)))
+        try await harness.sender.start(volume: -20)
+        try await Task.sleep(for: .milliseconds(1_200))
+        receiver.dropControlConnection(inSession: 0)
+
+        // Le repli ordinaire attend au moins 2 s : rien dans la seconde.
+        try await Task.sleep(for: .seconds(1))
+        #expect(receiver.sessionCount == 1)
+        #expect(await waitUntil { receiver.audioPackets(inSession: 1).count >= 5 })
+        let statistics = await harness.sender.statistics
+        #expect(statistics.earlyCloseRenegotiations == 0)
+        #expect(statistics.reconnections == 1)
+        await harness.sender.stop()
+    }
+
+    /// Une session née d'une relance rapide qui tombe à son tour aussitôt ne vaut pas une seconde
+    /// relance rapide : le repli ordinaire reprend.
+    @Test("Une session née d'une relance rapide n'en obtient pas une seconde")
+    func pasDeSecondeRelanceRapide() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        receiver.script = closingOnce(after: "SETUP", occurrence: 1)
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        try await harness.sender.start(volume: -20)
+        #expect(await harness.sender.statistics.earlyCloseRenegotiations == 1)
+        // La session de la relance tombe à son tour, juste après le `RECORD`.
+        receiver.dropControlConnection(inSession: 1)
+
+        try await Task.sleep(for: .seconds(1))
+        #expect(receiver.sessionCount == 2)
+        #expect(await waitUntil { receiver.audioPackets(inSession: 2).count >= 5 })
+        let statistics = await harness.sender.statistics
+        #expect(statistics.earlyCloseRenegotiations == 1)
+        #expect(statistics.reconnections == 1)
+        await harness.sender.stop()
+    }
+
+    /// Une seule relance rapide : un récepteur qui ferme à chaque fois retombe sur le comportement
+    /// d'avant, l'échec rendu au moteur.
+    @Test("La relance rapide est unique, puis l'échec est rendu au moteur")
+    func relanceRapideBornee() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        receiver.script = closingOnce(after: "SETUP", occurrence: 1, every: true)
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        await #expect(throws: AirPlay2SenderError.connectionLost(receiver: "Récepteur simulé")) {
+            try await harness.sender.start(volume: -20)
+        }
+        #expect(receiver.sessionCount == 2)
+        #expect(await harness.sender.state == .failed)
+        #expect(await harness.sender.statistics.earlyCloseRenegotiations == 1)
+    }
+
+    /// `stop()` pendant l'attente de la relance : rien ne doit repartir, et `start()` rend la main.
+    @Test("stop() pendant la relance rapide rend la main aussitôt")
+    func stopPendantRelanceRapide() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        receiver.script = closingOnce(after: "SETUP", occurrence: 1)
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        let sender = harness.sender
+        let task = Task { try await sender.start(volume: -20) }
+        // La première connexion est fermée et la seconde pas encore ouverte : la relance attend.
+        // Le compteur avance juste avant l'attente, sans suspension entre les deux.
+        #expect(await waitUntil { await sender.statistics.earlyCloseRenegotiations == 1 })
+        #expect(receiver.sessionCount == 1)
+        let start = ContinuousClock.now
+        await sender.stop()
+        let result = await task.result
+        #expect(ContinuousClock.now - start < .milliseconds(400))
+        #expect(throws: CancellationError.self) { try result.get() }
+        #expect(await sender.state == .idle)
+        try await Task.sleep(for: .milliseconds(700))
+        #expect(receiver.sessionCount == 1)
+    }
+
     // MARK: - Retransmission
 
     /// Le cœur du point 1 : ce que le récepteur reçoit doit être le paquet d'origine, à l'octet
@@ -844,14 +1086,55 @@ struct AirPlay2SenderSessionTests {
         #expect(error.description.contains("--credentials2"))
     }
 
-    @Test("401 et 403 : même marche à suivre")
+    @Test("401, et 403 au pairing : même marche à suivre")
     func erreur401() async throws {
-        for code in [401, 403] {
-            let error = try await startFailure { request, _ in
-                request.method == "SETUP" ? .status(code, "Unauthorized") : .normal
-            }
-            #expect(error == .pairingRequired(receiver: "Récepteur simulé", status: code))
+        let unauthorized = try await startFailure { request, _ in
+            request.method == "SETUP" ? .status(401, "Unauthorized") : .normal
         }
+        #expect(unauthorized == .pairingRequired(receiver: "Récepteur simulé", status: 401))
+
+        let forbidden = try await startFailure { request, _ in
+            request.uri == "/pair-setup" ? .status(403, "Forbidden") : .normal
+        }
+        #expect(forbidden == .pairingRequired(receiver: "Récepteur simulé", status: 403))
+        #expect(forbidden.isPermanent)
+        #expect(forbidden.description.contains("atvremote"))
+    }
+
+    /// Le symptôme relevé sur les HomePod : un `403` au volume, présenté comme un appairage à faire
+    /// avec atvremote, et la sortie abandonnée pour de bon. L'appairage avait pourtant abouti.
+    @Test("403 sur le volume ou le RECORD : accès refusé à cette requête, pas un appairage")
+    func erreur403EnSession() async throws {
+        for step in ["SET_PARAMETER", "RECORD", "SETUP"] {
+            let error = try await startFailure { request, _ in
+                request.method == step ? .status(403, "Forbidden") : .normal
+            }
+            #expect(
+                error == .requestForbidden(receiver: "Récepteur simulé", step: step, reason: "Forbidden"))
+            #expect(!error.isPermanent, "\(step)")
+            #expect(!isPermanentOutputFailure(error), "\(step)")
+            #expect(error.minimumRetryDelay >= .seconds(10))
+            #expect(error.description.contains(step))
+            #expect(error.description.contains("403"))
+            #expect(error.description.contains("refusé l'accès"))
+            #expect(!error.description.contains("atvremote"))
+            #expect(!error.description.contains("--credentials2"))
+        }
+    }
+
+    /// Avec des credentials, un refus au `pair-verify` reste un refus de credentials, et un `403` en
+    /// session reste un accès refusé : l'appairage, lui, a abouti.
+    @Test("Avec des credentials, le 403 se classe de même")
+    func erreur403AvecCredentials() {
+        func failure(_ error: Error) -> AirPlay2SenderError {
+            AirPlay2SenderError(classifying: error, receiver: "R", address: "a", hasCredentials: true)
+        }
+        let verify = failure(AirPlay2PairingSession.Failure.authorizationRequired(status: 403, step: "verify-M1"))
+        #expect(verify == .credentialsRejected(receiver: "R", detail: "réponse 403"))
+        #expect(verify.isPermanent)
+        let session = failure(RTSPError.unexpectedStatus(method: "RECORD", code: 403, reason: ""))
+        #expect(session == .requestForbidden(receiver: "R", step: "RECORD", reason: ""))
+        #expect(!session.isPermanent)
     }
 
     @Test("453 : occupé, et un délai d'attente d'au moins dix secondes")
@@ -964,10 +1247,18 @@ struct AirPlay2SenderSessionTests {
             .receiverRejected(reason, step: "M1")
         }
 
-        for code in [401, 403, 470] {
+        for code in [401, 470] {
             #expect(failure(status(code)).isPermanent)
             #expect(failure(status(code), credentials: true).isPermanent)
         }
+        for code in [401, 403, 470] {
+            let pairing = AirPlay2PairingSession.Failure.authorizationRequired(status: code, step: "M1")
+            #expect(failure(pairing).isPermanent, "\(code)")
+            #expect(failure(pairing, credentials: true).isPermanent, "\(code)")
+        }
+        // Un 403 sur une requête de session : l'appairage a abouti, ce n'est pas lui qui est refusé.
+        #expect(!failure(status(403)).isPermanent)
+        #expect(!failure(status(403), credentials: true).isPermanent)
         #expect(failure(AirPlay2PairingSession.Failure.transientPairingUnsupported(features: 0)).isPermanent)
         #expect(failure(AirPlay2PairingSession.Failure.receiverIdentityMismatch).isPermanent)
         #expect(failure(AirPlay2PairingSession.Failure.receiverSignatureInvalid).isPermanent)

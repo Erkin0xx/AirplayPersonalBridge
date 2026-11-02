@@ -67,6 +67,11 @@ public actor AirPlay2Sender {
     /// reconnexion le plus court. En deçà, le délai continue de croître, pour qu'un récepteur qui
     /// accepte puis coupe aussitôt ne parte pas en boucle serrée.
     private static let stableSessionDuration: Duration = .seconds(30)
+    /// Délai après le `RECORD` en deçà duquel une fermeture par le récepteur relève du défaut de
+    /// début de session relevé sur les HomePod, et non d'une perte en régime établi.
+    private static let earlyCloseWindow: Duration = .seconds(1)
+    /// Attente avant la nouvelle négociation qui suit une fermeture en début de session.
+    private static let earlyCloseRetryDelay: Duration = .milliseconds(500)
 
     public private(set) var state: AirPlay2SenderState = .idle
 
@@ -118,6 +123,29 @@ public actor AirPlay2Sender {
     private var sessionGeneration = 0
     /// `stop()` appelé pendant que `start()` négocie.
     private var stopRequestedDuringStart = false
+
+    /// Ce qui a condamné la session courante, et quand. Seul le premier signal compte.
+    enum SessionLossCause: Sendable {
+        /// La connexion RTSP s'est fermée de l'autre côté (FIN ou RST), ou elle est rompue.
+        case controlConnectionClosed
+        case eventChannelClosed
+        case keepAliveFailed
+        case sendErrors
+        case other
+    }
+    private var lossCause: SessionLossCause?
+    private var lossInstant: ContinuousClock.Instant?
+    /// Jalons de la négociation courante, pour reconnaître une fermeture en début de session
+    /// (``isEarlyReceiverClosure(_:)``).
+    private var streamSetupAccepted = false
+    private var recordAcceptedAt: ContinuousClock.Instant?
+    /// Le récepteur a montré qu'il consommait le flux : une demande de retransmission, un événement.
+    private var receiverEngaged = false
+    /// La session courante est née d'une relance rapide : si elle tombe à son tour en début de
+    /// session, on revient au comportement ordinaire plutôt que d'en enchaîner une autre.
+    private var sessionFromQuickRetry = false
+    /// Attente de la relance rapide, que `stop()` interrompt.
+    private var quickRetryDelay: Task<Void, Never>?
     /// Paquets émis, pour répondre aux demandes de retransmission.
     private let retransmitter = AirPlay2Retransmitter()
     /// Maintien de session (`POST /feedback`).
@@ -198,6 +226,9 @@ public actor AirPlay2Sender {
 
     /// Établit la session (pairing compris) et démarre la diffusion.
     ///
+    /// Un récepteur qui ferme la connexion juste après le `SETUP` du flux vaut **une** nouvelle
+    /// négociation immédiate, avant de rendre l'échec : voir ``isEarlyReceiverClosure(_:)``.
+    ///
     /// - Throws: un ``AirPlay2SenderError`` dont la description est faite pour l'affichage, ou
     ///   `CancellationError` si la tâche a été annulée ou `stop()` appelé entre-temps.
     public func start(volume: Float = -20) async throws {
@@ -206,22 +237,37 @@ public actor AirPlay2Sender {
         currentVolume = volume
         stopRequestedDuringStart = false
 
-        do {
-            try await negotiateCancellably(volume: volume)
-        } catch {
-            await teardown()
-            if Task.isCancelled || stopRequestedDuringStart {
-                state = .idle
-                throw CancellationError()
+        var quickRetryUsed = false
+        while true {
+            do {
+                try await negotiateCancellably(volume: volume)
+                break
+            } catch {
+                let earlyClosure = isEarlyReceiverClosure(error)
+                await teardown()
+                if Task.isCancelled || stopRequestedDuringStart {
+                    state = .idle
+                    throw CancellationError()
+                }
+                if earlyClosure, !quickRetryUsed {
+                    quickRetryUsed = true
+                    let waited = await waitBeforeQuickRenegotiation()
+                    guard waited, !stopRequestedDuringStart else {
+                        state = .idle
+                        throw CancellationError()
+                    }
+                    continue
+                }
+                state = .failed
+                log.error(
+                    "Établissement de la session AirPlay 2 en échec : \(String(describing: error), privacy: .public)"
+                )
+                let failure = readable(error)
+                statistics.lastFailure = failure.description
+                throw failure
             }
-            state = .failed
-            log.error(
-                "Établissement de la session AirPlay 2 en échec : \(String(describing: error), privacy: .public)"
-            )
-            let failure = readable(error)
-            statistics.lastFailure = failure.description
-            throw failure
         }
+        sessionFromQuickRetry = quickRetryUsed
         // L'arrêt a pu tomber juste après le dernier échange de la négociation.
         if Task.isCancelled || stopRequestedDuringStart {
             await teardown()
@@ -274,6 +320,9 @@ public actor AirPlay2Sender {
             let sessionStart = ContinuousClock.now
             await streamLoop()
             guard !Task.isCancelled, sessionLost else { return }
+            // Une fermeture du récepteur dans la seconde qui suit le `RECORD` vaut une relance
+            // immédiate, une seule : celle d'une session déjà née d'une relance rapide n'y a pas droit.
+            let earlyClosure = !sessionFromQuickRetry && isEarlyReceiverClosure(nil)
 
             // Sans reconnexion, l'état doit le dire : rester en `.streaming` sur une session
             // morte ferait croire à une sortie qui joue.
@@ -302,11 +351,20 @@ public actor AirPlay2Sender {
 
             var reconnected = false
             var failedAttempts = 0
+            // Seule la première tentative peut être rapide ; les suivantes reprennent le repli.
+            var quickAttempt = earlyClosure
             while !Task.isCancelled && !reconnected {
+                let isQuick = quickAttempt
+                quickAttempt = false
                 do {
-                    try await Task.sleep(for: backoff)
+                    if isQuick {
+                        guard await waitBeforeQuickRenegotiation() else { return }
+                    } else {
+                        try await Task.sleep(for: backoff)
+                    }
                     try await negotiateCancellably(volume: currentVolume)
                     reconnected = true
+                    sessionFromQuickRetry = isQuick
                 } catch {
                     // `stop()` ferme lui-même : refermer ici pourrait atteindre la session
                     // d'un `start()` suivant.
@@ -334,6 +392,64 @@ public actor AirPlay2Sender {
             state = .streaming
             log.info("Session AirPlay 2 rétablie")
         }
+    }
+
+    // MARK: - Fermeture du récepteur en début de session
+
+    /// Le récepteur vient-il de fermer la connexion de contrôle en tout début de session ?
+    ///
+    /// ## Le défaut, relevé sur les HomePod (firmware 27.2)
+    ///
+    /// Le premier essai qui suit une session terminée par notre `TEARDOWN` échoue de façon
+    /// reproductible : le HomePod répond au `SETUP` du flux puis envoie un `FIN` dans la même
+    /// milliseconde, ou, une fois sur trois environ, de 6 à 200 ms après un `RECORD` accepté. La
+    /// relance suivante réussit toujours. La cause n'est pas connue ; c'est une **parade** : une
+    /// nouvelle négociation complète, une seule fois, après ``earlyCloseRetryDelay``, au lieu de
+    /// rendre l'échec au moteur (relance 7 s plus tard sur le matériel, re-résolution comprise) ou
+    /// d'attendre le repli de la supervision (2 s au moins). Elle passe par la même négociation que
+    /// toute autre tentative, pair-setup compris, et `stop()` l'interrompt comme les autres.
+    ///
+    /// ## Critère
+    ///
+    /// - la connexion RTSP s'est fermée côté récepteur (FIN ou RST) : une autre panne n'est pas ce
+    ///   défaut ;
+    /// - **après** le `SETUP` du flux : avant, c'est un refus ordinaire ;
+    /// - avant le `RECORD`, ou moins de ``earlyCloseWindow`` après, sans que le récepteur ait donné
+    ///   signe de consommer le flux (retransmission demandée, événement). Un `/feedback` accepté
+    ///   n'en est pas un : le premier part avec le `RECORD`, et le `FIN` peut le suivre.
+    ///
+    /// - Parameter error: l'échec de la négociation, ou `nil` pour une session perdue en diffusion.
+    private func isEarlyReceiverClosure(_ error: Error?) -> Bool {
+        guard streamSetupAccepted, !receiverEngaged else { return false }
+        let closedByReceiver: Bool
+        if case RTSPError.connectionFailed? = error as? RTSPError {
+            closedByReceiver = true
+        } else {
+            closedByReceiver = lossCause == .controlConnectionClosed
+        }
+        guard closedByReceiver else { return false }
+        guard let recordAcceptedAt else { return true }
+        return (lossInstant ?? .now) - recordAcceptedAt < Self.earlyCloseWindow
+    }
+
+    /// Journalise et compte la relance rapide, puis en attend le délai.
+    ///
+    /// - Returns: faux si l'attente a été interrompue, par `stop()` ou une annulation : il n'y a
+    ///   alors rien à relancer, et l'appelant rend la main aussitôt.
+    private func waitBeforeQuickRenegotiation() async -> Bool {
+        log.error(
+            "\(self.device.serviceName, privacy: .public) : fermeture du récepteur en début de session, nouvelle négociation immédiate"
+        )
+        statistics.earlyCloseRenegotiations += 1
+        let delay = Task<Void, Never> { try? await Task.sleep(for: Self.earlyCloseRetryDelay) }
+        quickRetryDelay = delay
+        await withTaskCancellationHandler {
+            await delay.value
+        } onCancel: {
+            delay.cancel()
+        }
+        quickRetryDelay = nil
+        return !Task.isCancelled && !delay.isCancelled
     }
 
     /// Relit l'adresse et le port annoncés, quand les reconnexions s'enchaînent en échec.
@@ -373,6 +489,9 @@ public actor AirPlay2Sender {
     /// le fait — d'où les tâches non structurées, qui n'héritent pas de cette annulation.
     public func stop() async {
         if state == .connecting { stopRequestedDuringStart = true }
+        // Une relance rapide en attente ne doit pas retenir l'arrêt, ni repartir après lui.
+        quickRetryDelay?.cancel()
+        quickRetryDelay = nil
         let supervision = streamTask
         streamTask = nil
         supervision?.cancel()
@@ -461,6 +580,11 @@ public actor AirPlay2Sender {
         sessionGeneration &+= 1
         let generation = sessionGeneration
         sessionLost = false
+        lossCause = nil
+        lossInstant = nil
+        streamSetupAccepted = false
+        recordAcceptedAt = nil
+        receiverEngaged = false
 
         let client = RTSPClient(host: device.host, port: device.port)
         rtsp = client
@@ -476,7 +600,9 @@ public actor AirPlay2Sender {
         // Second signal de perte, à côté du canal d'événements (voir ``noteSessionLost``).
         await client.onConnectionLost { [weak self] in
             Task {
-                await self?.noteSessionLost(generation: generation, reason: "connexion RTSP rompue")
+                await self?.noteSessionLost(
+                    generation: generation, reason: "connexion RTSP rompue",
+                    cause: .controlConnectionClosed)
             }
         }
 
@@ -518,6 +644,7 @@ public actor AirPlay2Sender {
         let endpoints = try await session.setup(
             timingPort: timing.localPort, controlPort: control.localPort
         )
+        streamSetupAccepted = true
 
         // Le canal audio est un socket UDP dont le port local est choisi par le système :
         // contrairement à RAOP, le récepteur n'exige pas ici un port annoncé à l'avance.
@@ -561,7 +688,8 @@ public actor AirPlay2Sender {
             let connected = await events.connect { [weak self] in
                 Task {
                     await self?.noteSessionLost(
-                        generation: generation, reason: "canal d'événements rompu")
+                        generation: generation, reason: "canal d'événements rompu",
+                        cause: .eventChannelClosed)
                 }
             }
             statistics.eventChannelConnected = connected
@@ -585,6 +713,7 @@ public actor AirPlay2Sender {
         statistics.reportedLatencyFrames = try await session.record(
             startSequence: sequenceNumber, startTimestamp: rtpTimestamp
         )
+        recordAcceptedAt = .now
         startKeepAlive(session: session, generation: generation)
 
         log.info(
@@ -643,7 +772,11 @@ public actor AirPlay2Sender {
                     "Erreur d'émission AirPlay 2 : \(String(describing: error), privacy: .public)")
                 statistics.errors += 1
                 consecutiveSendErrors += 1
-                if consecutiveSendErrors >= Self.lostSessionErrorThreshold { sessionLost = true }
+                if consecutiveSendErrors >= Self.lostSessionErrorThreshold {
+                    noteSessionLost(
+                        generation: sessionGeneration, reason: "erreurs d'émission en série",
+                        cause: .sendErrors)
+                }
                 nextDeadline += packetDuration
             }
         }
@@ -655,14 +788,17 @@ public actor AirPlay2Sender {
     /// récepteur disparu ne provoque aucune erreur d'émission — les datagrammes partiraient
     /// indéfiniment dans le vide. Un signal peut arriver pendant la négociation (la boucle de
     /// diffusion sort alors aussitôt), ou en retard d'une session : le numéro l'écarte.
-    func noteSessionLost(generation: Int, reason: String) {
+    func noteSessionLost(generation: Int, reason: String, cause: SessionLossCause = .other) {
         guard generation == sessionGeneration, !sessionLost else { return }
         log.error("Session AirPlay 2 réputée perdue : \(reason, privacy: .public)")
         sessionLost = true
+        lossCause = cause
+        lossInstant = .now
     }
 
     private func noteEventMessage() {
         statistics.eventMessages += 1
+        receiverEngaged = true
     }
 
     /// Démarre le maintien de session, une fois le `RECORD` accepté.
@@ -704,9 +840,14 @@ public actor AirPlay2Sender {
                 )
             } catch {
                 guard !Task.isCancelled else { return }
+                // Un `/feedback` qui échoue sur une connexion fermée constate la même fermeture que
+                // `RTSPClient.onConnectionLost`, et peut la constater le premier : la cause est la même.
+                var closed = false
+                if case RTSPError.connectionFailed? = error as? RTSPError { closed = true }
                 noteSessionLost(
                     generation: generation,
-                    reason: "keep-alive en échec : \(String(describing: error))"
+                    reason: "keep-alive en échec : \(String(describing: error))",
+                    cause: closed ? .controlConnectionClosed : .keepAliveFailed
                 )
                 return
             }
@@ -771,6 +912,7 @@ public actor AirPlay2Sender {
     }
 
     private func noteRetransmitRequest(served: Int, missing: Int) {
+        receiverEngaged = true
         statistics.retransmitRequests += 1
         statistics.retransmittedPackets += served
         statistics.retransmitMisses += missing
@@ -1020,6 +1162,10 @@ public struct AirPlay2Statistics: Sendable {
     /// Sessions rétablies après une perte réseau, et tentatives infructueuses (CDC section 8).
     public var reconnections = 0
     public var reconnectionAttempts = 0
+    /// Négociations refaites aussitôt parce que le récepteur avait fermé la connexion en tout début
+    /// de session (voir `AirPlay2Sender.isEarlyReceiverClosure`). Celles de la supervision comptent
+    /// aussi dans `reconnections` ; celles de `start()` non, aucune session n'ayant encore tenu.
+    public var earlyCloseRenegotiations = 0
 
     public init() {}
 }

@@ -43,6 +43,13 @@ public actor AirPlay2PairingSession {
         case receiverIdentityMismatch
         /// La signature du récepteur ne vérifie pas avec sa clé publique long terme.
         case receiverSignatureInvalid
+        /// Le récepteur refuse le pairing lui-même par un statut (`470`, `401` ou `403`) : il exige
+        /// un autre appairage que celui qu'on lui présente.
+        ///
+        /// Distingué ici plutôt que laissé en `RTSPError` : un `403` n'a pas le même sens au
+        /// pairing, où il refuse l'appairage, et sur une requête de session, où l'appairage a
+        /// abouti et c'est cette requête qui est refusée (`AirPlay2SenderError.requestForbidden`).
+        case authorizationRequired(status: Int, step: String)
 
         public var description: String {
             switch self {
@@ -63,6 +70,8 @@ public actor AirPlay2PairingSession {
                     + "et sa signature ne vérifie pas avec la clé enregistrée"
             case .receiverSignatureInvalid:
                 return "signature du récepteur invalide — credentials périmés ou usurpation"
+            case let .authorizationRequired(status, step):
+                return "le récepteur exige un appairage (réponse \(status) à l'étape \(step))"
             }
         }
     }
@@ -326,7 +335,12 @@ public actor AirPlay2PairingSession {
             // Le pairing sort du cadre RTSP : pyatv y poste en HTTP/1.1, sans CSeq.
             protocolVersion: "HTTP/1.1"
         )
-        let response = try await client.send(request)
+        let response: RTSPResponse
+        do {
+            response = try await client.send(request)
+        } catch let RTSPError.unexpectedStatus(_, code, _) where [401, 403, 470].contains(code) {
+            throw Failure.authorizationRequired(status: code, step: step)
+        }
 
         guard let items = PairingTLV8.decode(response.body) else {
             throw Failure.malformedResponse(step: step)

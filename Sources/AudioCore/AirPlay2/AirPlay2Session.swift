@@ -88,6 +88,54 @@ public actor AirPlay2Session {
     /// AirPlay, et elle donne 7,98 ms de son par paquet à 44,1 kHz.
     public static let framesPerPacket = 352
 
+    /// Identité du contrôleur distant, portée à l'identique par **toutes** les requêtes RTSP de la
+    /// session.
+    ///
+    /// ## Pourquoi c'est une règle, pas un détail
+    ///
+    /// Le HomePod (firmware 27.2, `srcvers=1005.13.2`) rattache la session au `Client-Instance` et
+    /// au `DACP-ID` de son premier `SETUP`, et refuse en `403 Forbidden` toute requête qui en porte
+    /// d'autres. Défaut relevé sur le matériel : seuls les `SETUP` et `/feedback` portaient ces
+    /// en-têtes, si bien que `SET_PARAMETER`, `RECORD` et `TEARDOWN` partaient avec ceux que
+    /// `RTSPClient` ajoute de lui-même (`User-Agent: AirPlayMultiOutput/1.0` et son propre
+    /// `Client-Instance`) : pour le HomePod, un autre contrôleur que celui de la session. Le volume,
+    /// émis avant le `RECORD`, recevait `403` à chaque session.
+    ///
+    /// pyatv les pose sur chacune de ses requêtes de session (`support/rtsp.py`, `exchange`), et le
+    /// HomePod les accepte toutes. Ils sont donc définis ici, une fois, et ajoutés par
+    /// ``exchange(_:uri:headers:body:timeout:)``, seul chemin vers le client RTSP : une requête
+    /// ajoutée plus tard les portera sans qu'on ait à y penser. Le `User-Agent` et le
+    /// `Client-Instance` étant fournis, `RTSPClient` n'ajoute pas les siens : aucun en-tête ne part
+    /// en double.
+    struct ControllerIdentity: Sendable, Equatable {
+        static let userAgent = "AirPlay/550.10"
+
+        /// Identifiant de contrôleur distant, en hexadécimal 64 bits : `DACP-ID` et
+        /// `Client-Instance`.
+        let dacpID: String
+        /// Jeton `Active-Remote`, entier 32 bits.
+        let activeRemote: String
+
+        static func random() -> ControllerIdentity {
+            ControllerIdentity(
+                dacpID: String(UInt64.random(in: .min ... .max), radix: 16).uppercased(),
+                activeRemote: String(UInt32.random(in: .min ... .max))
+            )
+        }
+
+        /// Les quatre en-têtes, dans l'ordre de pyatv.
+        var headers: [(name: String, value: String)] {
+            [
+                ("User-Agent", Self.userAgent),
+                ("DACP-ID", dacpID),
+                ("Active-Remote", activeRemote),
+                ("Client-Instance", dacpID),
+            ]
+        }
+    }
+
+    /// Ne s'emploie qu'à travers ``exchange(_:uri:headers:body:timeout:)``, qui pose l'identité
+    /// du contrôleur.
     private let client: RTSPClient
     private let device: AirPlay2Device
     private let log = AudioLog.airplay2
@@ -115,10 +163,8 @@ public actor AirPlay2Session {
     /// Identifiant du flux, repris de l'identifiant de session comme le fait pyatv. Un
     /// récepteur réel s'en sert pour rattacher le flux audio à la session ouverte.
     private let streamConnectionID: Int
-    /// Identifiant de contrôleur distant (`DACP-ID`/`Client-Instance`), en hexadécimal 64 bits.
-    private let dacpIdentifier = String(UInt64.random(in: .min ... .max), radix: 16).uppercased()
-    /// Jeton `Active-Remote`, entier 32 bits.
-    private let activeRemote = String(UInt32.random(in: .min ... .max))
+    /// Tirée au sort par session, comme chez pyatv.
+    let controller = ControllerIdentity.random()
 
     public init(client: RTSPClient, device: AirPlay2Device) {
         self.client = client
@@ -248,15 +294,13 @@ public actor AirPlay2Session {
     ///   Journalisée dans les deux cas : c'est ce qui établira si les HomePod en donnent une.
     @discardableResult
     public func record(startSequence: UInt16, startTimestamp: UInt32) async throws -> Int? {
-        let request = RTSPRequest(
-            method: "RECORD",
-            uri: sessionURI,
+        let response = try await exchange(
+            "RECORD",
             headers: [
                 ("RTP-Info", "seq=\(startSequence);rtptime=\(startTimestamp)"),
                 ("Content-Length", "0"),
             ]
         )
-        let response = try await client.send(request)
         log.info("RECORD accepté (seq=\(startSequence) rtptime=\(startTimestamp))")
         guard let announced = response.headers["audio-latency"] else {
             log.info("RECORD : pas d'Audio-Latency annoncée")
@@ -271,23 +315,13 @@ public actor AirPlay2Session {
     /// pyatv en émet un toutes les 2 s dès avant le `RECORD` (`airplayv2.py`,
     /// `_feedback_task_loop`), « pour que l'appareil distant ne ferme pas la connexion », et c'est
     /// aussi la cadence d'iOS. Sur le fil c'est sa requête à l'identique : RTSP/1.0, `CSeq`, et les
-    /// trois en-têtes d'identification du contrôleur, sans `Content-Length`.
+    /// en-têtes d'identité du contrôleur, sans `Content-Length`.
     ///
     /// - Parameter timeout: court, pour ne pas retenir les autres requêtes, qui passent après lui sur
     ///   la même connexion. Une réponse qui ne vient pas n'a pas d'autre conséquence : voir
     ///   `AirPlay2Sender.runKeepAlive`.
     public func sendFeedback(timeout: Duration = .seconds(4)) async throws {
-        let request = RTSPRequest(
-            method: "POST",
-            uri: "/feedback",
-            headers: [
-                ("User-Agent", "AirPlay/550.10"),
-                ("DACP-ID", dacpIdentifier),
-                ("Active-Remote", activeRemote),
-                ("Client-Instance", dacpIdentifier),
-            ]
-        )
-        _ = try await client.send(request, timeout: timeout)
+        _ = try await exchange("POST", uri: "/feedback", timeout: timeout)
     }
 
     /// Valeur de volume réellement émise, pour une consigne quelconque.
@@ -309,16 +343,14 @@ public actor AirPlay2Session {
     /// à RAOP, y compris le format texte du corps.
     public func setVolume(_ decibels: Float) async throws {
         let body = Data("volume: \(Self.wireVolume(decibels))\r\n".utf8)
-        let request = RTSPRequest(
-            method: "SET_PARAMETER",
-            uri: sessionURI,
+        _ = try await exchange(
+            "SET_PARAMETER",
             headers: [
                 ("Content-Type", "text/parameters"),
                 ("Content-Length", String(body.count)),
             ],
             body: body
         )
-        _ = try await client.send(request)
         log.debug("volume réglé à \(decibels) dB")
     }
 
@@ -328,15 +360,11 @@ public actor AirPlay2Session {
     /// journalisées mais non propagées : à ce stade la diffusion est finie, et faire échouer
     /// l'arrêt n'apporterait rien à l'appelant.
     public func teardown() async {
-        let request = RTSPRequest(
-            method: "TEARDOWN",
-            uri: sessionURI,
-            headers: [("Content-Length", "0")]
-        )
         do {
             // Délai court, même raison qu'en RAOP : le récepteur ferme couramment la
             // connexion dès le TEARDOWN reçu, sans répondre.
-            _ = try await client.send(request, timeout: .seconds(2))
+            _ = try await exchange(
+                "TEARDOWN", headers: [("Content-Length", "0")], timeout: .seconds(2))
             log.info("TEARDOWN accepté")
         } catch {
             log.error("TEARDOWN en échec : \(String(describing: error), privacy: .public)")
@@ -368,29 +396,18 @@ public actor AirPlay2Session {
         let payload = try PropertyListSerialization.data(
             fromPropertyList: body, format: .binary, options: 0
         )
-        // Les en-têtes `X-Apple-*` accompagnent toute requête AirPlay 2 chez pyatv comme dans
-        // le trafic d'un iPhone. airplay2-receiver les ignore ; rien ne dit qu'un récepteur
-        // réel en fasse autant, et ils ne coûtent rien.
-        let request = RTSPRequest(
-            method: method,
-            uri: sessionURI,
+        log.info("→ \(step, privacy: .public) (\(payload.count) octets de plist)")
+        // Pas d'en-tête `X-Apple-*` ici : pyatv les réserve à `/play` et consorts, et n'en met
+        // aucun sur ses `SETUP` — vérifié dans sa trace de debug contre ce HomePod, où le `SETUP`
+        // ne porte que `CSeq`, ces deux-là et l'identité du contrôleur.
+        let response = try await exchange(
+            method,
             headers: [
                 ("Content-Type", "application/x-apple-binary-plist"),
                 ("Content-Length", String(payload.count)),
-                ("User-Agent", "AirPlay/550.10"),
-                // Pas d'en-tête `X-Apple-*` ici : pyatv les réserve à `/play` et consorts, et
-                // n'en met aucun sur ses `SETUP` — vérifié dans sa trace de debug contre ce
-                // HomePod, où le `SETUP` ne porte que les sept en-têtes ci-dessous.
-                //
-                // Ces trois-là identifient le contrôleur distant côté récepteur.
-                ("DACP-ID", dacpIdentifier),
-                ("Active-Remote", activeRemote),
-                ("Client-Instance", dacpIdentifier),
             ],
             body: payload
         )
-        log.info("→ \(step, privacy: .public) (\(payload.count) octets de plist)")
-        let response = try await client.send(request)
 
         guard !response.body.isEmpty else { return [:] }
         guard let parsed = try? PropertyListSerialization.propertyList(
@@ -399,5 +416,28 @@ public actor AirPlay2Session {
             throw Failure.malformedResponse(step: step)
         }
         return parsed
+    }
+
+    // MARK: - Émission
+
+    /// Seul chemin d'une requête de session vers le récepteur : il y ajoute l'identité du
+    /// contrôleur (voir ``ControllerIdentity``), après les en-têtes propres à la requête.
+    ///
+    /// - Parameter uri: `nil` pour l'URI de session, la seule que le matériel accepte sur
+    ///   `SETUP`, `SET_PARAMETER`, `RECORD` et `TEARDOWN`.
+    private func exchange(
+        _ method: String,
+        uri: String? = nil,
+        headers: [(name: String, value: String)] = [],
+        body: Data = Data(),
+        timeout: Duration = .seconds(10)
+    ) async throws -> RTSPResponse {
+        let request = RTSPRequest(
+            method: method,
+            uri: uri ?? sessionURI,
+            headers: headers + controller.headers,
+            body: body
+        )
+        return try await client.send(request, timeout: timeout)
     }
 }

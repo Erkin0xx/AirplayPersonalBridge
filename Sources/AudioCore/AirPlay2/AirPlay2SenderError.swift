@@ -6,7 +6,8 @@ import Foundation
 /// passe et ce qu'on peut y faire, là où `RTSPError` et consorts décrivent le protocole. L'erreur
 /// d'origine reste journalisée par le sender.
 public enum AirPlay2SenderError: Error, CustomStringConvertible, LocalizedError, Equatable {
-    /// Le récepteur exige un appairage (`470`, `401`, `403`, ou annonce sans transitoire).
+    /// Le récepteur exige un appairage : `470` ou `401`, `403` au pair-setup ou au `pair-verify`,
+    /// ou annonce sans transitoire.
     case pairingRequired(receiver: String, status: Int?)
     /// Des credentials ont été présentés et refusés.
     case credentialsRejected(receiver: String, detail: String)
@@ -14,6 +15,18 @@ public enum AirPlay2SenderError: Error, CustomStringConvertible, LocalizedError,
     case receiverBusy(receiver: String)
     /// Trop de tentatives de pairing : il faut laisser passer du temps.
     case pairingBackoff(receiver: String)
+    /// Le récepteur refuse l'accès à une requête de session (`403`), l'appairage ayant abouti.
+    ///
+    /// Ce n'est pas un appairage à faire : le récepteur nous a authentifiés et a ouvert la session,
+    /// c'est cette requête-là qu'il refuse à ce contrôleur. Cas relevé sur les HomePod (firmware
+    /// 27.2) quand le volume partait sans l'identité du `SETUP`.
+    ///
+    /// **Passager**, contrairement à `pairingRequired` : aucun geste de l'utilisateur ne le lève
+    /// (ni appairage, ni credentials), et ses causes connues tiennent à la session — une identité de
+    /// contrôleur qui ne concorde pas, un autre appareil qui prend la main. Le déclarer définitif
+    /// laisserait la sortie en échec jusqu'à ce qu'on la décoche, pour un refus qu'une nouvelle
+    /// session peut ne pas rencontrer. D'où une simple attente plus longue avant de réessayer.
+    case requestForbidden(receiver: String, step: String, reason: String)
     /// Le récepteur a refusé une requête (`4xx` autre que ci-dessus).
     case requestRejected(receiver: String, step: String, status: Int, reason: String)
     /// Le récepteur a échoué en traitant une requête (`5xx`).
@@ -49,10 +62,10 @@ public enum AirPlay2SenderError: Error, CustomStringConvertible, LocalizedError,
     ///
     /// Un récepteur occupé n'a aucune raison de se libérer dans la seconde : le relancer en
     /// boucle serrée ne ferait que le solliciter pour rien, et chaque tentative refait un pairing
-    /// complet.
+    /// complet. Un accès refusé non plus : s'il se lève, ce ne sera pas dans la seconde.
     public var minimumRetryDelay: Duration {
         switch self {
-        case .receiverBusy, .pairingBackoff: return .seconds(10)
+        case .receiverBusy, .pairingBackoff, .requestForbidden: return .seconds(10)
         default: return .seconds(1)
         }
     }
@@ -82,6 +95,13 @@ public enum AirPlay2SenderError: Error, CustomStringConvertible, LocalizedError,
             return """
                 « \(receiver) » refuse temporairement le pairing après trop de tentatives. \
                 Patientez quelques minutes avant de réessayer.
+                """
+        case let .requestForbidden(receiver, step, reason):
+            let detail = reason.isEmpty ? "" : " \(reason)"
+            return """
+                « \(receiver) » a refusé l'accès à la requête \(step) (réponse 403\(detail)). \
+                L'appairage avait abouti : il n'y a pas d'appairage à refaire, c'est cette requête \
+                que l'appareil refuse à ce contrôleur.
                 """
         case let .requestRejected(receiver, step, status, reason):
             let detail = reason.isEmpty ? "" : " \(reason)"
@@ -173,11 +193,15 @@ public enum AirPlay2SenderError: Error, CustomStringConvertible, LocalizedError,
     ) -> AirPlay2SenderError {
         switch error {
         case let .unexpectedStatus(method, code, reason):
+            // Ne remontent ici que les refus de requêtes de session : ceux du pairing arrivent en
+            // `AirPlay2PairingSession.Failure.authorizationRequired`.
             switch code {
-            case 470, 401, 403:
+            case 470, 401:
                 return hasCredentials
                     ? .credentialsRejected(receiver: receiver, detail: "réponse \(code)")
                     : .pairingRequired(receiver: receiver, status: code)
+            case 403:
+                return .requestForbidden(receiver: receiver, step: method, reason: reason)
             case 453:
                 return .receiverBusy(receiver: receiver)
             case 500...599:
@@ -218,6 +242,10 @@ public enum AirPlay2SenderError: Error, CustomStringConvertible, LocalizedError,
             }
         case .malformedResponse, .unexpectedState:
             return .pairingFailed(receiver: receiver, detail: error.description)
+        case let .authorizationRequired(status, _):
+            return hasCredentials
+                ? .credentialsRejected(receiver: receiver, detail: "réponse \(status)")
+                : .pairingRequired(receiver: receiver, status: status)
         }
     }
 }

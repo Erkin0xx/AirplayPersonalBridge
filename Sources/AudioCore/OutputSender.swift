@@ -75,6 +75,9 @@ public struct OutputStatistics: Sendable, Equatable {
     public var feedbackUnanswered: Int?
     /// AirPlay 2 : canal d'événements ouvert.
     public var eventChannelConnected: Bool?
+    /// AirPlay 2 : négociations refaites aussitôt après une fermeture du récepteur en tout début de
+    /// session, le défaut relevé sur les HomePod au premier essai qui suit une session terminée.
+    public var earlyCloseRenegotiations: Int?
 
     public init() {}
 }
@@ -152,6 +155,7 @@ extension AirPlay2Sender: OutputSender {
         result.eventChannelConnected = source.eventChannelConnected
         result.reportedLatencyFrames = source.reportedLatencyFrames
         result.feedbackUnanswered = source.feedbackUnanswered
+        result.earlyCloseRenegotiations = source.earlyCloseRenegotiations
         return result
     }
 }
@@ -347,14 +351,17 @@ func isPermanentOutputFailure(_ error: Error) -> Bool {
     case let rtsp as RTSPError:
         // 401/403/470 : le récepteur réclame une authentification que ce client n'a pas. Un
         // Apple TV refuse ainsi le pairing transitoire. Les autres statuts (453 « occupé »,
-        // 5xx) peuvent se résorber d'eux-mêmes.
+        // 5xx) peuvent se résorber d'eux-mêmes. Seul RAOP rend ici un `RTSPError` brut : le sender
+        // AirPlay 2 traduit les siens, en distinguant un `403` au pairing, définitif, d'un `403`
+        // sur une requête de session, qui ne l'est pas (`AirPlay2SenderError.requestForbidden`).
         if case let .unexpectedStatus(_, code, _) = rtsp {
             return code == 401 || code == 403 || code == 470
         }
         return false
     case let pairing as AirPlay2PairingSession.Failure:
         switch pairing {
-        case .transientPairingUnsupported, .receiverIdentityMismatch, .receiverSignatureInvalid:
+        case .transientPairingUnsupported, .receiverIdentityMismatch, .receiverSignatureInvalid,
+            .authorizationRequired:
             return true
         case let .receiverRejected(reason, _):
             switch reason {

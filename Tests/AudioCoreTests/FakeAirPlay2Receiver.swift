@@ -43,6 +43,9 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         let protocolVersion: String
         /// Noms en minuscules.
         let headers: [String: String]
+        /// Noms en minuscules, dans l'ordre d'arrivée et doublons compris : `headers` ne garde que
+        /// la dernière occurrence d'un nom, ce qui masquerait un en-tête parti deux fois.
+        let headerNames: [String]
         let body: Data
         let wasEncrypted: Bool
     }
@@ -55,6 +58,10 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         case silent
         /// Ferme la connexion de contrôle sans répondre.
         case close
+        /// Répond normalement, puis ferme aussitôt la connexion de contrôle (FIN). C'est ce que
+        /// font les HomePod au premier essai qui suit une session terminée : réponse au `SETUP` du
+        /// flux, puis `FIN` dans la même milliseconde.
+        case respondThenClose
         /// Répond normalement, mais plus tard.
         case delayed(TimeInterval)
     }
@@ -84,6 +91,10 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         var announcedDataPort: Int?
         /// `Audio-Latency` rendue au `RECORD`. `nil` : aucun en-tête, comme le mock.
         var announcedAudioLatency: Int?
+        /// Comme le HomePod : une requête de session dont `Client-Instance` ou `DACP-ID` diffère de
+        /// ceux du premier `SETUP` reçoit `403 Forbidden`. Relevé sur le matériel (firmware 27.2) :
+        /// sans ces en-têtes, le `SET_PARAMETER` du volume y était refusé à chaque session.
+        var enforcesControllerIdentity = true
     }
 
     /// Tout ce qui concerne une session, c'est-à-dire une connexion de contrôle.
@@ -121,6 +132,15 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         var timingResponses = 0
         var volumes: [String] = []
         var connection: NWConnection?
+        /// `Client-Instance` et `DACP-ID` du premier `SETUP` : l'identité du contrôleur de la session.
+        var controllerIdentity: (clientInstance: String?, dacpID: String?)?
+        /// La prochaine réponse est suivie de la fermeture de la connexion.
+        var closeAfterNextResponse = false
+        /// Arrivée de la connexion, et fermeture provoquée par `respondThenClose`.
+        var acceptedAt = ContinuousClock.now
+        var closedAt: ContinuousClock.Instant?
+        /// Requêtes refusées pour une identité de contrôleur étrangère à la session.
+        var forbiddenRequests: [Request] = []
     }
 
     let options: Options
@@ -181,6 +201,14 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
 
     var sessionCount: Int { queue.sync { sessions.count } }
 
+    func acceptedAt(session index: Int) -> ContinuousClock.Instant? {
+        queue.sync { index < sessions.count ? sessions[index].acceptedAt : nil }
+    }
+
+    func closedAt(session index: Int) -> ContinuousClock.Instant? {
+        queue.sync { index < sessions.count ? sessions[index].closedAt : nil }
+    }
+
     func requests(inSession index: Int? = nil) -> [Request] {
         queue.sync {
             if let index { return index < sessions.count ? sessions[index].requests : [] }
@@ -222,6 +250,14 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
 
     func volumes(inSession index: Int) -> [String] {
         queue.sync { index < sessions.count ? sessions[index].volumes : [] }
+    }
+
+    /// Requêtes refusées en `403` parce qu'elles ne portaient pas l'identité du `SETUP`.
+    func forbiddenRequests(inSession index: Int? = nil) -> [Request] {
+        queue.sync {
+            if let index { return index < sessions.count ? sessions[index].forbiddenRequests : [] }
+            return sessions.flatMap(\.forbiddenRequests)
+        }
     }
 
     func eventPlaintext(inSession index: Int) -> Data {
@@ -375,6 +411,9 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         case .close:
             session.connection?.cancel()
             session.connection = nil
+        case .respondThenClose:
+            session.closeAfterNextResponse = true
+            route(request, session: session)
         case let .delayed(delay):
             queue.asyncAfter(deadline: .now() + delay) { [weak self] in
                 self?.route(request, session: session)
@@ -383,6 +422,11 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
     }
 
     private func route(_ request: Request, session: Session) {
+        guard controllerIdentityMatches(request, session: session) else {
+            session.forbiddenRequests.append(request)
+            respond(to: request, session: session, status: 403, reason: "Forbidden")
+            return
+        }
         switch (request.method, request.uri) {
         case ("POST", "/pair-setup"):
             handlePairSetup(request, session: session)
@@ -409,6 +453,23 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         }
     }
 
+    /// La règle relevée sur les HomePod : le premier `SETUP` fixe l'identité du contrôleur, et toute
+    /// requête RTSP suivante de la connexion doit porter les mêmes `Client-Instance` et `DACP-ID`.
+    /// Le pairing, en HTTP/1.1, n'est pas concerné.
+    private func controllerIdentityMatches(_ request: Request, session: Session) -> Bool {
+        guard options.enforcesControllerIdentity, request.protocolVersion.hasPrefix("RTSP") else {
+            return true
+        }
+        let presented = (request.headers["client-instance"], request.headers["dacp-id"])
+        guard let identity = session.controllerIdentity else {
+            if request.method == "SETUP" {
+                session.controllerIdentity = (clientInstance: presented.0, dacpID: presented.1)
+            }
+            return true
+        }
+        return identity.clientInstance == presented.0 && identity.dacpID == presented.1
+    }
+
     private func respond(
         to request: Request,
         session: Session,
@@ -432,7 +493,17 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         if let outbound = session.outbound, let sealed = try? outbound.seal(message) {
             message = sealed
         }
-        session.connection?.send(content: message, completion: .contentProcessed { _ in })
+        if session.closeAfterNextResponse, let connection = session.connection {
+            // Réponse puis FIN, dans le même envoi : le sender reçoit l'une et voit l'autre aussitôt.
+            session.closeAfterNextResponse = false
+            session.closedAt = .now
+            session.connection = nil
+            connection.send(
+                content: message, contentContext: .finalMessage, isComplete: true,
+                completion: .contentProcessed { _ in connection.cancel() })
+        } else {
+            session.connection?.send(content: message, completion: .contentProcessed { _ in })
+        }
 
         if let secret = enableEncryptionAfterwards {
             session.sharedSecret = secret
@@ -798,10 +869,21 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
             uri: parsed.request.uri,
             protocolVersion: parsed.request.protocolVersion,
             headers: parsed.request.headers,
+            headerNames: headerNames(in: data),
             body: parsed.request.body,
             wasEncrypted: encrypted
         )
         return (request, parsed.consumed)
+    }
+
+    /// Les noms d'en-têtes de la requête en tête de `data`, dans l'ordre, doublons compris.
+    private static func headerNames(in data: Data) -> [String] {
+        guard let end = data.range(of: Data("\r\n\r\n".utf8)),
+            let text = String(data: data[data.startIndex..<end.lowerBound], encoding: .utf8)
+        else { return [] }
+        return text.components(separatedBy: "\r\n").dropFirst().compactMap { line in
+            line.firstIndex(of: ":").map { line[line.startIndex..<$0].lowercased() }
+        }
     }
 
     /// Décrypte un paquet audio comme le ferait le récepteur : AAD = octets 4 à 12 de l'en-tête,
