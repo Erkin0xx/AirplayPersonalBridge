@@ -5,12 +5,14 @@ import Foundation
 // CLI de validation (CDC section 11) : capture vers un .wav relisible par `afplay`, ou
 // diffusion vers les sorties AirPlay.
 //
-//   audiocap [--mode global|app|input] [--app <nom|pid>] [--tone] [--list] [durée_s] [sortie.wav]
+//   audiocap [--mode global|app|input] [--app <nom|pid>] [--tone|--clicks|--channel-test] [--list]
+//            [durée_s] [sortie.wav]
 //
 // À lancer via ./audiocap (wrapper `open`), jamais par le binaire interne : l'autorisation
-// TCC est attribuée au bundle, pas au binaire nu. Seul `--tone` s'en passe, n'utilisant ni tap
-// ni micro : c'est le mode qui permet de tester la chaîne avec `swift run`, sans reconstruire le
-// bundle et donc sans révoquer l'autorisation.
+// TCC est attribuée au bundle, pas au binaire nu. Seules les sources synthétiques (`--tone`,
+// `--clicks`, `--channel-test`) s'en passent, n'utilisant ni tap ni micro : ce sont elles qui
+// permettent de tester la chaîne avec `swift run`, sans reconstruire le bundle et donc sans
+// révoquer l'autorisation. `--record-input` ouvre en revanche le micro.
 
 /// Sortie du CLI, sur stderr. Le wrapper `./audiocap` la récupère via `open --stderr`
 /// (voir `CLIRuntime`).
@@ -19,7 +21,11 @@ func note(_ text: String) { FileHandle.standardError.write(Data("\(text)\n".utf8
 CLIRuntime.start()
 
 enum Mode: String {
-    case global, app, input, tone
+    case global, app, input, tone, clicks
+    case channelTest = "channel-test"
+
+    /// Source synthétique : aucune capture Core Audio, donc compatible avec `--record-input`.
+    var isSynthetic: Bool { self == .tone || self == .clicks || self == .channelTest }
 }
 
 var mode = Mode.global
@@ -32,21 +38,34 @@ var listOnly = false
 var airplayTarget: String?
 var airplayVolume: Float = -20
 var browseOnly = false
-/// Nom (partiel) du récepteur AirPlay 2 visé (jalon 3).
-/// Combiné à `--airplay`, les deux sorties diffusent **en parallèle**, chacune sur son
-/// propre ring buffer (invariant section 12).
-var airplay2Target: String?
-/// Fichier de credentials d'appairage système, pour un récepteur qui refuse le transitoire.
-var airplay2CredentialsPath: String?
-var airplay2Volume: Float = -20
+/// Noms (partiels) des récepteurs AirPlay 2 visés (jalon 3), dans l'ordre. Répétable : les
+/// deux HomePod « Salon » et « Salon (2) » ensemble. Combinées à `--airplay`, toutes les
+/// sorties diffusent **en parallèle**, chacune sur son propre ring buffer (invariant section 12).
+var airplay2Targets: [String] = []
+/// Fichiers de credentials d'appairage système, pour un récepteur qui refuse le transitoire.
+var airplay2CredentialsPaths: [String] = []
+/// `--volume2` et `--delay2` : une fois pour toutes les sorties AirPlay 2, ou une fois par sortie
+/// dans l'ordre des `--airplay2` (``RepeatedOption``).
+var airplay2Volumes: [Float] = []
 var browse2Only = false
 /// Réglage manuel du délai par sortie, en millisecondes (CDC 4.5 : fine-tune et filet de
 /// sécurité, en complément de l'alignement automatique, jamais à sa place).
 var airplayDelayMs: Double = 0
-var airplay2DelayMs: Double = 0
-/// Niveau et fréquence de la sinusoïde de `--tone`.
-var toneLevelDBFS: Double = -50
+var airplay2DelaysMs: [Double] = []
+/// Renfort de basses de la sortie RAOP, en dB (ADR-002). `nil` : aucun.
+var airplayBassDB: Float?
+/// Niveau des sources synthétiques. `nil` : celui propre à chaque source (``defaultLevel(for:)``).
+var toneLevelDBFS: Double?
 var toneFrequency: Double = 440
+/// `--record-input` : enregistre le micro pendant la diffusion, avec un JSON de datation.
+var recordInputPath: String?
+
+/// Niveau crête par défaut d'une source synthétique. La sinusoïde reste discrète : shairport-sync
+/// la joue sur les haut-parleurs du Mac. Les clics et le test de canaux sont faits pour s'entendre
+/// et se capter à quelques mètres.
+func defaultLevel(for mode: Mode) -> Double {
+    mode == .tone ? -50 : -20
+}
 /// Coupe le son du Mac pendant la capture, pour ne pas l'entendre en double avec les enceintes.
 var muteLocalOutput = false
 
@@ -74,6 +93,24 @@ while index < arguments.count {
         listOnly = true
     case "--tone":
         mode = .tone
+    case "--clicks":
+        mode = .clicks
+    case "--channel-test":
+        mode = .channelTest
+    case "--record-input":
+        index += 1
+        guard index < arguments.count, arguments[index].first != "-" else {
+            FileHandle.standardError.write(Data("--record-input attend un fichier .wav\n".utf8))
+            exit(2)
+        }
+        recordInputPath = arguments[index]
+    case "--bass":
+        index += 1
+        guard index < arguments.count, let value = Float(arguments[index]) else {
+            FileHandle.standardError.write(Data("--bass attend un gain en dB\n".utf8))
+            exit(2)
+        }
+        airplayBassDB = value
     case "--tone-level":
         index += 1
         guard index < arguments.count, let value = Double(arguments[index]) else {
@@ -112,14 +149,14 @@ while index < arguments.count {
             FileHandle.standardError.write(Data("--airplay2 attend un nom de récepteur\n".utf8))
             exit(2)
         }
-        airplay2Target = arguments[index]
+        airplay2Targets.append(arguments[index])
     case "--volume2":
         index += 1
         guard index < arguments.count, let value = Float(arguments[index]) else {
             FileHandle.standardError.write(Data("--volume2 attend un nombre en dB\n".utf8))
             exit(2)
         }
-        airplay2Volume = value
+        airplay2Volumes.append(value)
     case "--delay":
         index += 1
         guard index < arguments.count, let value = Double(arguments[index]) else {
@@ -133,40 +170,65 @@ while index < arguments.count {
             FileHandle.standardError.write(Data("--delay2 attend un nombre en ms\n".utf8))
             exit(2)
         }
-        airplay2DelayMs = value
+        airplay2DelaysMs.append(value)
     case "--credentials2":
         index += 1
         guard index < arguments.count else {
             FileHandle.standardError.write(Data("--credentials2 attend un chemin\n".utf8))
             exit(1)
         }
-        airplay2CredentialsPath = arguments[index]
+        airplay2CredentialsPaths.append(arguments[index])
     case "--browse2":
         browse2Only = true
     case "--help", "-h":
         note("""
-            audiocap — capture audio et diffusion AirPlay 1/2 synchronisée (jalons 1 à 4)
+            audiocap — capture audio et diffusion AirPlay 1/2 synchronisée (jalons 1 à 5)
 
               --mode global|app|input   mode de capture (défaut : global)
               --app <nom|pid>           application à capter (implique --mode app)
               --tone                    sinusoïde à la place de la capture : aucun tap, aucune
                                         autorisation, utilisable avec `swift run`
-              --tone-level <dBFS>       niveau de la sinusoïde (défaut : −50)
               --tone-freq <Hz>          fréquence de la sinusoïde (défaut : 440)
+              --clicks                  salves de mesure à la place de la capture, sans tap ni
+                                        autorisation : 5 ms à 3 kHz en fenêtre de Hann, sur les
+                                        deux canaux, au début de chaque trame de capture multiple
+                                        de 96 000, donc toutes les 2 s exactement. Repère : une
+                                        salve sur cinq est doublée 250 ms plus tard
+              --channel-test            test d'écoute gauche/droite, en boucle toutes les 4 s :
+                                          0,0 s  UN bip grave (400 Hz, 0,4 s), GAUCHE seul
+                                          2,0 s  DEUX bips aigus (1 600 Hz, 0,15 s), DROITE seul
+                                        jamais les deux canaux à la fois
+              --tone-level <dBFS>       niveau crête de --tone, --clicks, --channel-test
+                                        (défaut : −50 pour --tone, −20 pour les deux autres)
               --mute-local              coupe le son du Mac pendant la capture (Process Tap)
               --list                    liste les process audio et quitte
               --browse                  liste les récepteurs _raop._tcp et quitte
               --airplay <nom>           diffuse vers ce récepteur RAOP au lieu d'écrire
-                                        un .wav (correspondance partielle sur le nom)
+                                        un .wav (nom exact d'abord, sinon partiel)
               --volume <dB>             volume RAOP, −144 ou −30…0 (défaut : −20)
-              --browse2                 liste les récepteurs _airplay._tcp et quitte
-              --airplay2 <nom>          diffuse vers ce récepteur AirPlay 2
-              --volume2 <dB>            volume AirPlay 2 (défaut : −20)
               --delay <ms>              décalage manuel de la sortie RAOP, en ms
                                         (positif = restituer plus tard). Fine-tune en
                                         complément de l'alignement automatique, pas à sa place
-              --delay2 <ms>             décalage manuel de la sortie AirPlay 2, en ms
+              --bass <dB>               renfort de basses de la sortie RAOP (défaut : aucun)
+              --browse2                 liste les récepteurs _airplay._tcp et quitte
+              --airplay2 <nom>          diffuse vers ce récepteur AirPlay 2. RÉPÉTABLE : une
+                                        sortie par --airplay2. Nom exact d'abord, sinon partiel :
+                                        « Salon » ne vise jamais « Salon (2) » s'il existe
+              --volume2 <dB>            volume AirPlay 2 (défaut : −20)
+              --delay2 <ms>             décalage manuel d'une sortie AirPlay 2, en ms
+              --credentials2 <chemin>   credentials d'appairage système (Apple TV)
+                                        --volume2, --delay2, --credentials2 : donnés une fois, ils
+                                        valent pour tous les --airplay2 ; répétés, ils s'appliquent
+                                        dans l'ordre, un par --airplay2, autant que de --airplay2
+              --record-input <f.wav>    enregistre l'entrée par défaut (Réglages Son > Entrée)
+                                        pendant la diffusion, et écrit <f>.json pour dater chaque
+                                        échantillon et chaque salve sur l'horloge hôte. Exige une
+                                        source synthétique (une seule capture Core Audio à la
+                                        fois) et au moins une sortie. Analyse :
+                                        scripts/measure-clicks.py <f.wav>
               <durée_s> <sortie.wav>    durée et fichier de sortie
+
+            Identifiants des sorties dans le compte rendu : raop/<nom> et airplay2/<nom>.
 
             Exemples :
               ./audiocap --list
@@ -179,6 +241,10 @@ while index < arguments.count {
               ./audiocap --airplay2 ApTV 30
               ./audiocap --airplay Geneva --airplay2 ApTV 30   # deux sorties en parallèle
               ./audiocap --airplay Geneva --airplay2 ApTV --delay2 25 3700   # validation 1 h
+              ./audiocap --clicks --airplay2 Salon --record-input salon.wav 40
+              ./audiocap --clicks --airplay Geneva --airplay2 Salon --airplay2 "Salon (2)" \\
+                  --volume2 -20 --delay2 0 --delay2 3 --record-input trois.wav 60
+              ./audiocap --channel-test --airplay2 Salon --airplay2 "Salon (2)" 40
               swift run audiocap --tone --airplay Geneva-Mock --volume -30 10   # sans bundle
             """)
         exit(0)
@@ -445,37 +511,41 @@ func describe(_ health: BridgeEngine.CaptureHealth) -> String {
 /// sur l'une n'atteint pas l'autre (invariant section 12) : tout cela vit dans `BridgeEngine`, ce
 /// qui fait valider par ce CLI le code réellement employé par l'interface.
 @MainActor
-func runRequestedOutputs(source: BridgeEngine.Source) async throws -> Bool {
+func runRequestedOutputs(source: BridgeEngine.Source, plan: OutputPlan) async throws -> Bool {
+    guard !plan.isEmpty else { return false }
     var requests: [BridgeEngine.OutputRequest] = []
-    if let airplayTarget {
-        requests.append(BridgeEngine.OutputRequest(
-            id: "RAOP", proto: .raop, deviceName: airplayTarget, nameMatching: .partial,
-            volumeDB: airplayVolume, manualDelaySeconds: airplayDelayMs / 1000
-        ))
-    }
-    if let airplay2Target {
+    for output in plan.outputs {
         // Un récepteur qui exige l'appairage système (un Apple TV) refuse le transitoire en 470.
         // Ses credentials, obtenus une fois, se rejouent alors par pair-verify.
         var credentials: HapCredentials?
-        if let path = airplay2CredentialsPath {
+        if let path = output.credentialsPath {
             credentials = try HapCredentials.load(contentsOf: URL(fileURLWithPath: path))
-            note("Credentials d'appairage système chargés depuis \(path)")
+            note("Credentials d'appairage système chargés depuis \(path) pour \(output.id)")
         }
         requests.append(BridgeEngine.OutputRequest(
-            id: "AP2", proto: .airplay2, deviceName: airplay2Target, nameMatching: .partial,
-            volumeDB: airplay2Volume, manualDelaySeconds: airplay2DelayMs / 1000,
+            id: output.id, proto: output.proto, deviceName: output.deviceName,
+            nameMatching: .partial, volumeDB: output.volumeDB,
+            manualDelaySeconds: output.manualDelayMs / 1000, bassBoostDB: output.bassBoostDB,
             credentials: credentials
         ))
     }
-    guard !requests.isEmpty else { return false }
+
+    // Le micro d'abord : il enregistre ainsi les toutes premières salves, et le temps qu'il met à
+    // démarrer ne retarde pas la négociation.
+    var recording: MeasurementRecording?
+    if let recordInputPath {
+        recording = try await MeasurementRecording.start(path: recordInputPath)
+    }
 
     let engine = BridgeEngine()
     try await engine.start(
         source: source, outputs: requests,
         options: BridgeEngine.StartOptions(muteLocalOutput: muteLocalOutput)
     )
+    recording?.observe(await engine.playbackTimeline)
     note("Diffusion vers \(requests.count) sortie(s) pendant \(duration) s, horloge commune\n")
 
+    let idWidth = requests.map(\.id.count).max() ?? 4
     let interval = progressInterval(for: duration)
     let deadline = Date().addingTimeInterval(duration)
     while Date() < deadline, !CLIInterruption.requested {
@@ -485,18 +555,21 @@ func runRequestedOutputs(source: BridgeEngine.Source) async throws -> Bool {
             let residual = output.residualErrorSeconds
                 .map { String(format: "%+.2f ms", $0 * 1000) } ?? "stabilisation"
             note(String(
-                format: "  %-4@ %6d paquets  %4d sync  %d err  dérive %@  ±%d trames  %@",
-                output.id as NSString, statistics.packetsSent, statistics.syncPacketsSent,
-                statistics.errors, residual as NSString, output.driftCorrections,
-                describe(output.phase) as NSString
+                format: "  %@ %6d paquets  %4d sync  %d err  dérive %@  ±%d trames  %@",
+                output.id.padding(toLength: idWidth, withPad: " ", startingAt: 0) as NSString,
+                statistics.packetsSent, statistics.syncPacketsSent, statistics.errors,
+                residual as NSString, output.driftCorrections, describe(output.phase) as NSString
             ))
         }
         let health = await engine.captureHealth
         if health.diagnosis != .healthy { note("  \(describe(health))") }
+        recording?.observe(await engine.playbackTimeline)
     }
 
     let final = await engine.outputs
     let health = await engine.captureHealth
+    // Relue avant l'arrêt, qui la détruit.
+    let timeline = await engine.playbackTimeline
     await engine.stop()
 
     var anyPacketSent = false
@@ -524,13 +597,47 @@ func runRequestedOutputs(source: BridgeEngine.Source) async throws -> Bool {
         }
     }
     note("\n\(describe(health)), \(health.framesCaptured) trames captées")
+
+    if let recording {
+        let outputs = plan.outputs.map { planned -> MeasurementDocument.OutputInfo in
+            let snapshot = final.first { $0.id == planned.id }
+            return MeasurementDocument.OutputInfo(
+                id: planned.id,
+                protocole: planned.proto == .raop ? "raop" : "airplay2",
+                nomDemande: planned.deviceName,
+                volumeDb: planned.volumeDB,
+                delaiDemandeMs: planned.manualDelayMs,
+                delaiManuelMs: snapshot?.sync.map { $0.manualOffsetSeconds * 1000 },
+                latenceRecepteurMs: snapshot?.sync.map { $0.receiverLatencySeconds * 1000 },
+                renfortBassesDb: planned.proto == .raop ? planned.bassBoostDB : nil,
+                etatFinal: snapshot.map { describe($0.phase) } ?? "jamais lancée",
+                paquets: snapshot?.statistics.packetsSent ?? 0
+            )
+        }
+        try recording.finish(
+            source: measurementSource(), outputs: outputs, timeline: timeline
+        )
+    }
     if !anyPacketSent { exit(1) }
     return true
+}
+
+/// Ce que le JSON de mesure dit de la source.
+@MainActor
+func measurementSource() -> MeasurementDocument.SourceInfo {
+    let level = toneLevelDBFS ?? defaultLevel(for: mode)
+    switch mode {
+    case .clicks: return .clicks(levelDBFS: level)
+    case .channelTest: return .other("test-canaux", levelDBFS: level)
+    case .tone: return .other("sinusoide-\(toneFrequency)-hz", levelDBFS: level)
+    case .global, .app, .input: return .other(mode.rawValue, levelDBFS: level)
+    }
 }
 
 /// La demande correspondant au mode de la ligne de commande.
 @MainActor
 func requestedSource() throws -> BridgeEngine.Source {
+    let level = toneLevelDBFS ?? defaultLevel(for: mode)
     switch mode {
     case .global:
         return .processTap(.globalExcluding(pids: []))
@@ -546,7 +653,11 @@ func requestedSource() throws -> BridgeEngine.Source {
     case .input:
         return .inputDevice
     case .tone:
-        return .tone(frequency: toneFrequency, levelDBFS: toneLevelDBFS)
+        return .tone(frequency: toneFrequency, levelDBFS: level)
+    case .clicks:
+        return .clicks(levelDBFS: level)
+    case .channelTest:
+        return .channelTest(levelDBFS: level)
     }
 }
 
@@ -560,16 +671,44 @@ func makeSource(for request: BridgeEngine.Source) -> any AudioCaptureSource {
         return InputDeviceCapture()
     case let .tone(frequency, levelDBFS):
         return ToneCaptureSource(frequency: frequency, levelDBFS: levelDBFS)
+    case let .clicks(levelDBFS):
+        return PatternCaptureSource.clicks(levelDBFS: levelDBFS)
+    case let .channelTest(levelDBFS):
+        return PatternCaptureSource.channelTest(levelDBFS: levelDBFS)
     }
 }
 
 // --- Capture ---
 do {
-    note("Mode : \(mode.rawValue)   durée : \(duration) s   sortie : \(outputURL.path)")
+    let plan = try OutputPlan.make(
+        raopTarget: airplayTarget, raopVolumeDB: airplayVolume, raopDelayMs: airplayDelayMs,
+        raopBassDB: airplayBassDB, airplay2Targets: airplay2Targets,
+        airplay2Volumes: airplay2Volumes, airplay2DelaysMs: airplay2DelaysMs,
+        airplay2Credentials: airplay2CredentialsPaths
+    )
+    if recordInputPath != nil {
+        // L'entrée physique sera la capture Core Audio du processus : une autre source en ouvrirait
+        // une seconde (invariant section 12).
+        guard mode.isSynthetic else {
+            throw CLIUsageError(
+                "--record-input exige --clicks, --channel-test ou --tone : une seule capture "
+                    + "Core Audio à la fois, et le micro en est déjà une")
+        }
+        guard !plan.isEmpty else {
+            throw CLIUsageError("--record-input exige au moins une sortie (--airplay, --airplay2)")
+        }
+    }
+
+    if plan.isEmpty {
+        note("Mode : \(mode.rawValue)   durée : \(duration) s   sortie : \(outputURL.path)")
+    } else {
+        note("Source : \(mode.rawValue)   durée : \(duration) s   sorties : "
+            + plan.outputs.map(\.id).joined(separator: ", "))
+    }
     let request = try requestedSource()
 
     // --- Diffusion réseau au lieu du dump .wav ---
-    if try await runRequestedOutputs(source: request) {
+    if try await runRequestedOutputs(source: request, plan: plan) {
         exit(0)
     }
 
@@ -603,8 +742,12 @@ do {
     }
     source.stop()
     try sink.drain(into: writer, meter: &meter)
+    writer.close()
     report(writer, meter, sink.ring)
     exit(meter.isDigitalSilence ? 2 : 0)
+} catch let usage as CLIUsageError {
+    note("ERREUR : \(usage)")
+    exit(2)
 } catch {
     note("ERREUR : \(error)")
     exit(1)
