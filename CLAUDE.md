@@ -576,6 +576,11 @@ Ce qui suit vient des commits 824f16d à 0cf8a31, puis de la session de test mat
   - **Le premier essai après une session terminée est souvent coupé** par le HomePod juste après le `SETUP` du flux
     (alternance démontrée, pyatv tombe pareil juste après nous). Cause inconnue : ni l'Apple TV (en veille, idem),
     ni le `TEARDOWN`, ni l'identifiant, ni l'ordre du canal d'événements. Parade : une renégociation immédiate.
+  - **Une paire stéréo n'a qu'un seul volume** : le dernier `SET_PARAMETER volume` reçu par l'un vaut pour les deux (constaté par
+    Baptiste). D'où les groupes de volume par `tsid` (`VolumeGroups`) : même volume AirPlay pour toute la paire, celui du plus fort, et
+    l'écart en gain numérique sur la copie de chaque sender (`OutputGainStage`), **compté sur l'échelle du fil** (2 dB d'interface =
+    1 dB AirPlay). Le gain numérique s'entend après le délai de restitution de 2 s, le volume AirPlay sans doute aussitôt.
+    **Jamais −144 pour couper un seul membre** : le silence par enceinte est numérique.
   - Accepte le transitoire, `/pair-pin-start` inutile. **Pas d'`Audio-Latency`** au `RECORD`. Annonces `0xD4` à
     NTP − émission ≈ 0. Aucune requête sur le canal d'événements en session.
 - **Le HomePod ne répond au `SETUP` qu'après avoir mesuré notre horloge** : le répondeur de timing doit
@@ -643,6 +648,16 @@ Ce qui suit vient des commits 824f16d à 0cf8a31, puis de la session de test mat
   désormais par `RunLoop.main.perform(inModes: [.common])`, et un minuteur de secours répond à 6 s. **Ne jamais appeler
   `terminate` depuis un `Task` ni un `DispatchQueue.main.async`.** Un second `terminate` pendant l'attente fait quitter
   AppKit sur-le-champ, sans `TEARDOWN` : il est ignoré.
+
+- **Tester sans immobiliser le MainActor** : jamais de `RunLoop.main.run` dans un test `@MainActor`, qui bloque les tâches MainActor des
+  autres suites lancées en parallèle (échecs par délai dépassé ailleurs, suite complète seulement). Attendre par `Task.sleep` ou `eventually`.
+- **Changer l'image d'un `NSStatusItem` coûte cher** : chaque changement redessine un instantané par bureau (`_updateReplicants`), 6 % d'un
+  cœur à 8 images/s. L'icône animée passe par un calque Core Animation posé sur le bouton (0,001 %), avec repli sur un minuteur.
+- **Le silence local du tap (`.mutedWhenTapped`) coupe vraiment les haut-parleurs du Mac** : vérifié au micro le 2026-11-02.
+- **Touches volume du Mac → master : seulement le temps d'une diffusion** (`SystemVolumeLink`). Baptiste garde son Mac à 0 % et coupé : un
+  lien permanent aurait rendu les enceintes muettes au lancement et fait jouer le Mac. Volume et silence du Mac mémorisés dans
+  `settings.json` **avant** toute écriture, rendus à l'arrêt ou au lancement suivant un plantage. Volume principal virtuel
+  (`kAudioHardwareServiceDeviceProperty_VirtualMainVolume`), sans autorisation, sans intercepter les touches.
 
 ## Écoute et délais
 

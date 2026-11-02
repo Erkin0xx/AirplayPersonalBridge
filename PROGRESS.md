@@ -1217,3 +1217,23 @@ de reconnexions ratées ou d'application attendue : le fil et la synchronisation
 
 Preuve : test, chaque correction défaite une fois, le test correspondant échouant alors. Côté AirPlay 2, la relecture d'adresse
 n'est couverte que par le test de la règle commune, pas par une session.
+
+### Après la clôture : demandes de Baptiste à l'usage (2026-11-02 soir)
+
+Baptiste a utilisé l'app réelle après la clôture et demandé quatre changements. **Tous sont validés par test et installés, aucun
+n'a encore été entendu ni vu à l'écran par lui.** Suite complète : 898 tests verts, trois fois de suite.
+
+| Demande | Ce qui est fait | Preuve |
+|---|---|---|
+| « Le meilleur moyen, le plus pro » pour les basses, ou réduire les aigus | `ToneControl` remplace `LowShelfFilter` : passe-haut subsonique Butterworth à 30 Hz (fondu de 50 ms), plateau grave 80 Hz de 0 à +12 dB, plateau aigu 3 kHz de 0 à −9 dB, en SVF TPT de Simper, et correction dynamique du seul grave au lieu d'un limiteur pleine bande. À 0/0 : identique au bit près | test : courbe mesurée (20 Hz à +4,1 dB au lieu de +11,9 à +12), 1 kHz à ±0,2 dB là où l'ancien limiteur le baissait de 4 dB, 13 mutations détectées |
+| « Les jauges des deux HomePod sont liées, la dernière modif s'applique aux deux » | **Constaté** : une paire stéréo n'a qu'un volume. Groupe de volume par `tsid` : même volume AirPlay pour la paire (celui du plus fort), écart appliqué en gain numérique sur la copie de chaque sender, compté sur l'échelle du fil. | test (flux déchiffré : −6 dB mesuré) ; **à entendre** : l'écart numérique s'entend après le délai de restitution de 2 s, le volume AirPlay sans doute tout de suite |
+| Un bouton silence par piste | Silence numérique par sortie, fondu de 15 ms, sans déconnexion, persisté ; une enceinte coupée sort du max de son groupe | test |
+| Le volume général relié aux touches volume et silence du Mac | **Seulement le temps d'une diffusion** et avec le son système global : volume et silence du Mac mémorisés (persistés avant toute écriture), Mac réglé sur le master, tap en silence local, touches ↔ master dans les deux sens ; à l'arrêt, ou au lancement après un plantage, le Mac retrouve son réglage. Option dans le widget, activée par défaut | test (23 tests, 16 mutations) ; Core Audio réel derrière `SYSTEM_VOLUME_TESTS=1` ; **silence local du tap vérifié au micro** (bip de 1,5 s : 150 fenêtres au-dessus du bruit sans, 19 éparses avec) |
+| L'icône animée pendant la diffusion | Les trois suspentes ondulent (12 images, 8 im/s) seulement en diffusion audible ; animation par Core Animation sur le bouton de la barre : 0,001 % d'un cœur, contre 6,35 % en changeant l'image | test, mesure CPU dans un vrai `MenuBarExtra` ; AppIcon inchangée au pixel près ; **rendu à l'écran non vu** |
+
+Défaut de tests corrigé au passage : deux tests de l'icône tournaient une boucle `RunLoop.main.run` depuis le MainActor, et bloquaient
+pendant 2 s les tâches MainActor des autres suites (`periodicRounds`, `saveIsDeferred` en échec dans la suite complète seulement).
+
+**Reste ouvert** : écoute des basses et aigus, des volumes séparés de la paire et du décalage de 2 s qu'ils impliquent ; touches du Mac en
+vraie diffusion ; rendu de l'animation. Le seuil de 9 dB à 20 Hz du brief était irréalisable avec un ordre 2 à 30 Hz (7,83 dB) : 30 Hz
+gardé, ajustable par mesure.

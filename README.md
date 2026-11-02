@@ -58,10 +58,14 @@ Dans la barre de menus :
 
 - **Enceintes** : cocher ou décocher pendant une diffusion n'affecte pas les autres. Une enceinte qui
   exige un appairage est signalée, sans être cochée d'office.
-- **Volume** : un master, un réglage par enceinte, et un bouton de silence qui coupe les enceintes sans les
-  déconnecter. Le renfort de basses de la Geneva se règle dans un tiroir sous sa rangée.
+- **Volume** : un master, un réglage et un bouton silence par enceinte, et un silence général. Aucun silence ne
+  déconnecte les enceintes. Pendant une diffusion, les touches volume et silence du Mac règlent le master, le Mac
+  se tait, et il retrouve son réglage à l'arrêt (désactivable dans Options).
 - **Une paire stéréo de HomePod** : cocher les deux avant de lancer la diffusion. Chacun ne joue que son canal, et
-  deux sessions ouvertes à des moments différents s'expulsent l'une l'autre.
+  chacun garde son propre volume, bien que la paire n'en ait qu'un côté HomePod : l'écart est appliqué dans le signal.
+- **Tonalité de la Geneva** : un tiroir sous sa rangée règle les basses (0 à +12 dB, protégées sous 30 Hz, sans
+  pompage) et les aigus (0 à −9 dB). À 0 dB, le son est intact.
+- **Icône** : elle ondule pendant une diffusion audible.
 - **Écoute** : deux lieux sélectionnables, « À table » par défaut et « Au canapé ». Le lieu choisi compense
   la distance de chaque enceinte, en plus du réglage manuel.
 - **Options** : source (système, application, entrée physique), « Couper le son du Mac », démarrage à
