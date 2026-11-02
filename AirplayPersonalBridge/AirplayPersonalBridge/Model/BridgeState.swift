@@ -67,7 +67,8 @@ enum OutputStatusTone: Sendable, Equatable {
 /// Une sortie découverte et ses réglages.
 ///
 /// Les réglages vivent ici et non dans le cœur : un sender ne connaît que la valeur qu'on
-/// lui pousse (`setVolume`, `setManualDelay`, `setBassBoost`), jamais l'intention de l'utilisateur.
+/// lui pousse (`setVolume`, `setManualDelay`, `setBassBoost`, `setTrebleCut`), jamais l'intention de
+/// l'utilisateur.
 ///
 /// **L'identité d'un objet compte** : la liste est réconciliée en place à chaque recherche, et une
 /// sortie conservée garde son objet. Une vue qui la tient n'a pas à savoir qu'une recherche a eu
@@ -101,9 +102,15 @@ final class OutputState: Identifiable {
         didSet { if oldValue != delayMS { onSettingsChange?() } }
     }
 
-    /// Renfort de basse, en dB (ADR-002 : low shelf ~80 Hz, Q 0,7).
+    /// Renfort de basse, en dB (ADR-002 : low shelf ~80 Hz, Q 0,7, borné sous 30 Hz).
     var bassBoostDB: Double = 0 {
         didSet { if oldValue != bassBoostDB { onSettingsChange?() } }
+    }
+
+    /// Coupe des aigus, en dB, de 0 à −9 (high shelf 3 kHz, Q 0,7). Les HomePod portent l'image et le
+    /// détail ; la Geneva, décalée sur eux, n'y ajoute plus de filtrage en peigne.
+    var trebleCutDB: Double = 0 {
+        didSet { if oldValue != trebleCutDB { onSettingsChange?() } }
     }
 
     var connection: OutputConnectionState = .idle
@@ -118,11 +125,11 @@ final class OutputState: Identifiable {
     /// Trames refusées depuis le début de la diffusion, reconnexions comprises.
     var droppedWhileStreaming = 0
 
-    /// Le renfort de basse ne concerne que la Geneva (CDC section 2) : les HomePod gardent une
-    /// stéréo pleine bande intacte. On le rattache au protocole plutôt qu'au nom de
+    /// Basses et aigus ne concernent que la Geneva (CDC section 2) : les HomePod gardent une
+    /// stéréo pleine bande intacte. On les rattache au protocole plutôt qu'au nom de
     /// l'appareil — la Geneva est l'unique sortie AirPlay 1 de cette installation, et se
     /// fier au nom casserait dès le premier renommage.
-    var supportsBassBoost: Bool { proto == .raop }
+    var supportsToneControl: Bool { proto == .raop }
 
     /// Recherches consécutives qui ne l'ont pas vue.
     @ObservationIgnored fileprivate var missedRounds = 0
@@ -201,6 +208,7 @@ final class BridgeState {
         var volume: Float
         var delay: TimeInterval
         var bass: Float
+        var treble: Float
     }
 
     static let silenceDB: Double = -60
@@ -450,6 +458,7 @@ final class BridgeState {
         output.trimDB = record.trimDB
         output.delayMS = record.delayMS
         output.bassBoostDB = record.bassBoostDB
+        output.trebleCutDB = record.trebleCutDB
         output.onSettingsChange = { [weak self] in self?.scheduleSettingsSave() }
     }
 
@@ -799,13 +808,15 @@ final class BridgeState {
             nameMatching: .exact,
             volumeDB: Self.receiverVolume(forGainDB: effectiveGainDB(for: output)),
             manualDelaySeconds: effectiveDelayMS(for: output) / 1000,
-            bassBoostDB: Float(output.supportsBassBoost ? output.bassBoostDB : 0)
+            bassBoostDB: Float(output.supportsToneControl ? output.bassBoostDB : 0),
+            trebleCutDB: Float(output.supportsToneControl ? output.trebleCutDB : 0)
         )
     }
 
     private static func pushedSettings(for request: BridgeEngine.OutputRequest) -> PushedSettings {
         PushedSettings(
-            volume: request.volumeDB, delay: request.manualDelaySeconds, bass: request.bassBoostDB
+            volume: request.volumeDB, delay: request.manualDelaySeconds, bass: request.bassBoostDB,
+            treble: request.trebleCutDB
         )
     }
 
@@ -970,7 +981,8 @@ final class BridgeState {
         let volume = target.volume != last.volume ? target.volume : nil
         let delay = target.delay != last.delay ? target.delay : nil
         let bass = target.bass != last.bass ? target.bass : nil
-        guard volume != nil || delay != nil || bass != nil else { return }
+        let treble = target.treble != last.treble ? target.treble : nil
+        guard volume != nil || delay != nil || bass != nil || treble != nil else { return }
 
         pushed[output.id] = target
         let engine = self.engine
@@ -979,6 +991,7 @@ final class BridgeState {
             if let volume { await engine.setVolume(volume, for: id) }
             if let delay { await engine.setManualDelay(delay, for: id) }
             if let bass { await engine.setBassBoost(bass, for: id) }
+            if let treble { await engine.setTrebleCut(treble, for: id) }
         }
     }
 
@@ -1133,7 +1146,8 @@ final class BridgeState {
         for output in outputs {
             result.outputs[output.id] = BridgeSettings.Output(
                 isEnabled: output.isEnabled, trimDB: output.trimDB, delayMS: output.delayMS,
-                bassBoostDB: output.bassBoostDB, displayName: output.displayName
+                bassBoostDB: output.bassBoostDB, trebleCutDB: output.trebleCutDB,
+                displayName: output.displayName
             )
         }
         return result
@@ -1169,6 +1183,7 @@ extension BridgeState {
         )
         geneva.trimDB = -2
         geneva.bassBoostDB = 6
+        geneva.trebleCutDB = -3
         geneva.connection = .streaming
         geneva.statistics = previewStatistics(
             packets: 454_621, frames: 174_197_760, sync: 3_661, removed: 10, reconnections: 90,
@@ -1248,6 +1263,7 @@ extension BridgeState {
         )
         geneva.trimDB = -2
         geneva.bassBoostDB = 6
+        geneva.trebleCutDB = -3
         let left = OutputState(
             id: "airplay2/Salon", displayName: "Salon", host: "192.168.1.158", port: 7000,
             proto: .airplay2

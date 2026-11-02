@@ -1,50 +1,12 @@
 import Foundation
 
-/// Renfort de basses (ADR-002) : un plateau grave en biquad, suivi d'un limiteur de crête.
+/// **Référence de test** : l'ancien renfort de basses (biquad RBJ en forme transposée directe II, puis
+/// limiteur de crête pleine bande), tel qu'il était dans `Sources/AudioCore/DSP/LowShelfFilter.swift`
+/// avant `ToneControl`. Code d'origine, seul le nom a changé.
 ///
-/// ## Où il s'applique (invariant section 12)
-///
-/// Sur la **copie propre au sender**, extraite du ring buffer et pas encore rééchantillonnée.
-/// Le tampon partagé n'est jamais touché, et les HomePod reçoivent donc un flux intact.
-/// En flottant plutôt qu'après conversion en 16 bits : le dépassement momentané de ±1 y reste
-/// représentable, et le limiteur peut le résorber sans perte, là où un calcul en entiers
-/// aurait déjà écrêté.
-///
-/// ## Transparence
-///
-/// À 0 dB le filtre est **contourné** : aucun échantillon n'est lu ni écrit, le flux ressort
-/// identique au bit près. Après un retour à 0 dB, la queue du filtre s'éteint d'abord (une
-/// centaine de millisecondes) et le contournement reprend ensuite.
-///
-/// ## Pas de clic
-///
-/// Le gain ne change jamais d'un coup : il glisse vers sa consigne à ``rampDecibelsPerSecond``,
-/// les coefficients étant recalculés toutes les ``rampStepFrames`` trames. La forme transposée
-/// directe II se prête à ces changements en cours de route : son état reste à l'échelle de la
-/// sortie, qui ne saute donc pas quand les coefficients bougent.
-///
-/// ## Pourquoi un limiteur plutôt qu'une marge
-///
-/// Une marge fixe (baisser tout le signal du gain demandé) ne peut pas écrêter, mais elle
-/// **baisse les médiums et les aigus de la Geneva** de ce même gain : le curseur « Basses »
-/// déplacerait l'équilibre avec les HomePod, que Baptiste règle à l'oreille, alors qu'il doit
-/// seulement ajouter du grave. Le limiteur ne touche au signal que lorsqu'une crête dépasse
-/// réellement le plafond, et il est relié entre canaux pour ne pas déplacer l'image stéréo.
-///
-/// Son prix : sur un disque déjà masterisé à 0 dBFS avec un fort renfort, il réduit le niveau
-/// le temps des crêtes (légère respiration, jamais de saturation). Le remède reste de baisser
-/// le renfort.
-///
-/// ## Alignement (CDC 4.5)
-///
-/// **Aucun décalage de trame.** Le biquad est causal et rend une sortie pour chaque entrée, et
-/// le limiteur est sans anticipation : il n'y a ni tampon ni latence de bloc, donc rien à
-/// compenser dans `OutputSynchronizer`. Il reste le retard de groupe, inévitable pour un filtre
-/// à phase minimale et limité au grave : à +12 dB et 48 kHz, environ 2,5 ms à 40 Hz, nul à
-/// 80 Hz, −0,8 ms à 120 Hz et moins d'un échantillon à 1 kHz (vérifié dans
-/// `LowShelfFilterTests`). C'est dix fois sous le seuil de perception de 20 à 30 ms visé par le
-/// CDC section 8, et sans effet sur les médiums qui portent la localisation.
-public struct LowShelfFilter: Sendable {
+/// Gardé pour que les tests de `ToneControl` mesurent ce qu'ils corrigent au lieu de l'affirmer : la
+/// montée du plateau jusqu'au continu, et le pompage des médiums par le limiteur pleine bande.
+struct LegacyLowShelfReference: Sendable {
     /// Fréquence charnière et facteur de qualité retenus par l'ADR-002.
     public static let defaultCornerHz: Double = 80
     public static let defaultQ: Double = 0.7
@@ -94,8 +56,8 @@ public struct LowShelfFilter: Sendable {
     public init(
         sampleRate: Double,
         channelCount: Int,
-        cornerHz: Double = LowShelfFilter.defaultCornerHz,
-        q: Double = LowShelfFilter.defaultQ
+        cornerHz: Double = LegacyLowShelfReference.defaultCornerHz,
+        q: Double = LegacyLowShelfReference.defaultQ
     ) {
         precondition(sampleRate > 0, "fréquence d'échantillonnage nulle")
         precondition(channelCount > 0, "nombre de canaux nul")

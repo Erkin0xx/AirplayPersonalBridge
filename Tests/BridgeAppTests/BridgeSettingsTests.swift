@@ -29,7 +29,8 @@ struct BridgeSettingsFileTests {
         settings.sourceID = "app-com.apple.Music"
         settings.muteLocalOutput = true
         settings.outputs["raop/A@Geneva"] = BridgeSettings.Output(
-            isEnabled: false, trimDB: -3.5, delayMS: 25, bassBoostDB: 6, displayName: "Geneva"
+            isEnabled: false, trimDB: -3.5, delayMS: 25, bassBoostDB: 6, trebleCutDB: -4.5,
+            displayName: "Geneva"
         )
         #expect(store.save(settings))
         #expect(store.load() == settings)
@@ -69,6 +70,8 @@ struct BridgeSettingsFileTests {
         #expect(loaded.masterVolumeDB == BridgeState.defaultMasterVolumeDB)
         #expect(loaded.outputs["raop/A@B"]?.trimDB == 2)
         #expect(loaded.outputs["raop/A@B"]?.isEnabled == true)
+        // Un fichier d'avant les aigus se relit tel quel : la coupe y vaut 0 dB.
+        #expect(loaded.outputs["raop/A@B"]?.trebleCutDB == 0)
         // Rien n'a été perdu : pas de copie.
         #expect(try siblings(of: store, in: directory).isEmpty)
     }
@@ -135,7 +138,10 @@ struct BridgeSettingsFileTests {
         let json = """
             {
               "masterVolumeDB": 40,
-              "outputs": {"raop/A@B": {"trimDB": 99, "delayMS": -9000, "bassBoostDB": 200}}
+              "outputs": {
+                "raop/A@B": {"trimDB": 99, "delayMS": -9000, "bassBoostDB": 200, "trebleCutDB": -40},
+                "raop/C@D": {"trebleCutDB": 6}
+              }
             }
             """
         try Data(json.utf8).write(to: store.url)
@@ -146,6 +152,9 @@ struct BridgeSettingsFileTests {
         #expect(output.trimDB == BridgeSettings.Limits.trimDB.upperBound)
         #expect(output.delayMS == BridgeSettings.Limits.delayMS.lowerBound)
         #expect(output.bassBoostDB == BridgeSettings.Limits.bassBoostDB.upperBound)
+        #expect(output.trebleCutDB == BridgeSettings.Limits.trebleCutDB.lowerBound)
+        // Une coupe seulement : une valeur positive ne devient pas un renfort des aigus.
+        #expect(loaded.outputs["raop/C@D"]?.trebleCutDB == 0)
     }
 
     @Test("Un fichier qui n'est pas un objet est illisible, pas une exception")
@@ -183,6 +192,7 @@ struct BridgeStatePersistenceTests {
         geneva.trimDB = -4
         geneva.delayMS = 30
         geneva.bassBoostDB = 8
+        geneva.trebleCutDB = -4.5
         harness.state.isMuted = true
         harness.state.muteLocalOutput = true
         harness.state.selectSource(id: CaptureSource.inputDevice.id)
@@ -197,6 +207,7 @@ struct BridgeStatePersistenceTests {
         #expect(record.trimDB == -4)
         #expect(record.delayMS == 30)
         #expect(record.bassBoostDB == 8)
+        #expect(record.trebleCutDB == -4.5)
         #expect(record.displayName == "Geneva")
     }
 
@@ -208,7 +219,8 @@ struct BridgeStatePersistenceTests {
         settings.muteLocalOutput = true
         settings.sourceID = CaptureSource.inputDevice.id
         settings.outputs[Devices.genevaID] = BridgeSettings.Output(
-            isEnabled: true, trimDB: 2, delayMS: 15, bassBoostDB: 4, displayName: "Geneva"
+            isEnabled: true, trimDB: 2, delayMS: 15, bassBoostDB: 4, trebleCutDB: -3,
+            displayName: "Geneva"
         )
         settings.outputs[Devices.rightID] = BridgeSettings.Output(
             isEnabled: false, trimDB: -1, displayName: "Salon (2)"
@@ -226,6 +238,8 @@ struct BridgeStatePersistenceTests {
         let restored = try #require(harness.output(Devices.genevaID))
         #expect(restored.presence == .unknown)
         #expect(restored.trimDB == 2)
+        #expect(restored.bassBoostDB == 4)
+        #expect(restored.trebleCutDB == -3)
 
         await harness.discover(
             raop: [Devices.genevaRAOP, Devices.rightRAOP],
