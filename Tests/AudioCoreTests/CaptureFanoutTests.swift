@@ -637,12 +637,16 @@ struct ToneCaptureSourceTests {
         let counter = BlockCounter()
         let source = ToneCaptureSource(sampleRate: 48_000, blockFrames: 480)
         _ = try source.prepare()
+        let started = ContinuousClock.now
         try source.start(deliveringTo: counter.makeConsumer())
         try await Task.sleep(for: .milliseconds(500))
         source.stop()
-        // 480 trames = 10 ms : ~50 blocs en 500 ms. Large marge, la machine de test est occupée.
-        #expect(counter.blocks >= 25)
-        #expect(counter.blocks <= 80)
+        // 480 trames = 10 ms. Le compte se juge sur le temps réellement écoulé : le réveil de cette
+        // tâche a déjà tardé de 390 ms sous charge, pendant que le générateur gardait son rythme
+        // (83 blocs en 890 ms, justes, pour une borne fixe de 80).
+        let expected = (ContinuousClock.now - started) / .milliseconds(10)
+        #expect(Double(counter.blocks) >= expected / 2, "\(counter.blocks) blocs pour \(expected)")
+        #expect(Double(counter.blocks) <= expected * 1.2 + 2, "\(counter.blocks) blocs pour \(expected)")
     }
 }
 
