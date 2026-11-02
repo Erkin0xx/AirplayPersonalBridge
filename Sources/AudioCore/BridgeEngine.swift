@@ -292,17 +292,22 @@ public actor BridgeEngine {
         public var senderFactory: any OutputSenderFactory
         public var permissions: any CapturePermissionProviding
         public var tuning: Tuning
+        /// Le tour de pairing, passé à toutes les sorties du moteur : deux pair-setups AirPlay 2 ne
+        /// partent jamais ensemble (voir ``PairingGate``). Un tour neuf par valeur créée.
+        public var pairingGate: any PairingGate
 
         public init(
             makeSource: @escaping @Sendable (Source, StartOptions) -> any AudioCaptureSource,
             senderFactory: any OutputSenderFactory,
             permissions: any CapturePermissionProviding,
-            tuning: Tuning = Tuning()
+            tuning: Tuning = Tuning(),
+            pairingGate: any PairingGate = SerialPairingGate()
         ) {
             self.makeSource = makeSource
             self.senderFactory = senderFactory
             self.permissions = permissions
             self.tuning = tuning
+            self.pairingGate = pairingGate
         }
 
         public static var live: Dependencies {
@@ -702,8 +707,11 @@ public actor BridgeEngine {
         guard let slot = fanout.acquireSlot() else {
             throw Failure.tooManyOutputs(limit: fanout.slotCount)
         }
+        // Le tour de pairing est commun à toutes les sorties, comme l'horloge : c'est ce qui empêche
+        // deux pair-setups simultanés, vers les deux HomePod d'une paire stéréo par exemple.
         let context = OutputSenderContext(
-            ring: fanout.ring(atSlot: slot), captureFormat: fanout.format, clock: clock
+            ring: fanout.ring(atSlot: slot), captureFormat: fanout.format, clock: clock,
+            pairingGate: dependencies.pairingGate
         )
         let token = makeToken()
         let id = request.id

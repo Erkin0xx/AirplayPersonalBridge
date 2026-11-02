@@ -168,11 +168,18 @@ public struct OutputSenderContext: @unchecked Sendable {
     public let captureFormat: AVAudioFormat
     /// L'horloge commune à toutes les sorties : c'est elle qui les aligne.
     public let clock: PlaybackClockProtocol
+    /// Le tour de pairing commun aux sorties du moteur : un pairing AirPlay 2 à la fois. `nil` : pas
+    /// de tour, chaque sortie négocie quand elle veut. Sans objet en RAOP.
+    public let pairingGate: (any PairingGate)?
 
-    public init(ring: AudioRingBuffer, captureFormat: AVAudioFormat, clock: PlaybackClockProtocol) {
+    public init(
+        ring: AudioRingBuffer, captureFormat: AVAudioFormat, clock: PlaybackClockProtocol,
+        pairingGate: (any PairingGate)? = nil
+    ) {
         self.ring = ring
         self.captureFormat = captureFormat
         self.clock = clock
+        self.pairingGate = pairingGate
     }
 }
 
@@ -265,7 +272,8 @@ public struct LiveOutputSenderFactory: OutputSenderFactory {
                 rediscover: { [findAirPlay2, serviceName = device.serviceName] in
                     try? await findAirPlay2(serviceName, .exact, Self.rediscoveryPasses)
                 },
-                rediscoveryInterval: rediscoveryInterval
+                rediscoveryInterval: rediscoveryInterval,
+                pairingGate: context.pairingGate
             )
         }
     }
@@ -369,6 +377,10 @@ func isPermanentOutputFailure(_ error: Error) -> Bool {
             case .unknown, .backoff, .maxTries, .busy: return false
             }
         case .malformedResponse, .unexpectedState:
+            return false
+        case .transientAuthenticationFailed:
+            // Mot de passe fixe, aucun code saisi : rien que l'utilisateur puisse corriger, et un
+            // nouveau pair-setup peut aboutir. Relevé sur un HomePod d'une paire stéréo.
             return false
         }
     default:
