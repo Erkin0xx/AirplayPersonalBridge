@@ -20,27 +20,23 @@ l'approche reprise ici, avec deux senders AirPlay implémentés en interne.
 | Jalon | Contenu | État |
 |---|---|---|
 | -1 | Setup, émulateurs de récepteurs | ✅ validé contre mock |
-| 0 | Validation OwnTone | ⏸️ décalé, à trancher à la clôture du jalon 5 |
+| 0 | Validation OwnTone | ❌ abandonné : l'app native a répondu à sa question (ADR 010) |
 | 1 | Capture Core Audio (3 modes + test DRM) | ✅ validé en local, à l'oreille |
-| 2 | Sender RAOP (Geneva) | ✅ a joué sur la vraie Geneva ; ajouts récents à réécouter |
-| 3 | Sender AirPlay 2 (HomePod) | ✅ a joué sur les vrais HomePod ; Apple TV jamais |
-| 4 | Synchronisation et dérive | ⚠️ validé contre mock ; calcul corrigé depuis, jamais entendu |
-| 5 | Interface et barre de menus | 🚧 code complet, tests sur le vrai matériel à faire |
+| 2 | Sender RAOP (Geneva) | ✅ validé sur la vraie Geneva |
+| 3 | Sender AirPlay 2 (HomePod) | ✅ validé sur les vrais HomePod, paire stéréo en deux sessions ; Apple TV appairée mais muette |
+| 4 | Synchronisation et dérive | ✅ validé sur le matériel : ≤ 17 ms entre enceintes au micro, aucun écho à l'oreille |
+| 5 | Interface et barre de menus | ✅ clos le 2026-11-02, avec des points ouverts (voir `PROGRESS.md`) |
 
-**Ce qui a réellement joué** : le 2026-08-12, le son est sorti de la Geneva et de deux HomePod
-en même temps, à l'oreille, et l'arrêt coupait bien les deux.
+**Ce qui joue réellement** : le 2026-11-02, depuis l'app, la Geneva et les deux HomePod ensemble, en vraie stéréo,
+sans écho à l'oreille. Au micro, à table, les trois enceintes arrivent à moins de 17 ms les unes des autres, sous le
+seuil de perception de 20 à 30 ms, sans aucun réglage manuel. Une heure de diffusion continue vers les trois enceintes : 0 erreur, dérive résiduelle sous 0,05 ms, plus de
+5 000 paquets perdus sur le Wi-Fi tous renvoyés. La Geneva, mise en veille en cours de route par un signal d'essai trop
+faible, a repris seule à son retour, sans que les HomePod s'en aperçoivent.
 
-**Ce qui reste à entendre** : tout ce qui a été fait depuis, notamment le calcul de synchronisation,
-le renvoi des paquets perdus, le maintien de session, le renfort de basses et le widget. Ces points
-sont validés par des tests et contre les émulateurs, ce qui ne prouve rien sur le matériel réel. Le
-détail est dans [`PROGRESS.md`](PROGRESS.md), et le déroulé des essais dans
-[`docs/prompt_tests_materiel.md`](docs/prompt_tests_materiel.md).
-
-Mesuré contre les émulateurs au jalon 4, sur **1 h 02 de diffusion continue** : 454 621 paquets RAOP
-et 466 088 paquets AirPlay 2, **0 erreur de part et d'autre**, écart résiduel de dérive sous **0,1 ms**.
-Une panne sur une sortie n'interrompt pas l'autre : le mock RAOP est mort 90 fois pendant cette heure,
-la sortie AirPlay 2 ne s'en est pas aperçue et les 90 reconnexions ont toutes abouti. Cette heure ne dit
-rien de l'alignement entre sorties, dont le calcul a été corrigé depuis.
+**Ce qui reste ouvert** : la paire stéréo supporte mal des sessions ouvertes à des moments différents (cocher un
+HomePod pendant que l'autre joue), l'Apple TV ne restitue rien, et les pannes provoquées (Geneva débranchée, Wi-Fi
+coupé) ainsi que l'écoute au canapé restent à essayer. Le détail, avec le niveau de preuve de chaque point, est dans
+[`PROGRESS.md`](PROGRESS.md).
 
 ## L'application
 
@@ -54,7 +50,7 @@ scripts/install-app.sh --open  # compile en Release, installe dans /Applications
 
 Deux autorisations à donner une fois : **Réseau local**, sans quoi aucune enceinte n'apparaît, et
 **Enregistrement des sons du système**, à la première diffusion. Grâce à l'identité stable, une
-recompilation par ce script ne doit plus les révoquer, ce qui reste à confirmer à l'usage. Le bouton Run
+recompilation par ce script ne les révoque plus (vérifié le 2026-11-02). Le bouton Run
 de Xcode signe en ad-hoc, sous un identifiant de bundle distinct en Debug, pour ne pas écraser
 l'autorisation de l'app installée.
 
@@ -62,8 +58,10 @@ Dans la barre de menus :
 
 - **Enceintes** : cocher ou décocher pendant une diffusion n'affecte pas les autres. Une enceinte qui
   exige un appairage est signalée, sans être cochée d'office.
-- **Volume** : un master et un réglage par enceinte, et un renfort de basses sur la Geneva, qui se règle
-  dans la fenêtre.
+- **Volume** : un master, un réglage par enceinte, et un bouton de silence qui coupe les enceintes sans les
+  déconnecter. Le renfort de basses de la Geneva se règle dans un tiroir sous sa rangée.
+- **Une paire stéréo de HomePod** : cocher les deux avant de lancer la diffusion. Chacun ne joue que son canal, et
+  deux sessions ouvertes à des moments différents s'expulsent l'une l'autre.
 - **Écoute** : deux lieux sélectionnables, « À table » par défaut et « Au canapé ». Le lieu choisi compense
   la distance de chaque enceinte, en plus du réglage manuel.
 - **Options** : source (système, application, entrée physique), « Couper le son du Mac », démarrage à
@@ -176,14 +174,22 @@ Avec la vraie capture, passer par le bundle :
 ./audiocap --mode input 10 entree.wav         # entrée physique (micro/ligne)
 ./analyse-wav.py systeme.wav                  # son capté ? silence ? fichier vide ?
 
-./audiocap --airplay Geneva --airplay2 Salon 30              # une sortie de chaque protocole
+./audiocap --airplay Geneva --airplay2 Salon --airplay2 "Salon (2)" 30   # plusieurs sorties
 ./audiocap --airplay Geneva --volume -15 30                  # volume (--volume2 pour l'autre)
 ./audiocap --airplay Geneva --airplay2 Salon --delay2 25 30  # décalage manuel, en ms
 ./audiocap --airplay Geneva --mute-local 30                  # coupe le son du Mac
 ```
 
-Le CLI prend au plus une sortie par protocole : au-delà, c'est l'app. Codes de sortie de `./audiocap` : 0
+`--airplay2` se répète, et `--volume2`, `--delay2` et `--credentials2` aussi, dans le même ordre. Codes de sortie de `./audiocap` : 0
 succès, 1 erreur, 2 silence numérique ou mauvais usage, 3 autorisation refusée, 130 après Ctrl-C.
+
+Mesurer le calage au micro du Mac, et tester gauche/droite :
+
+```bash
+./audiocap --clicks --airplay Geneva --airplay2 Salon --record-input mesure.wav 60   # salves datées
+scripts/measure-clicks.py mesure.wav                                                 # écart par enceinte
+./audiocap --channel-test --airplay2 Salon 30    # bip grave à gauche, deux aigus à droite
+```
 
 **Toujours passer par `./audiocap`**, jamais par le binaire interne du bundle : macOS
 attribue l'autorisation à l'identité de l'**app**, et un binaire lancé directement depuis le

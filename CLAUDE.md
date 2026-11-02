@@ -543,32 +543,52 @@ journaux (`log show`).
 
 ---
 
-## Sortie réelle — faits vérifiés sur le matériel (2026-08-11 et 12)
+## Sortie réelle — faits vérifiés sur le matériel (2026-08-11 et 12, puis 2026-11-02)
 
-Ce qui suit vient des commits 824f16d à 0cf8a31. Détail dans `PROGRESS.md`. **Ce qui a été ajouté
-depuis n'a jamais été entendu** : la liste est dans la section du jalon 5 de `PROGRESS.md`.
+Ce qui suit vient des commits 824f16d à 0cf8a31, puis de la session de test matériel du 2026-11-02
+(`docs/prompt_tests_materiel.md`). Détail et niveaux de preuve dans `PROGRESS.md`.
 
-- **Geneva AeroSphere Large** : TXT `et=0,4`, `cn=0`, `features=0x444c0a00` sans aucun bit de pairing,
-  donc récepteur AirPlay 1 même si elle s'annonce aussi en `_airplay._tcp`. Reçoit du PCM `L16`
-  big-endian sans chiffrement. Répond `Audio-Latency: 4096`, soit 92,88 ms, retranchés de l'ancrage
-  (0cf8a31). **Son nom réseau n'a jamais été noté** : le plan la rattache par alias (`Geneva`,
-  `AeroSphere`).
-- **HomePod gen 2**, « Salon » et « Salon (2) » : acceptent le transitoire sans `/pair-pin-start`.
-  **Ils forment une paire stéréo** (fait donné par Baptiste, 2026-11-01). **On ne sait pas ce que joue
-  un membre adressé seul**, ni si une seule session fait jouer les deux : à trancher en phase 3 de
-  `docs/prompt_tests_materiel.md`.
+- **Geneva AeroSphere Large**, nom réseau **`Erki’s geneva`** (apostrophe typographique), instance RAOP
+  `F8F25A011261@Erki’s geneva`, hôte `Erkis-geneva.local`, 192.168.1.39:5000. `features=0x444c0a00` sans aucun bit
+  de pairing : récepteur AirPlay 1 même si elle s'annonce aussi en `_airplay._tcp`. TXT `et=0,4` et, depuis son
+  firmware `fv=s9816.258.1009`, **`cn=0,1`** (elle annonçait `cn=0` en août) : le SDP L16 part donc **sans** ligne
+  `a=fmtp`, et elle le décode bien (entendu le 2026-11-02). PCM big-endian sans chiffrement.
+- **`Audio-Latency: 4096` de la Geneva (92,88 ms) ne doit PAS être retranchée de l'ancrage** (commit 2ba1336). Mesuré
+  au micro : avec cette soustraction (0cf8a31) elle jouait 84 ms avant les HomePod, un écho net ; sans elle, au niveau
+  des HomePod, et Baptiste n'entend plus d'écho. Le récepteur tient déjà compte de sa latence pour l'instant annoncé.
+- **Garder la Geneva éveillée : −50 dBFS au moins, jamais −60.** Une session RAOP à −50 dBFS 60 Hz, volume −30, relancée en
+  boucle, l'a tenue allumée près de 2 h 30 (ping 60/60). À **−60 dBFS** 60 Hz, volume −30, elle a fermé la session et **quitté
+  le réseau 15 min plus tard** (2026-11-02, 21:18 : FIN sur le RTSP, puis ping 0/60 et plus d'annonce Bonjour). Éteinte ainsi,
+  rien ne la réveille à distance : il faut que Baptiste la rallume. Un ping seul ne prouve rien.
+- **HomePod gen 2**, « Salon » (192.168.1.66, à gauche face à la télé) et « Salon (2) » (192.168.1.69, à droite,
+  leader de la paire : bit 13 de `flags`). Ils forment une **paire stéréo** (même `tsid`), et font partie du groupe
+  « Home cinéma » de l'Apple TV (même `gid`, `psgsz=3`). firmware `osvers=27.2`, `srcvers=1005.13.2`.
+  - **Un membre adressé seul ne joue que SON canal** (entendu) : « Salon (2) » seul ne restitue que la droite, l'autre
+    reste muet. Les clés de groupe d'un iPhone au `SETUP` (`tightSyncUUID`=`tsid`, `groupUUID`=`gid`) n'y changent rien.
+    **La vraie stéréo exige une session vers chacun.**
+  - **Deux sessions démarrées à des moments différents s'expulsent mutuellement** : chaque ouverture fait tomber l'autre,
+    en boucle (coupures toutes les ~10 s, entendu). Démarrées ensemble, elles tiennent (1 h sans perte le 2026-11-02).
+  - **Deux pair-setups transitoires simultanés vers les deux membres** : l'un échoue à M3 (TLV « authentification »).
+    D'où un seul pairing à la fois par moteur (`PairingGate`), et un refus transitoire passager et réessayé.
+  - **403 Forbidden si les requêtes de session ne portent pas toutes la même identité de contrôleur**
+    (`User-Agent: AirPlay/550.10`, `DACP-ID`, `Active-Remote`, `Client-Instance` = DACP-ID). C'est ce qui empêchait
+    toute session le 2026-11-02 (le volume, avant `RECORD`, était refusé). `AirPlay2Session.ControllerIdentity`.
+  - **Le premier essai après une session terminée est souvent coupé** par le HomePod juste après le `SETUP` du flux
+    (alternance démontrée, pyatv tombe pareil juste après nous). Cause inconnue : ni l'Apple TV (en veille, idem),
+    ni le `TEARDOWN`, ni l'identifiant, ni l'ordre du canal d'événements. Parade : une renégociation immédiate.
+  - Accepte le transitoire, `/pair-pin-start` inutile. **Pas d'`Audio-Latency`** au `RECORD`. Annonces `0xD4` à
+    NTP − émission ≈ 0. Aucune requête sur le canal d'événements en session.
 - **Le HomePod ne répond au `SETUP` qu'après avoir mesuré notre horloge** : le répondeur de timing doit
   écouter **avant** le `SETUP`. Il refuse le `SETUP` en 400 sur l'IPv6 de lien local : IPv4 d'abord.
 - **Charge utile AirPlay 2 en PCM big-endian.** Données associées de l'AEAD = octets 4 à 12 de l'en-tête
   RTP. Nonce de 8 octets ajouté après l'étiquette Poly1305. Un bruit blanc est une bonne nouvelle : un
   paquet mal chiffré serait rejeté et donnerait du silence.
-- **Apple TV** : refuse le transitoire en 470 même en annonçant le bit 48. L'app la signale donc
-  « appairage requis » d'après le TXT `model` (`AppleTV…`). `pair-verify` n'a jamais abouti. Credentials au
-  format pyatv (`ltpk:ltsk:atv_id:client_id`), sous `credentials/`, à passer par chemin absolu
-  (`--credentials2`), jamais à afficher. L'identifiant renvoyé (`pi` Bonjour) diffère de celui enregistré
-  par pyatv : écart journalisé, pas fatal.
-- **`X-Apple-HKP`** : `3` en appairage système, `4` en transitoire. L'accessoire simulé de pyatv refuse en
-  501 un `pair-verify` qui n'annonce pas `3`. Correction confirmée contre un accessoire simulé seulement.
+- **Apple TV** (« Apple TV Salon », AppleTV14,1, 192.168.1.52) : refuse le transitoire en 470 même en annonçant le
+  bit 48 ; l'app la signale « appairage requis » d'après le TXT `model`. **`pair-verify` abouti le 2026-11-02** avec
+  les credentials pyatv (`credentials/appletv-salon-airplay.txt`, par chemin absolu, jamais affichés), session et
+  `TEARDOWN` acceptés, **mais aucun son ne sort**, Apple TV en veille comme réveillée, **et pyatv n'en obtient pas
+  davantage**. Chemin écarté (ADR 009). L'identifiant renvoyé (`pi`) diffère de celui de pyatv : journalisé, pas fatal.
+- **`X-Apple-HKP`** : `3` en appairage système, `4` en transitoire. **Confirmé sur la vraie Apple TV** le 2026-11-02.
 - **Maintien de session** : chez pyatv, RAOP sonde `POST /feedback` puis répète toutes les 25 s si 200 ;
   AirPlay 2 toutes les 2 s. Jamais fatal, comme dit plus haut.
 - **Retransmission** : réponse `80 D6 | séquence d'origine (2) | paquet complet` sur le canal de contrôle,
@@ -617,6 +637,13 @@ depuis n'a jamais été entendu** : la liste est dans la section du jalon 5 de `
 - **Pas de surcharge `async` d'un nom synchrone** : elle casse les appelants.
 - **csrp exige `A` avant `B`** côté serveur, d'où `TransientSRPServer` dans les tests.
 
+- **Une boucle d'événements imbriquée lancée sous un bloc de la file principale ne vide plus cette file.** `terminate:`
+  appelé depuis une source dispatch de la file principale (le SIGTERM) attendait donc pour toujours une réponse
+  `.terminateLater` qui devait passer par le MainActor : interblocage en diffusion, `kill -9` nécessaire. SIGTERM passe
+  désormais par `RunLoop.main.perform(inModes: [.common])`, et un minuteur de secours répond à 6 s. **Ne jamais appeler
+  `terminate` depuis un `Task` ni un `DispatchQueue.main.async`.** Un second `terminate` pendant l'attente fait quitter
+  AppKit sur-le-champ, sans `TEARDOWN` : il est ignoré.
+
 ## Écoute et délais
 
 - **Deux lieux d'écoute sélectionnables** : « À table » par défaut, dos à la fenêtre et face à la télé, et « Au
@@ -629,6 +656,27 @@ depuis n'a jamais été entendu** : la liste est dans la section du jalon 5 de `
   cochées : cocher une enceinte ou voir la Geneva s'allumer ne doit pas bouger le calage des autres. Une sortie
   absente du plan a 0 de compensation. Le premier rattachement de la Geneva provoque un seul recalage.
 - Valeurs du plan, sous le seuil de perception : à table 0 à 2,2 ms, au canapé 0 à 5,7 ms.
+
+## Mesure acoustique et essais sur le matériel — outils et pièges (2026-11-02)
+
+- **Mesurer le calage au micro** : `./audiocap --clicks --airplay "Erki’s geneva" --airplay2 Salon --airplay2 "Salon (2)"
+  --record-input <f.wav> 90`, puis `scripts/measure-clicks.py <f.wav>`. Salves de 5 ms à 3 kHz toutes les 2 s, datées
+  sur l'horloge hôte (JSON à côté du WAV). Mesurer **une enceinte à la fois d'abord** : le script ne sait pas quel
+  groupe est quelle enceinte. Le premier groupe est le son direct, les suivants des réflexions.
+- **Valeurs mesurées à table** (son direct, écart à l'instant attendu, constante commune comprise) : Geneva +298 ms
+  (sans la compensation de 0cf8a31 ; +206 avec), Salon +290 ms, Salon (2) de +267 à ~+307 ms en ~40 s de convergence.
+  Écart entre enceintes ≤ 17 ms, mesuré enceinte par enceinte. Aucun écho entendu à trois.
+- **Repère du script** : une salve sur cinq est doublée **250 ms** plus tard. Une enceinte en retard d'environ 250 ms
+  se confond avec ces doublures : replier l'enregistrement modulo 2 s pour lever le doute.
+- **Pièce calme indispensable** : une vidéo, une télé, une conversation noient les salves dans la bande des 3 kHz.
+  Durée ≥ 60 s : la connexion des HomePod coûte souvent 10 s au premier essai.
+- **Test gauche/droite** : `--channel-test` (bip grave = gauche, deux aigus = droite), ou une voix « gauche »/« droite »
+  sur un seul canal (`say` + WAV stéréo), jouée par `afplay` pendant `./audiocap --mute-local --airplay2 …`. La voix est
+  la seule forme sans ambiguïté pour Baptiste.
+- **`log` est une commande interne de zsh** : appeler `/usr/bin/log show …`, sinon « too many arguments ».
+- **Fausse alerte « SILENCE STRICT … autorisation perdue ? »** quand rien ne joue : des processus `python` gardent un
+  flux de sortie ouvert et muet, et sont réputés « jouer » (`./audiocap --list`).
+- **Pendant une session vers les HomePod, l'Apple TV perd sa sortie Home cinéma**, et la reprend ~1 s après la fin.
 
 ## Plan et capture de Baptiste
 
@@ -671,7 +719,7 @@ scripts/install-app.sh --open  # compile en Release, signe, remplace l'app dans 
 ```
 
 - **L'exigence désignée ne dépend plus du CDHash** (`identifier "…" and certificate leaf = H"…"`) : recompiler
-  conserve l'autorisation « sons du système », à confirmer sur le premier rebuild réel. Un certificat auto-signé
+  conserve l'autorisation « sons du système » **et le micro** : confirmé le 2026-11-02 sur `make-cli-bundle.sh`. Un certificat auto-signé
   suffit, TCC compare une empreinte. Il n'est pas approuvé, donc `find-identity -v` ne l'affiche pas : c'est normal.
 - **Tout passe par `scripts/setup-signing.sh --codesign`.** Sur un trousseau verrouillé, `codesign` et
   `security show-keychain-info` ouvrent chez Baptiste une fenêtre de mot de passe qu'il ne peut pas remplir : c'est
