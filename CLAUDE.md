@@ -198,8 +198,11 @@ apparaîtraient comme des enceintes dans l'app, qui mémorise les sorties coché
   `_raop._tcp` et résout le service, sans supposer ni le nom ni le port.
 - Services et ports observés : Geneva-Mock → `_raop._tcp`, port 5000.
   ApTV-HomePod-Mock → `_airplay._tcp`, port 7000.
-- **Juger le son reçu** : `shairport-sync -o stdout` livre ce que le mock a décodé, analysable. Le
-  mock peut aussi tourner à vide après un SIGTERM.
+- **Juger le son reçu** : `shairport-sync -o stdout` livre ce que le mock a décodé, analysable, **à condition d'y
+  ajouter `ignore_volume_control`** : sinon un volume de −30 ne laisse que du dither. Son journal
+  `Input format: ALAC` s'affiche aussi pour du PCM : ne pas s'y fier.
+- **shairport peut ignorer SIGTERM après une session** et tourner à vide (3/3) : `./run-mocks.sh stop` passe à
+  SIGKILL après 5 s.
 
 ## Sender RAOP — faits vérifiés au jalon 2
 
@@ -247,8 +250,8 @@ suggestion.
   exigés par le protocole : c'est ce qui rend une retransmission isolée décodable.
 - **La clé publique RAOP en dur n'est pas un secret** : c'est la clé *publique* qu'attend
   tout récepteur annonçant `et=1`, identique dans shairport-sync, OwnTone et pyatv.
-- **Le mock quitte après chaque session** (`TEARDOWN`). Il est stable au repos. Relancer
-  `./run-mocks.sh start` entre deux essais.
+- **Le mock RAOP ne quitte plus au `TEARDOWN` et ne meurt plus** (relevé le 2026-11-02, flux désormais bien formé) :
+  plus besoin de le relancer entre deux essais.
 - **Écarter l'arriéré du ring buffer avant de commencer à diffuser** : la capture tourne
   pendant la découverte Bonjour et la négociation RTSP (~4 s), le tampon a déjà débordé.
   Sans cela, la diffusion démarre avec plusieurs secondes de retard sur le direct.
@@ -461,7 +464,9 @@ une ligne.
 shairport-sync interroge densément pendant ~35 s après le `RECORD`, puis **se tait
 complètement** alors que la session se porte parfaitement (14 requêtes en tout sur une
 session de 60 s, aucune après la 35ᵉ seconde). Un délai de garde de 30 s sur ce silence
-déclenchait une reconnexion sur une session saine.
+déclenchait une reconnexion sur une session saine. Ce relevé date d'un flux qu'il décodait de travers ;
+sur un flux bien formé, il interroge environ toutes les 3 s (63 requêtes en 180 s, le 2026-11-02), toujours
+sans estampille. La conclusion ne change pas : rien n'oblige un récepteur à tenir ce rythme.
 
 **Le signal franc de perte de session est la rupture de la connexion RTSP** (TCP), FIN et RST
 compris, et celle du **canal d'événements** côté AirPlay 2. Une coupure de courant n'envoie ni l'un ni
@@ -510,8 +515,8 @@ décodage de travers, et le mock mort sur un `Bus error`. Trois causes empilées
    shairport-sync). Le bourrage base64, longtemps suspecté, n'y était pour rien. Côté sender, rien ne
    le trahit : la clé se charge et chiffre sans erreur, le cryptogramme fait 256 octets.
 2. **L'en-tête ALAC était amputé de 3 bits** : voir le premier piège RAOP.
-3. **shairport-sync jusqu'à 5.2.1 décode L16 + `fmtp` comme de l'ALAC**, quel que soit le `rtpmap`, et
-   en meurt. La ligne `fmtp` reste pourtant envoyée à la Geneva, comme le fait pyatv : elle n'a jamais été
+3. **shairport-sync jusqu'à 5.2.1 décode L16 + `fmtp` comme de l'ALAC**, quel que soit le `rtpmap` :
+   `Bus error` au jalon 4, bruit pleine échelle le 2026-11-02. La ligne `fmtp` reste pourtant envoyée à la Geneva, comme le fait pyatv : elle n'a jamais été
    validée sans. Elle n'est retirée que face à un récepteur qui annonce aussi ALAC.
 
 Le sender préfère désormais le **clair** quand `et` le propose (`et=0,1`), et le chemin clair a tenu
@@ -520,8 +525,8 @@ ni les HomePod**, qui n'emploient pas RSA.
 
 ### Toujours vérifier que le mock ACCEPTE avant de lancer une session longue
 
-shairport-sync peut être annoncé alors que son port 5000 refuse encore les connexions : il quitte après
-chaque `TEARDOWN` et met quelques secondes à revenir. `./run-mocks.sh check` vérifie désormais le port.
+shairport-sync peut être annoncé alors que son port 5000 refuse encore les connexions, juste après son
+lancement. `./run-mocks.sh check` vérifie désormais le port.
 Le moteur, lui, attend un récepteur absent en tâche de fond (`waitingForReceiver`), avec repli
 exponentiel : un récepteur en retard ne tue plus une sortie.
 
@@ -685,6 +690,15 @@ scripts/install-app.sh --open  # compile en Release, signe, remplace l'app dans 
 - `./audiocap` relaie sortie, code de retour et Ctrl-C malgré `open` (`open --env/--stdout/--stderr` existent). Codes : 0
   succès, 1 erreur, 2 silence ou mauvais usage, 3 autorisation refusée, 130 Ctrl-C, 70 mort sans code.
 - `git apply --unidiff-zero` place les ajouts selon la position d'arrivée : à vérifier après application.
+- **En test, jamais d'écoute `.any` ni de `waitUntilExit`** (`TestListenerPortTests` y veille pour `.any`). Toute écoute passe
+  par `startLoopbackListener`, hors plage éphémère, avec repli sur le port suivant. Une `NWConnection` vers un port qui a servi
+  de source à une connexion reçue par un `NWListener` du même process est refusée 30 s (`EADDRINUSE`), `restart()` inutile ;
+  et `NWListener` refuse parfois un port libre. Réessayer ou allonger une attente ne soigne rien. L'app n'a aucune écoute, elle
+  n'y est pas exposée. Un `waitUntilExit` a figé un passage 14 min : attendre la fin de fichier du tube.
+- **Un socket lié qui n'écoute pas ne simule pas un port fermé** : le noyau ignore le SYN au lieu de le refuser, et la connexion
+  reste en préparation sans fin.
+- **Les annonces Bonjour des tests restent sur l'interface locale, sous un type privé** (`_apbtest._tcp`) : la suite ne fait
+  pas apparaître d'enceinte chez une app lancée à côté.
 
 ## Travailler avec des sous-agents
 
@@ -696,3 +710,4 @@ scripts/install-app.sh --open  # compile en Release, signe, remplace l'app dans 
 - **Le vrai matériel est une ressource unique.** Une seule session le fait jouer à la fois, et tout essai contre un mock
   vise celui-ci par adresse ou par nom exact.
 - Ne pas lire `credentials/` : clés privées. Passer les chemins.
+- **`/usr/bin/git` pour un relevé brut** : le hook RTK réécrit `git` et filtre sa sortie (`log`, `diff`, `status`).

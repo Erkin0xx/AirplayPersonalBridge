@@ -1069,9 +1069,48 @@ réponse DNS tardive ; `Audio-Latency` des HomePod jamais lue. Les senders relis
 **À vérifier à l'usage** : liste en phase 4 du prompt (verre, Dock, liens des Réglages, ouverture de session,
 veille, entrée physique). `Privacy_ScreenCapture` n'est pas confirmé.
 
-**À COMPLÉTER À LA FUSION : résultats de l'essai de bout en bout contre mocks et stabilisation des tests.**
-En attente au moment de cette rédaction. À `cf57399` (700 tests), `swift test` échouait par intermittence sur des tests
-réseau (`BonjourResolutionWithoutConnectionTests`, « Connexion refusée… »), qui passent quand ils tournent seuls : la
-suite n'est donc pas réputée verte à cette date. Une cause est établie pour le premier, sur une branche encore non
-fusionnée (3a09882) : `EADDRINUSE`, une `NWConnection` de test reprenant le port d'une écoute en `TIME_WAIT`. Rien côté
-production. Les autres tests restent à trancher.
+### Essai de bout en bout contre mocks et stabilisation des tests
+
+**Contre mocks**, mesuré à `b69b127` (avant les correctifs HomePod de la session matérielle), non rejoué depuis. Vrai
+matériel : mDNS seul, aucune session.
+- Tests d'intégration contre mocks : 6/6, dont RAOP 40 s, 5 007 paquets, 0 erreur.
+- 180 s vers les deux mocks à la fois : RAOP 22 583 paquets, AirPlay 2 21 215, 0 rupture de séquence, 7,982 ms en moyenne.
+  L'écart vaut ~11 s de diffusion, sans doute la négociation AirPlay 2, non vérifié. RTSP complet, synchro chaque seconde,
+  `/feedback` à 25 s et 2 s, `TEARDOWN`. Son décodé par shairport : 440,000 Hz, −50,0 dBFS, 0 saut de phase.
+- Panne d'une sortie : AirPlay 2 sans rupture, pire écart 22,6 ms, 0 reconnexion. RAOP reprend seul 4,96 s après la relance
+  du mock, son identique.
+- Installation : signature et exigence désignée correctes, 0 référence à Homebrew, clés présentes. Plan : 2 lieux, « À table »
+  actif, HomePod rattachés, Geneva à sa découverte. Le « widget » est le panneau `MenuBarExtra`, sans extension.
+
+**Tests** (branche jusqu'à `2705a8c`) : 10 passages sur 10 en parallèle et 10 sur 10 en `--no-parallel`, à `nice -n 19`, 747 tests.
+Après fusion avec `main` (`150800b`, 762 tests) : 1 seul passage, vert, à `nice -n 19`, la session matérielle travaillant à côté.
+`xcodebuild` vert à `e7fe445`, app inchangée depuis.
+
+Les échecs intermittents ne venaient **ni du code de l'app ni de la charge CPU** (0 échec du témoin sur 12 passages sous charge) :
+- **`NWConnection` refusée 30 s.** Vers un port ayant servi de source à une connexion reçue par un `NWListener` du même
+  process : `EADDRINUSE` immédiat, `restart()` inutile (6/6). Client BSD ou autre process : 0/3. L'app n'a pas de `NWListener`,
+  elle n'y est pas exposée. `connectionRefused` et « Un contenu indéchiffrable » semblent relever de ce mécanisme ou du suivant ;
+  `evenementAcquitte` n'a pas échoué dans ces passages, sa cause reste donc supposée.
+- **`NWListener` refuse parfois un port libre** (NECP) : le faux récepteur restait muet 10 s. Repli sur le port suivant.
+- **Pool `.global()` encombré** par le Montgomery du faux récepteur, 1,2 s CPU par pair-setup : 3 484 ms d'attente contre
+  254 ms. Sans rapport avec le refus ci-dessus. Cause probable de « Une rafale… » (RAOP). Réécrit, 237 ms.
+- Deux bornes corrigées (délai de démarrage, rythme de la source synthétique), et un `waitUntilExit` ajouté à l'occasion qui a
+  figé un passage 14 min, retiré.
+
+Corrigés au passage : `./run-mocks.sh stop` annonçait « arrêté » alors que shairport ignore SIGTERM après une session (3/3), il
+passe à SIGKILL ; messages au tutoiement partout ; `--browse` dit ce qui sera vraiment employé, et plus la seule capacité annoncée.
+
+**Reste ouvert côté mocks** :
+- Déclencheur exact du refus `EADDRINUSE` : vu avec un autre `swift test` en parallèle, pas reproduit par 20 connexions/s. Écarté
+  par construction (écoutes hors plage éphémère), pas expliqué.
+- AirPlay 2 jamais écouté : le puits audio du mock plante en aval du protocole.
+- Le chemin `fmtp` de la Geneva n'est pas jugeable par le mock : shairport y décode du bruit pleine échelle (`clear-pcm`,
+  `rsa-pcm`). Seule la vraie Geneva tranche, comme le 12 août.
+- RAOP peut mettre jusqu'à 15 s à reprendre après le retour du récepteur.
+
+**À comparer au vrai matériel** :
+- Cadence : moyenne 7,982 ms, mais médiane 9,0 à 9,5 ms, 1 paquet sur 4 part 0,1 à 0,5 ms après le précédent, p99 14 à 17 ms,
+  max 21 à 34 ms. Le tampon du récepteur l'absorbe contre mock ; à regarder en capture si une enceinte craque.
+- Ancrage RAOP 250 ms avant AirPlay 2 contre les mocks : c'est l'`Audio-Latency` annoncée par shairport, retranchée de l'ancrage
+  (92,88 ms sur la vraie Geneva). Attendu, à condition que les HomePod n'en annoncent pas qui compte.
+- Pas d'`OPTIONS` avant `ANNOUNCE`, contrairement à macOS : la Geneva a joué sans.
