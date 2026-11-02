@@ -501,14 +501,14 @@ extension AirPlay2PairingConcurrencyTests {
                 id: "airplay2/Salon", proto: .airplay2, deviceName: "Salon", volumeDB: -30)
 
             try await engine.start(source: .tone(frequency: 440, levelDBFS: -50), outputs: [output])
-            let failed = TurnLog()
+            let failed = LockedFlag()
             let streaming = await eventually(timeout: .seconds(15)) {
                 let phase = await engine.phase(of: output.id)
-                if case .failed = phase { failed.enter(0) }
+                if case .failed = phase { failed.set() }
                 return phase == .streaming
             }
             #expect(streaming)
-            #expect(failed.snapshot.order.isEmpty)
+            #expect(!failed.value, "la sortie est passée en échec")
             await engine.stop()
             #expect(salon.sessionCount == 2)
         }
