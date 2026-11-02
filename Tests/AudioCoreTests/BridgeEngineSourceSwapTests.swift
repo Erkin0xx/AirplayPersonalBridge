@@ -132,14 +132,9 @@ struct BridgeEngineSourceSwapTests {
         #expect(await !engine.replaceCapture(with: .inputDevice))
     }
 
-    /// Deux IO sur un même tampon, ce serait deux producteurs pour un ring buffer qui n'en admet
-    /// qu'un. Et l'attendre retiendrait la file des transitions de l'interface, donc un arrêt demandé,
-    /// tant que la capture refuse de repartir.
-    @Test("Un changement de source pendant une reconstruction est refusé sans attendre")
-    func swapRefusedDuringRebuild() async throws {
-        let ledger = CaptureLedger()
-        let first = ManualCaptureSource(ledger: ledger)
-        let second = ManualCaptureSource(ledger: ledger)
+    private func engineWithFailingRebuild(
+        ledger: CaptureLedger, first: ManualCaptureSource, second: ManualCaptureSource
+    ) async throws -> BridgeEngine {
         var tuning = BridgeEngine.Tuning.fast
         tuning.rebuildRetryInitialDelay = .milliseconds(50)
         tuning.rebuildRetryMaximumDelay = .milliseconds(50)
@@ -153,22 +148,49 @@ struct BridgeEngineSourceSwapTests {
             )
         )
         try await engine.start(source: tone, outputs: [request("a")])
-
         first.preparesToFail = 1_000
         first.fireRouteChange()
         #expect(await eventually { await engine.captureHealth.lastRebuildError != nil })
+        return engine
+    }
 
-        #expect(await !engine.replaceCapture(with: .inputDevice))
-        #expect(second.startCount == 0)
+    /// Elle ne finira peut-être jamais : sa source peut désigner des processus disparus. Refuser le
+    /// changement laissait les enceintes muettes alors que l'application jouait ailleurs. Mais deux IO
+    /// sur un même tampon, ce serait deux producteurs pour un ring buffer qui n'en admet qu'un.
+    @Test("Une reconstruction en échec cède la place au changement de source, une capture à la fois")
+    func swapSupersedesFailingRebuild() async throws {
+        let ledger = CaptureLedger()
+        let first = ManualCaptureSource(ledger: ledger)
+        let second = ManualCaptureSource(ledger: ledger)
+        let engine = try await engineWithFailingRebuild(ledger: ledger, first: first, second: second)
 
-        // La reconstruction aboutie, il passe.
-        first.preparesToFail = 0
-        #expect(await eventually { await engine.captureHealth.rebuilds == 1 })
-        #expect(await eventually { await !engine.isRebuildingCapture })
         #expect(await engine.replaceCapture(with: .inputDevice))
+
+        #expect(second.startCount == 1)
+        #expect(await eventually { await !engine.isRebuildingCapture })
+        #expect(await engine.captureHealth.lastRebuildError == nil)
         #expect(ledger.maximumActive == 1)
         #expect(ledger.activeCount == 1)
         #expect(second.push(frames: 10))
+        await engine.stop()
+        #expect(ledger.activeCount == 0)
+    }
+
+    @Test("Si la nouvelle source échoue aussi, la reconstruction reprend et finit par aboutir")
+    func failedSwapResumesRebuild() async throws {
+        let ledger = CaptureLedger()
+        let first = ManualCaptureSource(ledger: ledger)
+        let second = ManualCaptureSource(ledger: ledger)
+        second.preparesToFail = 1_000
+        let engine = try await engineWithFailingRebuild(ledger: ledger, first: first, second: second)
+
+        #expect(await !engine.replaceCapture(with: .inputDevice))
+        #expect(await engine.isRebuildingCapture)
+
+        first.preparesToFail = 0
+        #expect(await eventually { await !engine.isRebuildingCapture })
+        #expect(ledger.activeCount == 1)
+        #expect(first.push(frames: 10))
         await engine.stop()
         #expect(ledger.activeCount == 0)
     }

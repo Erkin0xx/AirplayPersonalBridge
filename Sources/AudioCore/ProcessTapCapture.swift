@@ -177,11 +177,22 @@ public final class ProcessTapCapture: AudioCaptureSource {
             // Ces initialiseurs sont NS_REFINED_FOR_SWIFT : Swift les expose avec des
             // AudioObjectID typés plutôt que des NSNumber.
             return CATapDescription(
-                stereoGlobalTapButExcludeProcesses: pids.map(objectID(forPID:))
+                stereoGlobalTapButExcludeProcesses: audioObjects(forPIDs: pids, translate: objectID)
             )
         case let .processes(pids):
-            return CATapDescription(stereoMixdownOfProcesses: pids.map(objectID(forPID:)))
+            return CATapDescription(
+                stereoMixdownOfProcesses: audioObjects(forPIDs: pids, translate: objectID)
+            )
         }
+    }
+
+    /// Les process audio encore là. Une application garde dans sa capture des processus qui ont pu
+    /// mourir depuis, et une reconstruction les retraduit : rien ne dit ce que Core Audio ferait d'un
+    /// `kAudioObjectUnknown` dans une description de tap.
+    static func audioObjects(
+        forPIDs pids: [pid_t], translate: (pid_t) -> AudioObjectID
+    ) -> [AudioObjectID] {
+        pids.map(translate).filter { $0 != AudioObjectID(kAudioObjectUnknown) }
     }
 
     /// Traduit un pid système en AudioObjectID de process audio, seule forme acceptée par

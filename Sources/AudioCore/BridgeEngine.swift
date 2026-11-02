@@ -397,6 +397,10 @@ public actor BridgeEngine {
     /// Délai avant la prochaine reconstruction d'une capture bloquée, s'il faut y revenir.
     private var stallRebuildDelay: TimeInterval = 0
     private var nextStallRebuild: Date?
+    /// Depuis quand les blocs arrivent sans blocage : c'est ce flux établi qui remet le repli à zéro.
+    private var flowSince: Date?
+    /// Une reconstruction tournait au relevé précédent.
+    private var rebuildRanAtLastTick = false
     private var lastExpectationCheck: Date?
     private var lastExpectation: Bool?
 
@@ -1111,10 +1115,19 @@ public actor BridgeEngine {
     /// Rend la main rapidement, sans attendre une capture qui refuserait de repartir : l'appelant est
     /// la file des transitions de l'interface, et un arrêt demandé doit pouvoir y passer.
     ///
-    /// - Returns: faux s'il n'a pas eu lieu, à réessayer plus tard : reconstruction déjà en cours,
-    ///   nouvelle source qui ne démarre pas, ou qui exigerait une autre autorisation. L'ancienne
-    ///   continue alors, reconstruite au besoin en arrière-plan.
+    /// Une reconstruction **en échec** cède la place : elle ne finira peut-être jamais, sa source
+    /// désignant peut-être des processus disparus, et l'application jouerait devant des enceintes
+    /// muettes. Elle reprend si la nouvelle source échoue à son tour.
+    ///
+    /// - Returns: faux s'il n'a pas eu lieu, à réessayer plus tard : reconstruction en cours qui
+    ///   n'a pas encore échoué, nouvelle source qui ne démarre pas, ou qui exigerait une autre
+    ///   autorisation. L'ancienne continue alors, reconstruite au besoin en arrière-plan.
     public func replaceCapture(with request: Source) async -> Bool {
+        guard lifecycle == .running else { return false }
+        if let rebuildTask, health.lastRebuildError != nil {
+            rebuildTask.cancel()
+            await rebuildTask.value
+        }
         // Elle pilote la source : le changement la laisse finir, plutôt que de l'attendre.
         guard lifecycle == .running, rebuildTask == nil else { return false }
 
@@ -1182,14 +1195,20 @@ public actor BridgeEngine {
     private func recoverStalledCapture(
         _ source: any AudioCaptureSource, framesMoved: Bool, now: Date
     ) {
-        if framesMoved { resetStallRecovery() }
+        let rebuildJustEnded = rebuildRanAtLastTick && rebuildTask == nil
+        rebuildRanAtLastTick = rebuildTask != nil
+        noteFlow(framesMoved: framesMoved, now: now)
         guard health.diagnosis == .stalled, silenceExpectation(source, now: now) == true else {
             nextStallRebuild = nil
             health.nextStallRebuild = nil
             return
         }
-        let due = nextStallRebuild ?? lastFlowDate.addingTimeInterval(stallRebuildDelay)
-        if now >= due, rebuildTask == nil {
+        let due = nextStallRebuild ?? firstStallDeadline(now: now)
+        if now >= due, rebuildJustEnded {
+            // Une reconstruction plus longue que le délai : la capture qui vient de repartir a droit
+            // à son attente, au lieu d'être détruite avant son premier bloc.
+            nextStallRebuild = now.addingTimeInterval(stallRebuildDelay)
+        } else if now >= due, rebuildTask == nil {
             log.error("Capture bloquée alors qu'une application joue : reconstruction")
             stallRebuildDelay = min(stallRebuildDelay * 2, tuning.stallRebuildMaximumDelaySeconds)
             nextStallRebuild = now.addingTimeInterval(stallRebuildDelay)
@@ -1200,10 +1219,39 @@ public actor BridgeEngine {
         health.nextStallRebuild = nextStallRebuild
     }
 
+    /// L'échéance d'un blocage tout juste constaté.
+    ///
+    /// Elle part du dernier bloc, sauf si ce bloc est trop ancien : après une pause, l'application qui
+    /// reprend n'a pas encore livré le sien, et reconstruire tout de suite détruirait le tap au moment
+    /// où le son démarre.
+    private func firstStallDeadline(now: Date) -> Date {
+        let afterLastBlock = lastFlowDate.addingTimeInterval(stallRebuildDelay)
+        return afterLastBlock >= now ? afterLastBlock : now.addingTimeInterval(stallRebuildDelay)
+    }
+
+    /// Des blocs arrivent : plus rien n'est prévu. Le repli, lui, ne repart de zéro qu'une fois le flux
+    /// établi. Un périphérique qui livre un bloc à chaque démarrage, puis plus rien, ferait sinon
+    /// reconstruire toutes les 5 s sans jamais espacer.
+    private func noteFlow(framesMoved: Bool, now: Date) {
+        if framesMoved {
+            nextStallRebuild = nil
+            health.nextStallRebuild = nil
+            let since = flowSince ?? now
+            flowSince = since
+            if now.timeIntervalSince(since) >= tuning.stallRebuildDelaySeconds {
+                stallRebuildDelay = tuning.stallRebuildDelaySeconds
+            }
+        } else if health.stalledSince != nil {
+            flowSince = nil
+        }
+    }
+
     private func resetStallRecovery() {
         stallRebuildDelay = tuning.stallRebuildDelaySeconds
         nextStallRebuild = nil
         health.nextStallRebuild = nil
+        flowSince = nil
+        rebuildRanAtLastTick = false
     }
 
     /// Reconstruit la capture en cours, même sans changement de route.

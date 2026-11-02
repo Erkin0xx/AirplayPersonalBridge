@@ -68,13 +68,102 @@ struct BridgeEngineStallRecoveryTests {
         #expect(await eventually { await engine.captureHealth.rebuilds == 1 })
 
         source.push(frames: 480)
-        let later = start.addingTimeInterval(7)
+        var later = start.addingTimeInterval(7)
         await engine.tickHealth(now: later)
         #expect(await engine.captureHealth.nextStallRebuild == nil)
         #expect(await engine.captureHealth.diagnosis == .healthy)
+        for _ in 1...5 {
+            source.push(frames: 480)
+            later.addTimeInterval(1)
+            await engine.tickHealth(now: later)
+        }
 
         // Nouvel arrêt : le premier essai revient au bout du délai initial, pas du délai doublé.
         await engine.tickHealth(now: later.addingTimeInterval(5))
+        #expect(await eventually { await engine.captureHealth.rebuilds == 2 })
+        await engine.stop()
+    }
+
+    /// Un bloc livré à chaque démarrage, puis plus rien : remettre le repli à zéro sur ce seul bloc
+    /// ferait reconstruire toutes les 5 s, indéfiniment.
+    @Test("Un seul bloc après chaque reconstruction n'empêche pas les essais de s'espacer")
+    func singleBlockKeepsBackingOff() async throws {
+        let (engine, source, _, start) = try await started(expectation: true)
+        var attempts: [Int] = []
+        for second in 1...100 {
+            await engine.tickHealth(now: start.addingTimeInterval(Double(second)))
+            #expect(await eventually { await !engine.isRebuildingCapture })
+            let rebuilds = await engine.captureHealth.rebuilds
+            if rebuilds > attempts.count {
+                attempts.append(second)
+                source.push(frames: 480)
+            }
+        }
+        #expect(attempts == [5, 16, 37, 78])
+        await engine.stop()
+    }
+
+    /// Le dernier bloc date d'avant la pause : l'échéance comptée depuis lui est déjà dépassée, et le
+    /// tap était détruit au moment où le son démarrait.
+    @Test("Une application qui reprend a le temps de livrer son premier bloc")
+    func resumeAfterPauseGetsGrace() async throws {
+        let (engine, source, _, start) = try await started(expectation: false)
+        for second in 1...30 {
+            await engine.tickHealth(now: start.addingTimeInterval(Double(second)))
+        }
+        #expect(await engine.captureHealth.diagnosis == .silentNothingPlaying)
+
+        source.expectation = true
+        for second in 31...34 {
+            await engine.tickHealth(now: start.addingTimeInterval(Double(second)))
+        }
+        #expect(await engine.captureHealth.diagnosis == .stalled)
+        #expect(source.prepareCount == 1)
+
+        source.push(frames: 480)
+        await engine.tickHealth(now: start.addingTimeInterval(35))
+        #expect(await engine.captureHealth.diagnosis == .healthy)
+        #expect(source.prepareCount == 1)
+        await engine.stop()
+    }
+
+    @Test("Une application qui reprend sans qu'aucun bloc n'arrive : reconstruite après le délai")
+    func resumeWithoutBlockIsRebuilt() async throws {
+        let (engine, source, _, start) = try await started(expectation: false)
+        for second in 1...30 {
+            await engine.tickHealth(now: start.addingTimeInterval(Double(second)))
+        }
+        source.expectation = true
+        await engine.tickHealth(now: start.addingTimeInterval(31))
+        await engine.tickHealth(now: start.addingTimeInterval(35))
+        #expect(source.prepareCount == 1)
+        await engine.tickHealth(now: start.addingTimeInterval(36))
+        #expect(await eventually { await engine.captureHealth.rebuilds == 1 })
+        await engine.stop()
+    }
+
+    /// L'échéance suivante est calculée au lancement. Dépassée le temps que la reconstruction aboutisse,
+    /// elle détruirait la capture qui vient de repartir, avant son premier bloc.
+    @Test("Une reconstruction plus longue que le délai n'en enchaîne pas une autre aussitôt")
+    func longRebuildIsNotFollowedImmediately() async throws {
+        let (engine, source, _, start) = try await started(expectation: true)
+        source.preparesToFail = 1_000
+        await engine.tickHealth(now: start.addingTimeInterval(5))
+        #expect(await eventually { await engine.captureHealth.lastRebuildError != nil })
+        for second in 6...30 {
+            await engine.tickHealth(now: start.addingTimeInterval(Double(second)))
+        }
+        source.preparesToFail = 0
+        #expect(await eventually { await engine.captureHealth.rebuilds == 1 })
+        #expect(await eventually { await !engine.isRebuildingCapture })
+
+        await engine.tickHealth(now: start.addingTimeInterval(31))
+        #expect(await !engine.isRebuildingCapture)
+        #expect(await engine.captureHealth.rebuilds == 1)
+        await engine.tickHealth(now: start.addingTimeInterval(40))
+        #expect(await engine.captureHealth.rebuilds == 1)
+
+        await engine.tickHealth(now: start.addingTimeInterval(41))
         #expect(await eventually { await engine.captureHealth.rebuilds == 2 })
         await engine.stop()
     }
