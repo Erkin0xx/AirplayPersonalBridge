@@ -1111,6 +1111,6 @@ passe à SIGKILL ; messages au tutoiement partout ; `--browse` dit ce qui sera v
 **À comparer au vrai matériel** :
 - Cadence : moyenne 7,982 ms, mais médiane 9,0 à 9,5 ms, 1 paquet sur 4 part 0,1 à 0,5 ms après le précédent, p99 14 à 17 ms,
   max 21 à 34 ms. Le tampon du récepteur l'absorbe contre mock ; à regarder en capture si une enceinte craque.
-- Ancrage RAOP 250 ms avant AirPlay 2 contre les mocks : c'est l'`Audio-Latency` annoncée par shairport, retranchée de l'ancrage
-  (92,88 ms sur la vraie Geneva). Attendu, à condition que les HomePod n'en annoncent pas qui compte.
+- Ancrage RAOP 250 ms avant AirPlay 2 contre les mocks : c'était l'`Audio-Latency` de shairport, retranchée de l'ancrage. Tranché
+  par la mesure au micro de la session matérielle (`2ba1336`), qui retire cette soustraction.
 - Pas d'`OPTIONS` avant `ANNOUNCE`, contrairement à macOS : la Geneva a joué sans.
