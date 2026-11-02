@@ -1198,6 +1198,7 @@ struct BridgeEngineHealthTests {
     func lateBurstLeavesClockAlone() async throws {
         let (engine, source, clock, start) = try await settledEngine()
         let before = try #require(clock.presentationUnixTime(forCaptureFrame: 0))
+        let interruptedBefore = await engine.captureHealth.interruptedSeconds
 
         await engine.tickHealth(now: start.addingTimeInterval(0.26))
         source.push(frames: 24_000)
@@ -1206,7 +1207,7 @@ struct BridgeEngineHealthTests {
         await engine.tickHealth(now: start.addingTimeInterval(0.76))
 
         #expect(clock.presentationUnixTime(forCaptureFrame: 0) == before)
-        #expect(await engine.captureHealth.interruptedSeconds == 0)
+        #expect(await engine.captureHealth.interruptedSeconds == interruptedBefore)
         await engine.stop()
     }
 
@@ -1214,6 +1215,7 @@ struct BridgeEngineHealthTests {
     func realStopShiftsClock() async throws {
         let (engine, source, clock, start) = try await settledEngine()
         let before = try #require(clock.presentationUnixTime(forCaptureFrame: 0))
+        let interruptedBefore = await engine.captureHealth.interruptedSeconds
         func shift() throws -> Double {
             try #require(clock.presentationUnixTime(forCaptureFrame: 0)) - before
         }
@@ -1231,7 +1233,7 @@ struct BridgeEngineHealthTests {
         source.push(frames: 12_000)
         await engine.tickHealth(now: start.addingTimeInterval(1.01))
         #expect(abs(try shift() - 0.75) < 0.001)
-        #expect(abs(await engine.captureHealth.interruptedSeconds - 0.75) < 0.001)
+        #expect(abs(await engine.captureHealth.interruptedSeconds - interruptedBefore - 0.75) < 0.001)
         await engine.stop()
     }
 
@@ -1252,6 +1254,11 @@ struct BridgeEngineHealthTests {
     }
 
     /// Un moteur dont la capture coule au rythme normal, et la date du dernier relevé.
+    ///
+    /// Le temps écoulé depuis le démarrage, sans trames, compte comme un retard : reporté s'il
+    /// atteint le seuil, ce qui n'arrivait que sous une charge assez forte, et faisait alors échouer
+    /// les tests qui jugent `interruptedSeconds`. Le premier relevé est donc daté d'une seconde plus
+    /// tard, pour que ce report ait toujours lieu : un test ne juge que ce qui s'y ajoute ensuite.
     private func settledEngine() async throws -> (
         BridgeEngine, ManualCaptureSource, any PlaybackClockProtocol, Date
     ) {
@@ -1262,10 +1269,11 @@ struct BridgeEngineHealthTests {
         #expect(await eventually { factory.latest("a") != nil })
         let clock = try #require(factory.latest("a")).context.clock
         source.push(frames: 480)
-        let start = Date()
+        let start = Date().addingTimeInterval(1)
         await engine.tickHealth(now: start)
         source.push(frames: 480)
         await engine.tickHealth(now: start.addingTimeInterval(0.01))
+        #expect(await engine.captureHealth.interruptedSeconds > 0)
         return (engine, source, clock, start)
     }
 
@@ -1274,21 +1282,10 @@ struct BridgeEngineHealthTests {
     /// ferait resynchroniser les récepteurs sans raison.
     @Test("Le rythme normal, gigue comprise, ne touche pas à l'horloge")
     func normalFlowLeavesClockAlone() async throws {
-        let source = ManualCaptureSource()
-        let factory = FakeSenderFactory()
-        let engine = makeEngine(source: source, factory: factory)
-        try await engine.start(source: source0, outputs: [request("a")])
-        #expect(await eventually { factory.latest("a") != nil })
-        let clock = try #require(factory.latest("a")).context.clock
-
-        // Le délai de démarrage, lui, est bien reporté s'il atteint 200 ms : daté une seconde plus
-        // tard pour qu'il le soit toujours, ce relevé ne laisse à juger que le rythme qui suit.
-        source.push(frames: 480)
-        var now = Date().addingTimeInterval(1)
-        await engine.tickHealth(now: now)
+        let (engine, source, clock, start) = try await settledEngine()
         let before = try #require(clock.presentationUnixTime(forCaptureFrame: 0))
         let interruptedBefore = await engine.captureHealth.interruptedSeconds
-        #expect(interruptedBefore > 0)
+        var now = start.addingTimeInterval(0.01)
 
         // Relevés toutes les 250 ms, par blocs de 4 096 trames (85 ms) : selon le relevé, 2 ou
         // 3 blocs sont déjà là, soit jusqu'à 80 ms d'écart en plus ou en moins.

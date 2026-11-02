@@ -177,34 +177,58 @@ struct MontgomeryContext: Sendable {
     }
 
     /// Multiplication de Montgomery, méthode CIOS : `a · b · R⁻¹ mod N`.
+    ///
+    /// **Des `while` et des pointeurs, à dessein.** Ce calcul revient plus de mille fois par
+    /// pair-setup, en compilation de test, donc sans optimisation : un `for` sur un intervalle et une
+    /// fonction intermédiaire y coûtent cher à chaque tour. Écrit plus simplement, un pair-setup
+    /// prenait 1,2 s de CPU, et la suite AirPlay 2 en occupait tous les cœurs pendant ses premières
+    /// secondes : le pool `.global()` du process accusait 3,5 s de retard, ce qui faisait échouer
+    /// les tests qui jugent une cadence en temps réel (« Une rafale de demandes… »).
     private func montgomery(_ a: [UInt64], _ b: [UInt64]) -> [UInt64] {
         let size = count
+        let inverse = self.inverse
         var t = [UInt64](repeating: 0, count: size + 2)
-        t.withUnsafeMutableBufferPointer { t in
-            modulus.withUnsafeBufferPointer { n in
-                a.withUnsafeBufferPointer { a in
-                    b.withUnsafeBufferPointer { b in
-                        for i in 0..<size {
+        t.withUnsafeMutableBufferPointer { tBuffer in
+            modulus.withUnsafeBufferPointer { nBuffer in
+                a.withUnsafeBufferPointer { aBuffer in
+                    b.withUnsafeBufferPointer { bBuffer in
+                        guard let t = tBuffer.baseAddress, let n = nBuffer.baseAddress,
+                            let a = aBuffer.baseAddress, let b = bBuffer.baseAddress
+                        else { return }
+                        var i = 0
+                        while i < size {
+                            let bi = b[i]
                             var carry: UInt64 = 0
-                            for j in 0..<size {
-                                let (high, low) = Self.addMultiply(t[j], a[j], b[i], carry)
-                                t[j] = low
-                                carry = high
+                            var j = 0
+                            while j < size {
+                                // `t[j] + a[j]·bi + retenue`, qui tient toujours sur 128 bits.
+                                let (high, low) = a[j].multipliedFullWidth(by: bi)
+                                let (first, overflow1) = low.addingReportingOverflow(t[j])
+                                let (second, overflow2) = first.addingReportingOverflow(carry)
+                                t[j] = second
+                                carry = high &+ (overflow1 ? 1 : 0) &+ (overflow2 ? 1 : 0)
+                                j &+= 1
                             }
                             let (sum, overflow) = t[size].addingReportingOverflow(carry)
                             t[size] = sum
                             t[size + 1] = overflow ? 1 : 0
 
                             let m = t[0] &* inverse
-                            var (high, _) = Self.addMultiply(t[0], m, n[0], 0)
-                            for j in 1..<size {
-                                let (nextHigh, low) = Self.addMultiply(t[j], m, n[j], high)
-                                t[j - 1] = low
-                                high = nextHigh
+                            let (firstHigh, firstLow) = m.multipliedFullWidth(by: n[0])
+                            carry = firstHigh &+ (firstLow.addingReportingOverflow(t[0]).overflow ? 1 : 0)
+                            j = 1
+                            while j < size {
+                                let (high, low) = m.multipliedFullWidth(by: n[j])
+                                let (first, overflow1) = low.addingReportingOverflow(t[j])
+                                let (second, overflow2) = first.addingReportingOverflow(carry)
+                                t[j &- 1] = second
+                                carry = high &+ (overflow1 ? 1 : 0) &+ (overflow2 ? 1 : 0)
+                                j &+= 1
                             }
-                            let (last, lastOverflow) = t[size].addingReportingOverflow(high)
-                            t[size - 1] = last
+                            let (last, lastOverflow) = t[size].addingReportingOverflow(carry)
+                            t[size &- 1] = last
                             t[size] = t[size + 1] &+ (lastOverflow ? 1 : 0)
+                            i &+= 1
                         }
                     }
                 }
@@ -216,17 +240,6 @@ struct MontgomeryContext: Sendable {
             result = Self.subtract(result, modulus)
         }
         return result
-    }
-
-    /// `a + b·c + d`, qui tient toujours sur 128 bits.
-    @inline(__always)
-    private static func addMultiply(
-        _ a: UInt64, _ b: UInt64, _ c: UInt64, _ d: UInt64
-    ) -> (high: UInt64, low: UInt64) {
-        let (high, low) = b.multipliedFullWidth(by: c)
-        let (first, overflow1) = low.addingReportingOverflow(a)
-        let (second, overflow2) = first.addingReportingOverflow(d)
-        return (high &+ (overflow1 ? 1 : 0) &+ (overflow2 ? 1 : 0), second)
     }
 
     private static func isLess(_ a: [UInt64], _ b: [UInt64]) -> Bool {

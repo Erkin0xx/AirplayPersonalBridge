@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import Network
+import Synchronization
 
 @testable import AudioCore
 
@@ -81,8 +82,7 @@ final class FakeRAOPReceiver: @unchecked Sendable {
         control = try UDPChannel(label: "fake-control")
         timing = try UDPChannel(label: "fake-timing")
 
-        let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        let parameters = try loopbackListenerParameters()
         parameters.allowLocalEndpointReuse = true
         let listener = try NWListener(using: parameters)
         self.listener = listener
@@ -488,18 +488,41 @@ func raopEventually(
     return await condition()
 }
 
+/// Prochain numéro à essayer : jamais deux fois le même dans un process, ce qui évite à deux tests
+/// parallèles de se disputer un port entre sa vérification et son ouverture. L'origine est tirée au
+/// sort pour qu'une autre exécution de la suite, dans un autre worktree, soit ailleurs.
+private let nextOutOfRangePort = Mutex(UInt16.random(in: 20_000..<45_000))
+
+/// Paramètres d'une écoute de test sur la boucle locale, sur un port hors de la plage éphémère.
+///
+/// À employer pour **toute** écoute de test, jamais `.any` : voir ``LateTCPPort``.
+func loopbackListenerParameters() throws -> NWParameters {
+    let parameters = NWParameters.tcp
+    let port = NWEndpoint.Port(rawValue: try LateTCPPort().port) ?? .any
+    parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: port)
+    return parameters
+}
+
 /// Un port TCP de la boucle locale où rien n'écoute, jusqu'à ce qu'on l'ouvre.
 ///
-/// **Tiré hors de la plage éphémère (49152–65535), et ouvert avec `SO_REUSEADDR`.** Le numéro ne
-/// peut ainsi être pris ni par un client, ni par un `NWListener` sur `.any`, de ce test ou d'un
-/// autre qui tourne en parallèle. C'était le défaut de la version précédente : un numéro tiré par
-/// un socket UDP n'est libre que côté UDP. Côté TCP il pouvait servir à une connexion active ou
-/// en `TIME_WAIT` (une exécution de la suite en laisse ~300, pendant 30 s), et l'écoute échouait
-/// alors sur `EADDRINUSE` sans que personne ne le voie : le test échouait à l'échéance, une fois
-/// sur plusieurs dizaines.
+/// **Toujours hors de la plage éphémère (49152–65535), où le noyau ne prend jamais un port client.**
+/// Y tirer le numéro d'une écoute expose à deux pannes, qui ont fait échouer la suite par séries,
+/// sur un ensemble de tests variable, dès que d'autres process consommaient des ports :
 ///
-/// Un socket lié qui n'écoute pas encore n'aurait pas convenu : le noyau ignore alors le SYN au
-/// lieu de le refuser, et la connexion reste en préparation sans jamais être refusée.
+/// - **`NWConnection` refusée pendant 30 s.** Une écoute `.any` peut recevoir le numéro qui servait
+///   de port source à une connexion déjà reçue par un `NWListener` du même process. Une
+///   `NWConnection` de ce process vers ce numéro reprend alors comme source le port de l'ancienne
+///   écoute et retombe sur le `TIME_WAIT` de l'ancienne connexion : `connectx` rend `EADDRINUSE`,
+///   et 540 `restart()` n'y changent rien. Réessayer n'est donc pas une réponse. Ni un `connect`
+///   BSD, ni une `NWConnection` d'un autre process n'y sont exposés, ni le code de l'app, qui
+///   n'ouvre aucune écoute. La saturation de `.global()` n'y est pour rien : le refus tombe en
+///   moins d'une milliseconde, et une écoute compte sa connexion en 2 ms, 64 fils bloqués ou non.
+/// - **Écoute refusée.** Un numéro tiré par un socket UDP n'est libre que côté UDP. Côté TCP il peut
+///   servir à une connexion active ou en `TIME_WAIT` (la suite en laisse ~300, pendant 30 s), et
+///   `NWListener` échoue alors sur `EADDRINUSE`.
+///
+/// Un socket lié qui n'écoute pas encore n'aurait pas convenu pour simuler un port fermé : le noyau
+/// ignore alors le SYN au lieu de le refuser, et la connexion reste en préparation sans fin.
 final class LateTCPPort: @unchecked Sendable {
     struct Failure: Error, CustomStringConvertible {
         let description: String
@@ -511,7 +534,10 @@ final class LateTCPPort: @unchecked Sendable {
     init() throws {
         // Un autre programme peut occuper un port fixe de cette plage : on en essaie plusieurs.
         for _ in 0..<64 {
-            let candidate = UInt16.random(in: 20_000..<45_000)
+            let candidate = nextOutOfRangePort.withLock { next -> UInt16 in
+                defer { next = next >= 44_999 ? 20_000 : next + 1 }
+                return next
+            }
             let probe = try Self.boundSocket(port: candidate, reusingAddress: false)
             if let probe {
                 close(probe)

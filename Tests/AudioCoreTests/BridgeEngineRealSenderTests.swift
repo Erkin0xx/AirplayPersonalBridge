@@ -15,7 +15,7 @@ private final class LoopbackRAOPReceiver: @unchecked Sendable {
     private var announceRefusal: String?
 
     init() throws {
-        listener = try NWListener(using: .tcp, on: .any)
+        listener = try NWListener(using: loopbackListenerParameters())
     }
 
     /// Démarre l'écoute et rend le port attribué.

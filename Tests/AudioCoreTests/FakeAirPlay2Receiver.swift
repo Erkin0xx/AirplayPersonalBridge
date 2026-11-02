@@ -769,9 +769,7 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
     // MARK: - Outils
 
     private static func makeLoopbackListener() throws -> NWListener {
-        let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
-        return try NWListener(using: parameters)
+        try NWListener(using: loopbackListenerParameters())
     }
 
     private static func waitUntilReady(
@@ -783,8 +781,14 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
             let resumed = ManagedFlag()
             listener.newConnectionHandler = onConnection
             listener.stateUpdateHandler = { state in
-                if case .ready = state, resumed.claim() {
-                    continuation.resume(returning: listener.port?.rawValue ?? 0)
+                switch state {
+                case .ready:
+                    if resumed.claim() { continuation.resume(returning: listener.port?.rawValue ?? 0) }
+                case .failed:
+                    // Port rendu indisponible entre-temps : 0 fait échouer le test, sans le bloquer.
+                    if resumed.claim() { continuation.resume(returning: 0) }
+                default:
+                    break
                 }
             }
             listener.start(queue: queue)

@@ -81,6 +81,10 @@ struct DisplayedTextTests {
                     guard !trimmed.hasPrefix("//") else { continue }
                     // « // » précédé d'une espace : un commentaire de fin de ligne, pas une URL.
                     let code = line.components(separatedBy: " // ").first ?? line
+                    // Le motif se compile à chaque appel, et le parcours porte sur 30 000 lignes :
+                    // ce tri préalable lui évite de prendre un cœur plusieurs secondes.
+                    let lowered = code.lowercased()
+                    guard lowered.contains("ez") || lowered.contains("vo") else { continue }
                     let words = try formalWords(in: code)
                     if !words.isEmpty {
                         offenders.append("\(file.lastPathComponent):\(index + 1) \(words)")
