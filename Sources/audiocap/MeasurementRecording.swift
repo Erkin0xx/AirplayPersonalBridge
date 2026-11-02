@@ -122,6 +122,16 @@ final class MeasurementRecording {
         lastTimeline = timeline
     }
 
+    /// Arrête l'enregistrement sans écrire de JSON : la diffusion n'a pas démarré, il n'y a rien à
+    /// dater. Le WAV reste lisible.
+    func abandon() {
+        drainTask?.cancel()
+        drainTask = nil
+        capture.stop()
+        drainOnce()
+        writer.close()
+    }
+
     /// Arrête l'enregistrement, finit le fichier et écrit le JSON.
     ///
     /// - Parameters:

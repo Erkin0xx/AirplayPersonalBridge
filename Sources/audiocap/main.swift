@@ -539,10 +539,15 @@ func runRequestedOutputs(source: BridgeEngine.Source, plan: OutputPlan) async th
     }
 
     let engine = BridgeEngine()
-    try await engine.start(
-        source: source, outputs: requests,
-        options: BridgeEngine.StartOptions(muteLocalOutput: muteLocalOutput)
-    )
+    do {
+        try await engine.start(
+            source: source, outputs: requests,
+            options: BridgeEngine.StartOptions(muteLocalOutput: muteLocalOutput)
+        )
+    } catch {
+        recording?.abandon()
+        throw error
+    }
     recording?.observe(await engine.playbackTimeline)
     note("Diffusion vers \(requests.count) sortie(s) pendant \(duration) s, horloge commune\n")
 

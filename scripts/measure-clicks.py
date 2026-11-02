@@ -360,18 +360,20 @@ def analyse(samples, rate, meta, noise_factor=5.0, relative=0.1, group_gap_ms=2.
         warnings.append("le WAV est à %d Hz, le JSON annonce %s Hz" % (rate, declared_rate))
     if recording.get("trames_perdues"):
         warnings.append("%d trames perdues à l'enregistrement" % recording["trames_perdues"])
-    changes = common.get("changements") or []
-    origins = sorted(
-        (int(c["observe_hote_ns"]), int(c["trame0_restitution_hote_ns"])) for c in changes
-    )
-    if len({o for _, o in origins}) > 1:
+    # L'origine publiée en tête vaut pour toute la mesure, sauf report de l'horloge commune en
+    # cours de route : les valeurs successives sont alors dans `changements`, chacune avec l'instant
+    # où elle a été vue. Elles se distinguent par leur instant Unix, pas par leur conversion en
+    # instant hôte, faite à des moments différents.
+    changes = sorted(common.get("changements") or [], key=lambda c: int(c["observe_hote_ns"]))
+    base_origin = int(common["trame0_restitution_hote_ns"])
+    origins = []
+    if len({round(float(c["trame0_restitution_unix_s"]), 6) for c in changes}) > 1:
+        origins = [(int(c["observe_hote_ns"]), int(c["trame0_restitution_hote_ns"])) for c in changes]
+        base_origin = origins[0][1]
         warnings.append(
             "l'horloge commune a été reportée pendant la mesure (trou de capture) : chaque salve est "
             "rapportée à l'origine en vigueur à son arrivée"
         )
-    base_origin = int(common["trame0_restitution_hote_ns"])
-    if origins:
-        base_origin = origins[0][1]
     rate_ppm = (meta.get("horloge_hote") or {}).get("ecart_rythme_ppm")
     if rate_ppm is not None and abs(rate_ppm) > 100:
         warnings.append("l'heure du Mac a sauté pendant la mesure (%.0f ppm) : à refaire" % rate_ppm)
