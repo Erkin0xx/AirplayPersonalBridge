@@ -3,10 +3,10 @@
 Journal de progression par jalon. Voir docs/cahier_des_charges_diffusion_audio.md section 14.
 Distinguer explicitement "validé contre mock" et "validé contre matériel réel".
 
-**Statut matériel réel.** La Geneva et les deux HomePod ont joué ensemble, à l'oreille, le
-2026-08-12 (commit d022fd8). **Tout ce qui a été fait après 0cf8a31 n'a jamais été entendu** :
-validé par des tests, contre les mocks ou sur rendu, à revalider sur le matériel. L'Apple TV n'a
-jamais joué. Les sections des jalons 1 à 4 décrivent leur état à leur date, qui précède ces essais.
+**Statut matériel réel.** La Geneva et les deux HomePod ont joué ensemble, à l'oreille et mesurés au
+micro, le 2026-11-02, sur le code clos par `7ba75f3` : voir la clôture du jalon 5. **Ce qui suit ce commit
+n'a pas été réentendu** : voir « Après la clôture », tout à la fin. L'Apple TV n'a jamais joué. Les sections
+des jalons 1 à 4 décrivent leur état à leur date, qui précède ces essais.
 
 ---
 
@@ -976,8 +976,8 @@ Dates : 2026-08-11 pour le début, 2026-11-01 et 02 pour cette passe complète s
 > **Portée de la validation.** Toutes les sous-sections, de « Ce qui a été fait » jusqu'à « Essai de bout en bout
 > contre mocks », décrivent la passe du 2026-11-01 et 02, **faite sans matériel** : rien de ce qu'elle a produit n'y avait
 > été entendu, et ses « à revalider » y sont restés tels quels. **La validation contre le matériel réel, et le verdict sur
-> chaque critère de la section 8 du CDC, sont dans la dernière sous-section**, « Session de test sur le matériel réel
-> (2026-11-02) — clôture », qui distingue entendu, mesuré et capture.
+> chaque critère de la section 8 du CDC, sont dans la sous-section** « Session de test sur le matériel réel
+> (2026-11-02) — clôture », qui distingue entendu, mesuré et capture. Seule « Après la clôture » la suit.
 >
 > Niveaux de preuve ci-dessous : **test** (`swift test`, faux senders ou faux récepteurs en boucle
 > locale), **mock** (contre `shairport-sync` ou `airplay2-receiver`), **rendu** (image regardée),
@@ -1069,24 +1069,6 @@ réponse DNS tardive ; `Audio-Latency` des HomePod jamais lue. Les senders relis
 
 **À vérifier à l'usage** : liste en phase 4 du prompt (verre, Dock, liens des Réglages, ouverture de session,
 veille, entrée physique). `Privacy_ScreenCapture` n'est pas confirmé.
-
-### Seconde relecture des corrections de la passe
-
-Un relecteur indépendant a lu le diff de ces corrections (`8127bb1~1..2e4b16d`), sans rien exécuter. Sur 5 constats, tous
-corrigés (`0444a8f`, `cc1472e`, `225f3f5`) :
-- **Reprise après une pause** : l'échéance de reconstruction, comptée depuis le dernier bloc, était déjà dépassée. Le tap pouvait
-  être détruit au moment où le son démarrait. Elle part maintenant de la reprise. Une reconstruction plus longue que le délai
-  n'en enchaîne plus une autre aussitôt.
-- **Application attendue invisible** : choisie la veille et sans jouer, elle laissait le sélecteur sur le global, puis prenait
-  la main à son premier son, en pleine diffusion d'autre chose, sans moyen d'y renoncer. Une ligne le dit, avec `Annuler`.
-- **Adresse relue** : une IPv6 passagère remplaçait une IPv4 redevenue valable, et retardait la reprise de ~40 à 70 s.
-- **Reconstruction sans fin** : elle interdisait tout changement de source. Elle cède la place, et un PID mort n'entre plus dans la
-  description du tap. **Le déclencheur reste supposé** : on ignore ce que Core Audio fait d'un objet inconnu.
-- **Repli remis à zéro par un seul bloc** : seul un flux établi 5 s le fait. Plausible seulement, aucun périphérique connu ne s'est
-  comporté ainsi.
-
-Preuve : test, chaque correction défaite une fois. Côté AirPlay 2, la relecture d'adresse n'est couverte que par le test de la
-règle commune, pas par une session. La ligne « Passera sur… » n'a pas été vue à l'écran : à regarder en phase 4 du prompt.
 
 ### Essai de bout en bout contre mocks et stabilisation des tests
 
@@ -1213,3 +1195,25 @@ Outils ajoutés pour la mesure (eab3a27 à 7bd7bb6) : `--clicks`, `--channel-tes
 Il devait vérifier, avant d'écrire une ligne, que l'objectif était atteignable (CDC section 7). L'app native l'atteint
 aujourd'hui sur le vrai matériel : le test a perdu son objet. Comme référence de comportement, pyatv a suffi, et c'est lui
 qui a résolu le 403. Décision tracée en ADR 010.
+
+### Après la clôture : seconde relecture des corrections de la passe
+
+Un relecteur indépendant a lu le diff de ces corrections (`8127bb1~1..2e4b16d`), sans rien exécuter. Ses 5 constats sont
+corrigés (`0444a8f`, `cc1472e`, `225f3f5`). **Arrivés après `7ba75f3`, ces correctifs n'ont été ni réentendus, ni essayés dans
+l'app réelle**, et l'app installée ne les a pas avant `scripts/install-app.sh`. Ils n'entrent en jeu qu'en cas de capture bloquée,
+de reconnexions ratées ou d'application attendue : le fil et la synchronisation en régime établi n'en sont pas changés.
+
+- **Reprise après une pause** : l'échéance de reconstruction, comptée depuis le dernier bloc, était déjà dépassée. Le tap pouvait
+  être détruit au moment où le son démarrait. Elle part maintenant de la reprise. Une reconstruction plus longue que le délai
+  n'en enchaîne plus une autre aussitôt.
+- **Application attendue invisible** : choisie la veille et sans jouer, elle laissait le sélecteur sur le global, puis prenait
+  la main à son premier son, en pleine diffusion d'autre chose, sans moyen d'y renoncer. Une ligne le dit, avec `Annuler`.
+  **Non vue à l'écran.**
+- **Adresse relue** : une IPv6 passagère remplaçait une IPv4 redevenue valable, et retardait la reprise de ~40 à 70 s.
+- **Reconstruction sans fin** : elle interdisait tout changement de source. Elle cède la place, et un PID mort n'entre plus dans la
+  description du tap. **Le déclencheur reste supposé** : on ignore ce que Core Audio fait d'un objet inconnu.
+- **Repli remis à zéro par un seul bloc** : seul un flux établi 5 s le fait. Plausible seulement, aucun périphérique connu ne s'est
+  comporté ainsi.
+
+Preuve : test, chaque correction défaite une fois, le test correspondant échouant alors. Côté AirPlay 2, la relecture d'adresse
+n'est couverte que par le test de la règle commune, pas par une session.
