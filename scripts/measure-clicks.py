@@ -4,6 +4,7 @@
   scripts/measure-clicks.py mesure.wav               # lit mesure.json à côté
   scripts/measure-clicks.py mesure.wav --meta autre.json --detail
   scripts/measure-clicks.py mesure.wav --json         # résultat en JSON sur stdout
+  scripts/measure-clicks.py telephone.wav --sans-datation   # enregistrement d'un autre appareil
   scripts/measure-clicks.py --self-test               # vérifie l'analyse sur des WAV synthétiques
 
 Python 3.8 ou plus, **bibliothèque standard seule** : rien à installer, pas de venv (le Python de
@@ -45,6 +46,10 @@ groupe, au calage alors déjà satisfaisant. Une réflexion forte et stable sur 
 propre groupe quelques ms après celui de l'enceinte : le premier groupe d'une enceinte est son son
 direct. Pour savoir quel groupe est quelle enceinte : une mesure par enceinte seule, ou un délai
 manuel connu (`--delay2 40`) qui déplace son groupe d'autant.
+
+Sans JSON (`--sans-datation`, enregistrement fait au téléphone par exemple), rien ne relie
+l'enregistrement à l'horloge commune : les écarts absolus sont arbitraires, mais les écarts entre
+groupes restent justes, la période des salves suffisant à les regrouper.
 
 Codes de retour : 0 analyse faite, 1 aucune salve trouvée, 2 usage ou fichier invalide,
 3 auto-test en échec.
@@ -375,6 +380,11 @@ def analyse(samples, rate, meta, noise_factor=5.0, relative=0.1, group_gap_ms=2.
             "rapportée à l'origine en vigueur à son arrivée"
         )
     rate_ppm = (meta.get("horloge_hote") or {}).get("ecart_rythme_ppm")
+    if meta.get("_sans_datation"):
+        warnings.append(
+            "enregistrement non daté : écarts absolus arbitraires, seuls les écarts entre groupes "
+            "ont un sens"
+        )
     if rate_ppm is not None and abs(rate_ppm) > 100:
         warnings.append("l'heure du Mac a sauté pendant la mesure (%.0f ppm) : à refaire" % rate_ppm)
 
@@ -730,6 +740,19 @@ def synthesize(path, offsets_ms, amplitudes, duration=24.0, noise=0.01, micro_pp
         json.dump(meta, handle)
 
 
+def undated_meta(rate):
+    """Le JSON minimal d'un enregistrement que rien ne date : grille de 2 s posée sur sa trame 0."""
+    return {
+        "enregistrement": {"frequence_hz": rate, "ancrages": [[0, 0]]},
+        "horloge_commune": {
+            "frequence_capture_hz": 48000, "trame0_restitution_hote_ns": 0, "changements": [],
+        },
+        "source": {"type": "clics"},
+        "sorties": [],
+        "_sans_datation": True,
+    }
+
+
 def self_test():
     """Rend le code de retour : 0 si l'analyse retrouve tous les écarts à 0,1 ms près."""
     cases = [
@@ -761,6 +784,17 @@ def self_test():
                       % (max(errors), result["micro_ppm"]))
             for warning in result["avertissements"]:
                 print("       avertissement : " + warning)
+        # Le même enregistrement à trois enceintes, analysé comme s'il venait d'un téléphone : seuls
+        # les écarts entre groupes comptent.
+        path = os.path.join(directory, "cas1.wav")
+        rate, samples = read_wav_mono(path)
+        result = analyse(samples, rate, undated_meta(rate))
+        found = [g["ecart_au_premier_ms"] for g in result["groupes"]]
+        ok = len(found) == 3 and all(abs(f - e) <= 0.1 for f, e in zip(found, [0, 7, 18]))
+        failures += 0 if ok else 1
+        print("%s  trois enceintes, sans datation" % ("OK   " if ok else "ÉCHEC"))
+        print("       écarts au premier attendus : +0.000, +7.000, +18.000 ms")
+        print("       trouvés : %s" % ", ".join("%+.3f ms" % f for f in found))
     return EXIT_OK if failures == 0 else EXIT_SELFTEST
 
 
@@ -774,6 +808,8 @@ def main(argv):
     parser.add_argument("wav", nargs="?", help="enregistrement de audiocap --record-input")
     parser.add_argument("--meta", help="JSON de datation (défaut : même nom que le WAV, en .json)")
     parser.add_argument("--json", action="store_true", help="résultat en JSON sur stdout")
+    parser.add_argument("--sans-datation", action="store_true",
+                        help="enregistrement sans JSON : seuls les écarts entre groupes ont un sens")
     parser.add_argument("--detail", action="store_true", help="liste aussi chaque salve")
     parser.add_argument("--seuil-bruit", type=float, default=5.0,
                         help="seuil, en multiple du bruit de fond local (défaut : 5, soit 14 dB)")
@@ -792,9 +828,12 @@ def main(argv):
         return EXIT_INVALID
     meta_path = args.meta or os.path.splitext(args.wav)[0] + ".json"
     try:
-        with open(meta_path) as handle:
-            meta = json.load(handle)
         rate, samples = read_wav_mono(args.wav)
+        if args.sans_datation:
+            meta = undated_meta(rate)
+        else:
+            with open(meta_path) as handle:
+                meta = json.load(handle)
         result = analyse(
             samples, rate, meta, noise_factor=args.seuil_bruit, relative=args.seuil_relatif,
             group_gap_ms=args.ecart_groupes,

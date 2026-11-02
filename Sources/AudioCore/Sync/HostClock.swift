@@ -84,7 +84,9 @@ public struct WallHostPair: Sendable, Equatable, Codable {
 /// Ces deux horloges ne sont pas la même : l'horloge murale est l'horloge hôte plus un décalage que
 /// `timed` (NTP) ajuste en continu, par petites pentes. Aucune API ne donne ce décalage, d'où le
 /// relevé : une lecture de `Date` encadrée par deux lectures de `mach_absolute_time`, la plus serrée
-/// d'une série gardée (quelques centaines de nanosecondes sur cette machine).
+/// d'une série gardée. L'encadrement tient en un tick sur cette machine (41 ns, relevé le
+/// 2026-11-02) ; c'est la résolution d'un `Double` à 1,7 × 10⁹ s (0,24 µs) qui borne alors le relevé,
+/// quatre cents fois sous le dixième de milliseconde visé.
 ///
 /// Avec deux relevés, au début et à la fin d'une mesure, la correspondance suit la pente de
 /// l'horloge murale entre les deux : un réglage NTP pendant la mesure n'y introduit pas d'erreur
