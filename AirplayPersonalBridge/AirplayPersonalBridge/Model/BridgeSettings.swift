@@ -71,11 +71,14 @@ struct BridgeSettings: Codable, Equatable {
     /// Option « Touches de volume du Mac → enceintes ». Activée par défaut, y compris pour un fichier
     /// d'avant l'option, qui n'a pas ce champ.
     var followsSystemVolume = true
+    /// Le volume du Mac à lui rendre, tant qu'une diffusion le tient (`SystemVolumeLink`). Présent au
+    /// lancement, il vient d'une diffusion interrompue sans arrêt propre.
+    var systemVolumeMemory: SystemVolumeMemory?
     var outputs: [String: Output] = [:]
 
     private enum CodingKeys: String, CodingKey {
         case masterVolumeDB, isMuted, sourceID, muteLocalOutput, outputs
-        case followsSystemVolume
+        case followsSystemVolume, systemVolumeMemory
     }
 
     init() {}
@@ -92,6 +95,7 @@ struct BridgeSettings: Codable, Equatable {
         sourceID = fields.value(.sourceID, default: CaptureSource.systemWide.id)
         muteLocalOutput = fields.value(.muteLocalOutput, default: false)
         followsSystemVolume = fields.value(.followsSystemVolume, default: true)
+        systemVolumeMemory = fields.value(.systemVolumeMemory, default: nil)
         // Entrée par entrée : une sortie abîmée ne doit pas coûter les réglages des autres.
         let entries = fields.value(.outputs, default: [String: TolerantOutput]())
         outputs = entries.compactMapValues(\.output)

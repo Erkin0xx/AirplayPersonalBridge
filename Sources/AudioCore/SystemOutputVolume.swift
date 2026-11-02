@@ -21,6 +21,9 @@ public enum SystemOutputVolume {
     /// Un relevé de la sortie par défaut.
     public struct Reading: Sendable, Equatable {
         public var deviceID: AudioObjectID
+        /// L'identifiant stable de la sortie (`kAudioDevicePropertyDeviceUID`). `deviceID` peut changer
+        /// d'un démarrage de `coreaudiod` à l'autre : c'est par lui qu'on retrouve une sortie plus tard.
+        public var deviceUID: String
         public var deviceName: String
         /// Le scalaire de 0 à 1, ou `nil` si la sortie n'a pas de volume réglable : une sortie
         /// numérique ou HDMI, où les touches de volume n'ont aucun effet.
@@ -28,8 +31,12 @@ public enum SystemOutputVolume {
         /// `nil` si la sortie n'a pas de silence réglable.
         public var isMuted: Bool?
 
-        public init(deviceID: AudioObjectID, deviceName: String, volume: Float?, isMuted: Bool?) {
+        public init(
+            deviceID: AudioObjectID, deviceUID: String, deviceName: String, volume: Float?,
+            isMuted: Bool?
+        ) {
             self.deviceID = deviceID
+            self.deviceUID = deviceUID
             self.deviceName = deviceName
             self.volume = volume
             self.isMuted = isMuted
@@ -41,6 +48,9 @@ public enum SystemOutputVolume {
         guard let device = defaultOutputDevice() else { return nil }
         let name =
             (try? AudioObject.string(device, kAudioObjectPropertyName, operation: "nom de la sortie"))
+            ?? ""
+        let uid =
+            (try? AudioObject.string(device, kAudioDevicePropertyDeviceUID, operation: "UID de la sortie"))
             ?? ""
         var volume: Float?
         if isSettable(device, volumeAddress) {
@@ -58,9 +68,26 @@ public enum SystemOutputVolume {
             isMuted = raw.map { $0 != 0 }
         }
         return Reading(
-            deviceID: device, deviceName: name,
+            deviceID: device, deviceUID: uid, deviceName: name,
             volume: volume.map { min(max($0, 0), 1) }, isMuted: isMuted
         )
+    }
+
+    /// La sortie qui porte cet identifiant stable, si elle est encore là.
+    public static func device(forUID uid: String) -> AudioObjectID? {
+        guard !uid.isEmpty else { return nil }
+        var address = AudioObject.address(kAudioHardwarePropertyTranslateUIDToDevice)
+        var device = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        var qualifier = uid as CFString
+        let status = withUnsafeMutablePointer(to: &qualifier) { pointer in
+            AudioObjectGetPropertyData(
+                AudioObjectID(kAudioObjectSystemObject), &address,
+                UInt32(MemoryLayout<CFString>.size), pointer, &size, &device
+            )
+        }
+        guard status == noErr, device != kAudioObjectUnknown else { return nil }
+        return device
     }
 
     /// Règle le volume d'une sortie précise : celle qu'on a relevée, pas celle qui serait devenue la

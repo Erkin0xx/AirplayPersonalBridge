@@ -81,26 +81,35 @@ struct SystemVolumeIntegrationTests {
         #expect(await eventually { SystemOutputVolume.read()?.isMuted == muted })
     }
 
-    /// Bout en bout dans l'app : un cran du Mac déplace le master, et le lien n'écrit rien de lui-même.
-    @Test("Un cran du Mac déplace le master de l'app, puis tout est rendu")
-    func linkFollowsRealVolume() async throws {
+    /// Bout en bout dans l'app, le temps d'une diffusion vers un sender sans réseau. La capture de test
+    /// ne coupe pas le son local : les enceintes sont donc mises en silence d'abord, pour que le Mac le
+    /// soit aussi pendant tout le test, et le master posé sur le volume du Mac, qui n'en change pas.
+    @Test("Une diffusion règle le Mac, un cran du Mac déplace le master, l'arrêt rend tout")
+    func sessionFollowsRealVolume() async throws {
         let original = try #require(SystemOutputVolume.read(), "aucune sortie par défaut")
         let volume = try #require(original.volume, "« \(original.deviceName) » n'a pas de volume réglable")
         defer { restore(original) }
 
         let harness = BridgeHarness(systemVolume: LiveSystemVolumeControl())
-        harness.state.startFollowingSystemVolume()
-        let adopted = SystemVolumeLink.masterDB(forScalar: Double(volume))
-        #expect(abs(harness.state.masterVolumeDB - adopted) < 0.6)
+        harness.state.isMuted = true
+        harness.state.masterVolumeDB = SystemVolumeLink.masterDB(forScalar: Double(volume))
+        await harness.discover(raop: [Devices.genevaRAOP])
+        await harness.startStreaming(expecting: [Devices.genevaID])
+        #expect(harness.state.systemVolume.isActive)
+        #expect(harness.store.stored.systemVolumeMemory?.deviceUID == original.deviceUID)
+        #expect(await eventually { SystemOutputVolume.read()?.isMuted == true })
+        #expect(Self.close(SystemOutputVolume.read()?.volume, volume))
 
         let target = volume + 1 / 16 <= 1 ? volume + 1 / 16 : volume - 1 / 16
+        // Passé la fenêtre d'écho du réglage de départ, comme une touche pressée ensuite.
+        try await Task.sleep(for: .milliseconds(50))
         SystemOutputVolume.setVolume(target, on: original.deviceID)
         let expected = SystemVolumeLink.masterDB(forScalar: Double(target))
         #expect(await eventually { abs(harness.state.masterVolumeDB - expected) < 0.6 })
 
-        restore(original)
-        #expect(await eventually { abs(harness.state.masterVolumeDB - adopted) < 0.6 })
-        harness.state.followsSystemVolume = false
+        await harness.stopStreaming()
+        #expect(!harness.state.systemVolume.isActive)
+        #expect(harness.store.stored.systemVolumeMemory == nil)
         #expect(Self.close(SystemOutputVolume.read()?.volume, volume))
         #expect(SystemOutputVolume.read()?.isMuted == original.isMuted)
     }
