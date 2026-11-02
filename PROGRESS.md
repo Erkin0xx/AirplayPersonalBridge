@@ -3,8 +3,10 @@
 Journal de progression par jalon. Voir docs/cahier_des_charges_diffusion_audio.md section 14.
 Distinguer explicitement "validé contre mock" et "validé contre matériel réel".
 
-**Statut matériel réel : aucun accès à ce jour.** Tout ce qui suit est validé contre les
-émulateurs logiciels uniquement (`shairport-sync`, `airplay2-receiver`).
+**Statut matériel réel.** La Geneva et les deux HomePod ont joué ensemble, à l'oreille, le
+2026-08-12 (commit d022fd8). **Tout ce qui a été fait après 0cf8a31 n'a jamais été entendu** :
+validé par des tests, contre les mocks ou sur rendu, à revalider sur le matériel. L'Apple TV n'a
+jamais joué. Les sections des jalons 1 à 4 décrivent leur état à leur date, qui précède ces essais.
 
 ---
 
@@ -13,33 +15,41 @@ Distinguer explicitement "validé contre mock" et "validé contre matériel rée
 | | |
 |---|---|
 | **Dernier jalon terminé** | Jalon 4 — synchronisation et dérive (validé **contre mock** le 2026-08-07) |
-| **Prochain jalon** | **Jalon 5 — intégration et interface SwiftUI** (prompt : CDC section 14) |
+| **Jalon en cours** | **Jalon 5 — intégration et interface : code complet, non clos** |
+| **Étape suivante** | **`docs/prompt_tests_materiel.md`** : tests sur le vrai matériel, puis clôture du jalon 5 |
 | **Dépôt** | `github.com/Erkin0xx/AirplayPersonalBridge`, branche `main` |
 
-**Les deux sorties diffusent en parallèle et synchronisées**, ce qui est l'objectif
-fonctionnel du projet (CDC section 2) :
+**L'app diffuse depuis la barre de menus vers N enceintes en parallèle**, ce qui est l'objectif
+fonctionnel du projet (CDC section 2). Installation et lancement :
 
 ```
-./audiocap --airplay Geneva --airplay2 ApTV 30
-./audiocap --airplay Geneva --airplay2 ApTV --delay2 25 30   # fine-tune manuel, en ms
+scripts/setup-signing.sh       # une fois : identité de signature stable
+scripts/install-app.sh --open  # compile en Release, installe dans /Applications, lance
+```
+
+Le CLI reste l'outil de validation. Il prend au plus une sortie de chaque protocole : trois
+enceintes à la fois ne passent que par l'app. `--tone` s'y passe de toute autorisation :
+
+```
+./audiocap --airplay Geneva --airplay2 Salon 30
+swift run audiocap --tone --airplay Geneva-Mock --volume -30 10
 ```
 
 **Le mécanisme d'alignement, en une phrase** : une horloge de restitution commune traduit un
 numéro de trame de capture en instant de restitution attendu ; chaque sender en tire
 l'ancrage NTP qu'il annonce dans ses paquets de synchronisation, et c'est le récepteur qui
 cale sa restitution dessus. Deux sorties ancrées sur la même horloge restituent la même trame
-captée au même instant, sans jamais se connaître. Voir l'ADR `004` du vault : ce n'est **pas**
-la lecture littérale du CDC (« mesurer la latence puis compenser »), qui s'est révélée
+captée au même instant, sans jamais se connaître. Voir les ADR `004` et `006` du vault : ce n'est
+**pas** la lecture littérale du CDC (« mesurer la latence puis compenser »), qui s'est révélée
 impraticable, mais ce qui en réalise l'intention.
 
 **Le patron, respecté par les deux senders** : un acteur qui **lit** son propre ring buffer
 et ne l'écrit jamais, ne connaît pas la source de capture, ignore l'autre sender, et confine
-ses pannes (invariant section 12). La correction de dérive n'a rien changé à cela : elle
-opère sur la copie propre au sender, en aval du ring buffer.
+ses pannes (invariant section 12). La correction de dérive et le renfort de basses n'ont rien
+changé à cela : ils opèrent sur la copie propre au sender, en aval du ring buffer.
 
-**Avant de coder quoi que ce soit au jalon 5** : lire `CLAUDE.md` en entier (invariants
-section 12 + pièges vérifiés, dont **les trois pièges RAOP** du jalon 2, **le piège SRP** du
-jalon 3, et **les faits de synchronisation** du jalon 4), puis le détail des jalons ci-dessous.
+**Avant de coder quoi que ce soit** : lire `CLAUDE.md` en entier, puis les deux dernières sections
+de ce fichier, qui décrivent le matériel réel et l'état du jalon 5.
 
 ---
 
@@ -323,6 +333,8 @@ sondant le convertisseur hors du projet, après qu'un test de ratio ait échoué
 sur 10 blocs consécutifs.
 
 **2. En-tête ALAC de 11 bits au lieu de 20.**
+*(Corrigé au jalon 5 : la bonne valeur est 23 bits, les 3 bits écartés ici sont transportés.
+Voir la section du jalon 5.)*
 Le décodeur lit 4 bits puis **12 bits** d'inutilisé avant `hasSize` ; j'écrivais
 `channels - 1` sur 3 bits puis 4 bits d'inutilisé, comme le décrivent plusieurs
 documentations informelles d'ALAC. Ces 3 bits appartiennent en réalité au *tag d'élément* du
@@ -898,26 +910,168 @@ contre le matériel réel.
   qu'ailleurs : **aucun des deux mocks ne restitue réellement de l'audio**. L'alignement
   repose sur le fait que les récepteurs honorent l'ancrage annoncé — c'est le pari du
   protocole, celui que fait aussi OwnTone, mais il n'a été vérifié par aucune écoute.
-- **shairport-sync rejette notre SDP et meurt ~25 s après le début de chaque session** —
-  `client announced rsaaeskey of 256 bytes, wanted 16`, puis décodage de travers, puis arrêt
-  du process. **Comportement nouveau : le jalon 2 tenait des sessions de 40 s sans incident**,
-  et `RAOPCrypto.swift`/`ALACEncoder.swift` sont pourtant inchangés depuis (`git diff` vide).
-  Écarté au passage : le backend audio (`pipe` vers `/dev/null` ne change rien, config remise
-  à `ao`) et une build AirPlay 2 (`shairport-sync -V` n'en mentionne pas).
-  **C'est le point à élucider en premier au jalon 5** ; pistes classées par coût dans
-  `CLAUDE.md`, la moins chère étant d'essayer le base64 bourré pour `rsaaeskey`/`aesiv`.
+- ~~**shairport-sync rejette notre SDP et meurt ~25 s après le début de chaque session**~~ —
+  **élucidé au jalon 5** : la clé RSA du code était fausse, et le bourrage base64 n'y était pour
+  rien. Voir la section du jalon 5.
 - **La validation d'une heure a exigé un script auxiliaire qui relance shairport-sync** à
   chaque mort. Sans lui, la sortie RAOP se serait arrêtée après ~25 s. Le flux RAOP mesuré
   est donc bien continu du point de vue du sender, mais il est fait de 91 sessions
   successives, pas d'une seule. La sortie AirPlay 2, elle, a tenu l'heure d'une traite.
-- **La reconnexion ne couvre pas un récepteur absent au démarrage.** Un échec de la première
-  négociation remonte à l'appelant. Discutable : au jalon 5, l'interface aura probablement
-  intérêt à réessayer en tâche de fond plutôt qu'à déclarer la sortie perdue.
+- ~~**La reconnexion ne couvre pas un récepteur absent au démarrage.**~~ — **fait au jalon 5** :
+  le moteur réessaie en tâche de fond (`waitingForReceiver`).
 - **Le décodage des événements AirPlay 2 n'est pas validé**, faute de récepteur qui en émette.
-  Seule la connexion l'est. À reprendre au jalon 5, où l'interface devra refléter le volume
-  changé depuis le récepteur.
+  Au jalon 5 ils sont déchiffrés et acquittés comme chez pyatv, leur contenu n'est toujours pas
+  interprété.
 - **La mesure de décalage d'horloge n'a jamais pu produire une valeur**, shairport-sync
   n'horodatant pas ses requêtes. Le code est là et testé ; il attend un récepteur qui remplit
   le champ. À revérifier contre la vraie Geneva.
-- **Chaque `./make-cli-bundle.sh` coûte une autorisation TCC à redonner à la main.** Trois
-  fois pendant ce jalon. Pour une session de validation longue, geler le code d'abord.
+- ~~**Chaque `./make-cli-bundle.sh` coûte une autorisation TCC à redonner à la main.**~~ — **réglé
+  au jalon 5** par l'identité de signature stable, à confirmer à la première recompilation.
+
+---
+
+## Première session sur le matériel réel (2026-08-11 et 12)
+
+> Reconstituée le 2026-11-01 d'après les messages des commits 824f16d à 0cf8a31 : `PROGRESS.md` n'a
+> pas été tenu à jour pendant ces deux jours. Matériel : Geneva AeroSphere Large, deux HomePod
+> gen 2 (« Salon » et « Salon (2) »), Apple TV (« Apple TV Salon »).
+
+### Ce qui a joué
+
+**À l'oreille, le 2026-08-12 (d022fd8) : le son sort de la Geneva et des HomePod simultanément, et
+l'arrêt coupe bien les deux.** L'écho observé ensuite a conduit à 0cf8a31, qui compense la latence
+annoncée par la Geneva. Le message de ce commit ne rapporte aucune écoute après correction : cet
+état n'est **pas confirmé à l'oreille**. L'Apple TV n'a jamais joué.
+
+### Les défauts que seul le matériel pouvait révéler
+
+| Commit | Défaut |
+|---|---|
+| 824f16d | `et=1` exigé alors que la Geneva annonce `et=0,4` : chiffrement choisi selon l'annonce |
+| 824f16d | PCM `L16` big-endian quand `cn=0` est annoncé |
+| 824f16d | Résolution en IPv6 de lien local : le HomePod refusait le `SETUP` en 400. IPv4 préférée |
+| 824f16d | URI de session AirPlay 2 portant l'adresse du récepteur au lieu de celle du client |
+| 824f16d | `deviceID`/`macAddress` renvoyant au récepteur sa propre adresse |
+| 824f16d | `User-Agent`/`Client-Instance` en double |
+| 824f16d | **Le plus coûteux** : le HomePod ne répond au `SETUP` qu'après avoir mesuré notre horloge. Le répondeur de timing écoute maintenant avant le `SETUP` |
+| 7a71166 | Volume sans effet en cours de session ; chaque enceinte listée deux fois (`_raop._tcp` et `_airplay._tcp`) |
+| 4d1fb75 | « Salon » préfixe de « Salon (2) » : deux sorties sur un même HomePod. `/pair-pin-start` affichait un code inutile sur l'Apple TV, retiré |
+| 4634bea | Format annoncé et format envoyé différents (PCM déclaré, ALAC émis), données associées et nonce de l'AEAD : session acceptée, aucun son, aucune erreur |
+| d022fd8 | Charge utile AirPlay 2 en little-endian : bruit blanc. Elle est **big-endian** |
+| 0cf8a31 | `Audio-Latency: 4096` de la Geneva (92,88 ms) mesurée mais jamais retranchée de l'ancrage |
+
+### Ce qui restait ouvert à la fin de cette session
+
+- **Apple TV** : refuse le transitoire en 470 et exige `pair-verify`, dont la signature ne vérifiait
+  pas (d2886e4), alors que pyatv réussit avec les mêmes credentials.
+- Aucun essai long, aucune mesure du calage entre enceintes.
+
+---
+
+## Jalon 5 : intégration et interface — EN COURS, NON CLOS
+
+Dates : 2026-08-11 pour le début, 2026-11-01 et 02 pour cette passe complète sur tout le projet.
+
+> **Portée de la validation.** Baptiste n'avait pas accès au matériel pendant cette passe : **aucun
+> son qu'elle a produit n'a été entendu**. L'app a seulement été lancée au repos sur son Mac, où il a
+> regardé le rendu du panneau et du plan. La Geneva, éteinte, n'est jamais apparue. La clôture et le
+> verdict sur chaque critère de la section 8 du CDC appartiennent à la session de test matériel :
+> **`docs/prompt_tests_materiel.md`**.
+>
+> Niveaux de preuve ci-dessous : **test** (`swift test`, faux senders ou faux récepteurs en boucle
+> locale), **mock** (contre `shairport-sync` ou `airplay2-receiver`), **rendu** (image regardée),
+> **compilé** (non exécuté), **à revalider** (dépend du vrai matériel).
+
+### Ce qui a été fait
+
+| Domaine | Livré | Preuve |
+|---|---|---|
+| **Widget** | `MenuBarExtra` : icône propre selon l'état, enceintes à cocher, volume, lieu d'écoute, options repliées, alertes de santé | test sur la logique, rendu ; verre et barre réelle à juger |
+| **Coquille d'app** | Fenêtre unique, app vivante fenêtre fermée, Dock seulement si fenêtre ouverte, ouverture de session, arrêt propre borné à 5 s, veille et réveil | test sur la logique ; scènes, Dock et `SMAppService` seulement compilés |
+| **Plan du salon** | `RoomLayout.salon` d'après la capture de Baptiste, nouveaux types de meubles, dessin extrait dans `PlanRenderer`, annulation, JSON illisible préservé | test, rendu superposé à la capture |
+| **Lieux d'écoute** | « À table » par défaut et « Au canapé », sélecteur dans le plan et le widget, délai moteur = `delayMS` + compensation du lieu, traits limités aux sorties cochées | test, rendu ; absence de coupure à revalider |
+| **Persistance** | `settings.json` : sortie cochée, trim, délai, basses, master, source, son du Mac | test |
+| **Découverte** | Continue et réconciliée en place, nom exact pour l'app, adresse **sans connexion** vers l'appareil | test (0 connexion acceptée, échec constaté avec l'ancien chemin) ; à revalider |
+| **Moteur** | Sources et senders injectables, ajout et retrait à chaud, récepteur absent attendu, phases d'attente et de reconnexion, statistiques complètes, entrée physique, reconstruction du tap au changement de sortie, reconstruction sur capture bloquée, `muteLocalOutput`, santé de la capture, relecture des PID d'une application | test ; 0 allocation dans le callback (sonde `malloc_logger`), Thread Sanitizer sans alerte ; ajout à chaud contre mock ; **Process Tap réel jamais exercé par ces changements** |
+| **Synchronisation** | Graduation commune même quand un tampon déborde (c41b2ac), origine reportée après un vrai arrêt de capture, confirmé au relevé suivant | test ; **à revalider en priorité** |
+| **RAOP** | Retransmission, maintien de session, renfort de basses (`LowShelfFilter`, limiteur), lecture permanente du RTSP et FIN détecté, erreurs lisibles, reconnexion sans fuite | test ; contre mock (perte simulée de 2 % : 37/37 sans trou ; 60 s décodées sans anomalie) ; à revalider |
+| **AirPlay 2** | Retransmission, `/feedback` jamais fatal, canal d'événements déchiffré et acquitté, erreurs lisibles, reconnexion sans fuite, `X-Apple-HKP` au `pair-verify`, `Audio-Latency` du `RECORD` relevée | test ; session contre mock ; à revalider. `pair-verify` contre accessoire simulé seulement |
+| **Outillage** | Identité de signature stable, OpenSSL statique, `install-app.sh`, `run-mocks.sh` (port, PID, `restart`), wrapper `audiocap`, `analyse-wav.py`, icône générée par script | vérifié à l'exécution, sauf capture réelle et installation avec première autorisation |
+
+### Changements sur le fil jamais entendus
+
+Rien de ce qui suit n'a touché le vrai matériel. Chacun peut casser ce qui marchait.
+
+- **Toutes les sorties** : instant annoncé « maintenant » au lieu de « maintenant + 1 s − négociation » ;
+  adresse issue de `DNSServiceResolve`/`GetAddrInfo` ; keepalive TCP 5/2/3 et `noDelay` sur le RTSP ; FIN et
+  sondes sans réponse déclenchent désormais une renégociation ; report d'origine après une interruption
+  confirmée ; compensation du lieu d'écoute ajoutée à l'instant annoncé ; adresse relue après 3 reconnexions
+  ratées.
+- **Geneva** : `POST /feedback` avant `RECORD`, puis toutes les 25 s si accepté ; réponses `80 D6` ;
+  `Session` au `TEARDOWN`. SDP inchangé d'après relecture et test.
+- **HomePod** : `POST /feedback` toutes les 2 s après `RECORD` ; réponses `80 D6` ; 200 chiffré sur le canal
+  d'événements ; `TEARDOWN` à la perte de session ; nouvel essai si le port d'événements refuse ; transitoire
+  tenté si le TXT est vide ; −144 pour un volume sous −30 et pour un master au minimum ; volume de départ −12
+  sur le fil, inchangé en valeur mais désormais porté par un master à −24 dB.
+- **Apple TV** : `X-Apple-HKP: 3` au `pair-verify`.
+
+### Problèmes rencontrés
+
+**La clé RSA du code était fausse.** Ses 67 derniers octets ne correspondaient pas à la clé du récepteur.
+C'est la cause de `client announced rsaaeskey of 256 bytes, wanted 16` : `oaep decoding error` chez
+shairport-sync, le bourrage base64 n'y étant pour rien. Rien ne le trahissait côté sender : la clé se charge et
+chiffre sans erreur. S'y ajoutent un en-tête ALAC amputé de 3 bits (23 et non 20, seul le mock l'a révélé) et une
+particularité de shairport-sync 5.2.1, qui décode L16 + `fmtp` comme de l'ALAC et meurt sur un `Bus error`. Sans
+effet sur le matériel réel, ni la Geneva ni les HomePod n'employant RSA, mais c'est ce qui bloquait toute
+validation longue contre le mock.
+
+**La graduation de capture n'était pas commune** dès qu'un tampon débordait, c'est-à-dire pendant toute
+négociation de plus d'une seconde. Deux sorties annonçaient le même instant pour des trames captées à des moments
+différents, d'un écart égal à la différence de leurs durées de négociation. Les 90 reconnexions de la validation
+d'une heure du jalon 4 avaient décalé la sortie RAOP de 2,4 s sans que personne puisse l'entendre. L'écho attribué
+aux 93 ms de 0cf8a31 n'avait donc probablement pas cette seule cause.
+
+**Des commandes reliées à rien.** Le curseur de basses ne faisait rien, le panneau de diagnostic affichait des zéros,
+et le volume de départ (gain brut, −12) ne suivait pas l'échelle des poussées suivantes (−6). Cette dernière
+correction amène le master par défaut à −24 dB, pour garder sur le fil le niveau déjà écouté.
+
+**Deux relectures indépendantes** ont trouvé 11 autres défauts, corrigés : correspondance partielle visant la mauvaise
+enceinte ; ligne RAOP écrasée par une annonce sans TXT, et réglages perdus ; PID figés d'une capture par application ;
+course dans `restartOutputs` ; master au minimum qui joue encore ; capture bloquée sans reprise ; fausse alerte
+d'autorisation ; `/feedback` muet fatal ; `shiftOrigin` déclenché par une rafale tardive ; échec définitif sur une
+réponse DNS tardive ; `Audio-Latency` des HomePod jamais lue. Les senders relisent aussi l'adresse après plusieurs
+échecs de reconnexion. Preuve : test, chaque correction étant défaite au moins une fois sur les points sensibles.
+
+**Incidents de méthode.**
+- Au moins 4 fenêtres de mot de passe de trousseau sont apparues chez Baptiste pendant les essais de signature : des
+  `codesign` sur un trousseau verrouillé, dont un trousseau d'essai « t » créé puis supprimé. Son trousseau de session ne
+  porte aucune identité de signature (vérifié).
+- La consigne « aucun contact avec le vrai matériel » a été franchie : la découverte ouvrait une connexion TCP vers
+  chaque appareil, et des essais `--tone` en ont ouvert vers « Salon » et l'Apple TV, sans audio ni pairing. Corrigé
+  à la racine, la découverte ne se connecte plus.
+- Un agent a arrêté deux fois un mock par son nom, et le scratchpad partagé a vu des fichiers écrasés entre agents.
+  Code non touché. Les règles sont dans `CLAUDE.md`.
+
+### Ce qui reste ouvert
+
+**À trancher sur le matériel** : déroulé complet dans `docs/prompt_tests_materiel.md`.
+- Tout ce que liste « Changements sur le fil jamais entendus », et la synchronisation en premier.
+- **La paire stéréo de HomePod** : ils forment une paire (fait donné par Baptiste). On ne sait pas ce que joue un membre
+  adressé seul : une seule session peut-elle faire jouer les deux en vraie stéréo ?
+- **Apple TV** : `pair-verify` jamais abouti sur elle, hypothèse `X-Apple-HKP: 3` à confirmer.
+- Critère de la section 8 du CDC : aucune heure de diffusion sur le matériel n'a encore été faite.
+- Nom réseau de la Geneva, jamais noté ; rattachement du plan par alias (`Geneva`, `AeroSphere`) à vérifier.
+- Hypothèses du plan : gauche = `Salon`, hauteurs estimées, place exacte des deux lieux d'écoute.
+- `Audio-Latency` des HomePod : si elle existe, compte-t-elle dans le calage ? Relevée, hors ancrage pour l'instant.
+- Une session saine coupée par un FIN ou par le keepalive : garde écartée faute de preuve, à regarder en capture.
+- Le seuil de 0,2 s de `shiftOrigin` n'a pu être mesuré sur aucune capture réelle.
+
+**À vérifier à l'usage** : liste en phase 4 du prompt (verre, Dock, liens des Réglages, ouverture de session,
+veille, entrée physique). `Privacy_ScreenCapture` n'est pas confirmé.
+
+**À COMPLÉTER À LA FUSION : résultats de l'essai de bout en bout contre mocks et stabilisation des tests.**
+En attente au moment de cette rédaction. À `cf57399` (700 tests), `swift test` échouait par intermittence sur des tests
+réseau (`BonjourResolutionWithoutConnectionTests`, « Connexion refusée… »), qui passent quand ils tournent seuls : la
+suite n'est donc pas réputée verte à cette date. Une cause est établie pour le premier, sur une branche encore non
+fusionnée (3a09882) : `EADDRINUSE`, une `NWConnection` de test reprenant le port d'une écoute en `TIME_WAIT`. Rien côté
+production. Les autres tests restent à trancher.

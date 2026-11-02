@@ -26,7 +26,10 @@ Ces règles valent pour tout le projet, à chaque session et à chaque jalon.
   - l'historique contient des commits `auto: …` intermédiaires, **qui ne sont pas des
     commits de clôture de jalon** — `PROGRESS.md` reste la source de vérité sur l'état réel ;
   - le script ne fait rien si l'arbre est propre (jamais de commit vide) ;
-  - `touch .claude/skip-auto-commit` suspend le mécanisme sans toucher au hook ;
+  - `touch .claude/skip-auto-commit` suspend le mécanisme sans toucher au hook. **À poser dès que
+    deux sessions travaillent sur le dépôt** : le `git add -A` du hook de l'une emporterait les
+    fichiers en cours de l'autre. Chacune commite alors ses chemins à la main, et l'interrupteur
+    est retiré quand il n'en reste qu'une ;
   - un push impossible (réseau, conflit distant) ne bloque pas la fin de tour : le commit
     local est fait et repartira au tour suivant.
 
@@ -103,12 +106,18 @@ plutôt que résumées, parce qu'un résumé perd exactement les nuances qui com
 
 ## Faits vérifiés sur cette machine
 
-Environnement constaté au jalon -1 (2026-08-05) :
+Environnement relevé le 2026-11-01 (les mesures des jalons 1 à 4 datent de macOS 26.5.1) :
 
-- macOS 26.5.1 (build 25F80), Apple Silicon. Homebrew dans `/opt/homebrew`.
-- Swift 6.3.3, target `arm64-apple-macosx26.0`. Les jalons 1 à 4 ne nécessitent que les
-  Command Line Tools (`swift build`/`swift run`), pas Xcode (CDC section 11).
-- Interface réseau active : `en0`, 192.168.1.21. C'est la valeur à passer en `--netiface`.
+- macOS 27.0.1, Apple Silicon, Xcode 26.6, Swift 6.3.3. Homebrew dans `/opt/homebrew`.
+- **Plancher macOS 26** partout (`Package.swift`, cible Xcode, `Resources/audiocap-Info.plist`) :
+  c'est ce qu'exige `libcrypto.a`, bouteille Homebrew liée statiquement. Annoncer moins produit
+  838 avertissements de l'éditeur de liens à chaque lien.
+- `swift build` compile aussi toute l'app : la cible `BridgeApp` reprend les fichiers de la cible
+  Xcode, sauf le point d'entrée `@main`, avec la même isolation par défaut. Seul `xcodebuild` compile
+  `AirplayPersonalBridgeApp.swift`.
+- **L'IP du Mac change** : `en0` valait 192.168.1.21 en août, 192.168.1.176 le 2026-11-01. La relire
+  avec `ipconfig getifaddr en0`, ne jamais la tenir pour acquise. Le mock AirPlay 2 écoute sur cette
+  adresse, pas sur `127.0.0.1`.
 - **L'API Process Tap est bien disponible dans le SDK** : `AudioHardwareCreateProcessTap`
   (`CoreAudio/AudioHardwareTapping.h`), `initStereoGlobalTapButExcludeProcesses:` et
   `initStereoMixdownOfProcesses:` (`CoreAudio/CATapDescription.h`). Ces deux initialiseurs
@@ -155,20 +164,23 @@ SPI privées `TCCAccessPreflight`/`TCCAccessRequest` (`TCC.framework`), comme le
 référence `insidegui/AudioCap`. Ces SPI interdisent une soumission au Mac App Store — sans
 objet pour un usage personnel.
 
-**Piège opérationnel** : chaque `./make-cli-bundle.sh` re-signe le bundle, change son CDHash
-et **révoque l'autorisation accordée**. Après un rebuild, la retirer puis la ré-ajouter dans
-le panneau. Un test qui renvoie du silence juste après un rebuild teste presque toujours ça,
-pas le code.
+**Une signature ad-hoc révoque l'autorisation à chaque compilation**, car son CDHash change. C'est
+ce que l'identité stable règle : voir « Signature et installation » plus bas. Un silence juste après
+un rebuild reste à soupçonner si `credentials/signing/` a été perdu ou si la compilation vient de
+Xcode, qui signe en ad-hoc.
 
 **Diagnostic** : un silence numérique **strict** (0 échantillon non nul) signale une
 autorisation manquante ou un tap mal câblé — jamais un blocage DRM (voir le résultat du test
 DRM dans `PROGRESS.md`). Un fichier **vide** (0 échantillon écrit) signifie que rien ne
-jouait : résultat non concluant, pas un blocage.
+jouait : résultat non concluant, pas un blocage. **Le tap ne livre aucun bloc tant que rien ne
+joue** (`kAudioAggregateDeviceTapAutoStartKey`) : lancer la lecture avant de conclure.
 
 ## Mocks AirPlay — état et pièges
 
-Lancer/vérifier les deux mocks : **`./run-mocks.sh`** (`start` / `check` / `stop`).
-Logs dans `.mock-logs/`.
+Lancer/vérifier les deux mocks : **`./run-mocks.sh`** (`start` / `check` / `restart` / `stop`).
+`check` vérifie l'annonce Bonjour **et** le port, `stop` n'arrête que les PID lancés par le script.
+Logs dans `.mock-logs/`. Les laisser éteints pendant un essai sur le vrai matériel : ils
+apparaîtraient comme des enceintes dans l'app, qui mémorise les sorties cochées.
 
 - **Le récepteur AirPlay natif de macOS doit rester désactivé** (Réglages Système > Général
   > AirDrop et Handoff > Récepteur AirPlay : OFF). Il occupe le port 5000 et empêche
@@ -180,18 +192,22 @@ Logs dans `.mock-logs/`.
   laisse le mock démarrer sous son nom par défaut, sans erreur visible.
 - **Backend audio** : forcer `output_backend = "ao"`. Le défaut de compilation Homebrew est
   `pulseaudio`, qui échoue immédiatement sans serveur PulseAudio lancé.
-- **Nom d'instance RAOP** : le service est annoncé sous `65D15B6D3AC1@Geneva-Mock`, avec un
-  préfixe d'adresse matérielle. Pour le jalon 2, **le sender doit parcourir `_raop._tcp` et
-  résoudre le service**, jamais supposer le nom ni le port en dur.
+- **Nom d'instance RAOP** : le service est annoncé sous `<préfixe>@Geneva-Mock`. Le préfixe
+  change (`65D15B6D3AC1` en août, `52B8FAE6DA40` le 2026-11-01) et n'est pas la MAC d'`en0` : le
+  relever avec `dns-sd -B _raop._tcp local`, **jamais le coder en dur**. Le sender parcourt
+  `_raop._tcp` et résout le service, sans supposer ni le nom ni le port.
 - Services et ports observés : Geneva-Mock → `_raop._tcp`, port 5000.
   ApTV-HomePod-Mock → `_airplay._tcp`, port 7000.
+- **Juger le son reçu** : `shairport-sync -o stdout` livre ce que le mock a décodé, analysable. Le
+  mock peut aussi tourner à vide après un SIGTERM.
 
 ## Sender RAOP — faits vérifiés au jalon 2
 
 Format négocié avec le mock Geneva (annonce TXT `_raop._tcp`) : `sr=44100`, `ss=16`, `ch=2`,
-`et=0,1` (RSA-AES disponible), `cn=0,1` (ALAC disponible). **La capture livrant du 48 kHz, un
-rééchantillonnage vers 44,1 kHz est obligatoire** — il tourne dans la tâche du sender, en
-aval du ring buffer (emplacement autorisé par le CDC 4.5).
+`et=0,1` (RSA-AES disponible), `cn=0,1` (ALAC disponible). **La vraie Geneva annonce autre chose**,
+voir « Sortie réelle ». **La capture livrant du 48 kHz, un rééchantillonnage vers 44,1 kHz est
+obligatoire** — il tourne dans la tâche du sender, en aval du ring buffer (emplacement autorisé par
+le CDC 4.5).
 
 Ports du récepteur observés : audio 6003, control 6001, timing 6002. **Ce sont ceux de la
 réponse au `SETUP` qui font foi**, jamais ceux demandés — ces derniers ne sont qu'une
@@ -199,14 +215,14 @@ suggestion.
 
 ### Les trois pièges du sender RAOP (chacun a coûté du temps)
 
-1. **L'en-tête ALAC fait 20 bits, pas 11.** Le décodeur (`alac.c` de shairport-sync, cas
-   « 2 channels ») lit 4 bits puis **12 bits** d'inutilisé avant `hasSize`,
-   `uncompressedBytes` (2 bits) et `isNotCompressed`. Plusieurs documentations informelles
-   décrivent un en-tête commençant par `channels - 1` sur 3 bits : ces 3 bits appartiennent
-   au *tag d'élément* du bitstream ALAC, **que RAOP ne transporte pas**. Avec 9 bits
-   manquants, `isNotCompressed` est lu à 0, le récepteur décode une trame compressée
-   inexistante et journalise `FIXME: unhandled prediction type`. Trame correcte pour 352
-   trames stéréo non compressées : **1 411 octets**.
+1. **L'en-tête ALAC fait 23 bits.** `alac_decode_frame` (`alac.c` de shairport-sync) lit
+   `channels` sur 3 bits **avant** son `switch`, puis 4 et 12 bits d'inutilisé, `hasSize`,
+   `uncompressedBytes` (2 bits) et `isNotCompressed`. Ce fichier a longtemps affirmé 20 bits, en
+   tenant ces 3 bits pour un tag que RAOP ne transporterait pas : c'était faux, et le test
+   d'aller-retour le validait parce qu'il rejouait la même hypothèse. Tout décalé de 3 bits, le
+   décodeur abandonne chaque trame (`Not enough space […] E2`), et la vraie Geneva jouait un ton
+   continu. Trame correcte pour 352 trames stéréo non compressées : **1 412 octets**. La Geneva
+   reçoit maintenant du PCM, ALAC ne sert qu'aux récepteurs qui l'exigent.
 2. **`AVAudioConverter.convert` ne rend jamais plus de 4 096 trames par appel**, quelle que
    soit la capacité du tampon de sortie, et signale `.inputRanDry` **en retenant encore des
    trames**. S'arrêter sur ce statut perd ~6,5 % du flux, en silence et définitivement. Ne
@@ -222,7 +238,10 @@ suggestion.
   l'`ANNOUNCE`, pas une URI reconstruite. shairport-sync tolère l'écart ; les récepteurs
   matériels rejettent couramment un `TEARDOWN` dont l'URI ne correspond à aucune session, et
   la session reste alors bloquée côté récepteur.
-- **Le base64 du SDP (`rsaaeskey`, `aesiv`) doit être sans bourrage `=`.**
+- **Le base64 du SDP (`rsaaeskey`, `aesiv`) est envoyé sans bourrage `=`.** Il n'était pour rien dans
+  l'échec du SDP, voir plus bas.
+- **La clé publique RSA tient parce qu'elle est recoupée**, pas parce qu'elle a l'air juste : voir
+  « L'échec du SDP contre shairport-sync ». `RAOPCryptoTests` épingle son empreinte.
 - **Le chiffrement audio repart du même IV à chaque paquet** (CBC non chaîné entre paquets)
   et **laisse le reliquat de moins de 16 octets en clair**, sans bourrage. Les deux sont
   exigés par le protocole : c'est ce qui rend une retransmission isolée décodable.
@@ -264,9 +283,8 @@ suggestion.
   (absent des requêtes, et shairport sait y répondre). **Ne pas y repasser de temps : la
   comparaison avec macOS natif demandera la vraie Geneva.**
 - **macOS envoie un `OPTIONS *` avant l'`ANNOUNCE`** (`User-Agent: Music/…`,
-  `Client-Instance`, `DACP-ID`, `Active-Remote`). **Le sender du projet ne l'envoie pas** et
-  attaque directement par `ANNOUNCE` ; shairport l'accepte. À vérifier contre la vraie
-  Geneva : si elle refuse, ajouter l'`OPTIONS` préalable est trivial.
+  `Client-Instance`, `DACP-ID`, `Active-Remote`). **Le sender du projet ne l'envoie pas**, pas plus
+  que pyatv : la vraie Geneva a joué sans.
 - **Sélectionner une sortie AirPlay dans macOS passe par le menu son**, sans équivalent en
   ligne de commande. Toute comparaison avec un sender de référence demande donc une action
   physique de Baptiste, sur du matériel réel.
@@ -274,8 +292,9 @@ suggestion.
 ### Capture réseau : filtrer sur la bonne interface
 
 Mock et sender tournant sur la **même machine**, le trafic passe par **`lo0`**, pas par
-`en0`. Un filtre `host 192.168.1.21` ne capte rien. Utiliser :
-`tshark -i lo0 -i en0 -f "tcp port 5000 or udp portrange 6000-6100"`.
+`en0`. Un filtre sur l'adresse du Mac ne capte rien. Utiliser :
+`tshark -i lo0 -i en0 -f "tcp port 5000 or udp portrange 6000-6100"`. Le trafic vers le vrai
+matériel passe par `en0`.
 Ne pas déduire la taille de la charge utile de `frame.len` : lire `udp.length` et `data.len`.
 
 ## Environnement Python (outils de dev uniquement)
@@ -302,9 +321,6 @@ sans passer par la GUI. La capture fonctionne **sans `sudo`** (utilisateur membr
 - **OwnTone** : requis au jalon 0 uniquement. **N'existe plus dans homebrew-core** (ni
   `owntone`, ni `forked-daapd`) : à compiler depuis les sources
   (https://github.com/owntone/owntone-server).
-- **Bibliothèques C crypto** (csrp, curve25519-donna, ed25519 d'orlp, chachapoly) : à
-  récupérer dans `Sources/CCrypto` au jalon 3, en vérifiant soi-même les dépôts corrects.
-  Volontairement non automatisé (CDC section 14).
 
 ## Sender AirPlay 2 — faits vérifiés au jalon 3
 
@@ -321,7 +337,9 @@ décident du chemin de pairing :
 
 Le mock arme **48 sans 43** : le jalon 3 implémente donc le transitoire. `./audiocap --browse2`
 affiche ces bits — c'est la commande à lancer en premier devant un récepteur inconnu.
-Un vrai Apple TV en maison HomeKit armera probablement 43 : voir l'ADR `003` du vault.
+Sur le matériel réel, les HomePod acceptent le transitoire ; **l'Apple TV le refuse en 470 même en
+annonçant le bit 48**, d'où le critère sur son modèle : voir « Sortie réelle ». Le bit 48 ne prouve
+donc pas qu'un récepteur jouera, mais lui seul peut départager deux lignes d'une même enceinte.
 
 **Corollaire à ne pas réapprendre** : `atvremote pair` échoue contre ce mock (il lève
 `invalid proof`), alors que `atvremote stream_file` fonctionne sans aucun pair-setup. Ce
@@ -373,8 +391,9 @@ Pas d'`ANNOUNCE` ni de SDP : les paramètres passent en **plists binaires**.
 3. `SET_PARAMETER` (volume), 4. `RECORD`, 5. `TEARDOWN`.
 
 Comme en RAOP, **ce sont les ports de la réponse qui font foi**, jamais ceux demandés.
-Format audio `ALAC_44100_16_2` = `1 << 18` ; type de flux temps réel = `96` (`103` =
-bufferisé). `spf` = 352 trames, comme en RAOP.
+Format audio PCM 44,1 kHz, 16 bits, stéréo = `1 << 11` (`0x800`), avec `ct=1`, comme chez pyatv ; le
+jalon 3 envoyait `ALAC_44100_16_2` = `1 << 18`. Type de flux temps réel = `96` (`103` = bufferisé).
+`spf` = 352 trames, comme en RAOP.
 
 ### `NWBrowser` écarte silencieusement un service au TXT douteux
 
@@ -399,13 +418,15 @@ unique garantie (deux reprises d'une `CheckedContinuation` sont fatales).
 
 Symptôme : le processus ne se termine jamais, **après** avoir affiché tous ses résultats et
 alors que la diffusion s'est parfaitement passée. Les `TEARDOWN` des deux senders utilisent
-désormais un délai court de 2 s.
+désormais un délai court de 2 s. `RTSPClient` lit en permanence depuis le jalon 5 : il voit aussi un
+FIN et un RST, qui passaient inaperçus.
 
 ### Mock AirPlay 2 : deux comportements à connaître
 
 - **Son enregistrement mDNS devient périmé après quelques minutes** : `dns-sd` continue de
-  l'annoncer alors que `NWBrowser` ne le voit plus. Relancer `./run-mocks.sh start`. C'est la
+  l'annoncer alors que `NWBrowser` ne le voit plus. Relancer `./run-mocks.sh restart`. C'est la
   **première** chose à vérifier devant un « récepteur introuvable », avant de suspecter le code.
+  Il n'accepte qu'une session à la fois.
 - **Son puits audio plante sur `av` 18** (`codecContext.channels` en lecture seule), y compris
   avec pyatv comme sender. C'est **en aval du protocole** : la négociation et la réception des
   paquets fonctionnent, seul le décodage local échoue. Conséquence : la validation du jalon 3
@@ -442,9 +463,12 @@ complètement** alors que la session se porte parfaitement (14 requêtes en tout
 session de 60 s, aucune après la 35ᵉ seconde). Un délai de garde de 30 s sur ce silence
 déclenchait une reconnexion sur une session saine.
 
-**Le signal franc de perte de session est la rupture de la connexion RTSP** (TCP), côté RAOP,
-et celle du **canal d'événements** côté AirPlay 2. Le flux audio étant en UDP, il ne signale
-jamais rien : les datagrammes partent indéfiniment dans le vide vers un récepteur disparu.
+**Le signal franc de perte de session est la rupture de la connexion RTSP** (TCP), FIN et RST
+compris, et celle du **canal d'événements** côté AirPlay 2. Une coupure de courant n'envoie ni l'un ni
+l'autre : le keepalive TCP 5/2/3 de `RTSPClient` la voit en 11 s au pire, en théorie, jamais mesuré. Le
+flux audio étant en UDP, il ne signale jamais rien : les datagrammes partent indéfiniment dans le vide
+vers un récepteur disparu. **Un `/feedback` sans réponse n'est pas une perte** : chez pyatv il est
+« best effort », et le déclarer fatal couperait un son qui marche.
 
 ### Le canal de contrôle AirPlay 2 accepte le paquet de synchro RAOP
 
@@ -461,7 +485,9 @@ jette ; il n'émet **jamais rien**. Son port « ntp » est la même classe, donc
 listener TCP, pas un serveur NTP. Conséquence : **la connexion au canal d'événements est
 validée, le décodage des événements ne l'est pas** — faute de récepteur qui en émette. Sur
 du matériel réel le contenu est chiffré avec les clés du pairing et encadré comme le canal
-de contrôle.
+de contrôle : `Events-Salt`, avec des infos **inversées** (on écrit avec `Events-Read-Encryption-Key`).
+Comme pyatv, on déchiffre et on acquitte en 200 sans interpréter le contenu : validé contre un faux
+canal seulement.
 
 ### La dérive réellement observée est minuscule, mais elle existe
 
@@ -475,77 +501,198 @@ tant qu'un autre matériel n'a pas été mesuré.
 mesurée pendant 10 s de stabilisation. Une constante arbitraire obligerait la correction à
 rattraper d'emblée un écart qui n'est pas de la dérive.
 
-### Un rebuild du bundle coûte une autorisation TCC, à chaque fois
+### L'échec du SDP contre shairport-sync — élucidé au jalon 5
 
-Rappel du jalon 1, revérifié à la dure ici : `./make-cli-bundle.sh` re-signe en ad-hoc, le
-CDHash change, et `tccd` journalise `Failed to match existing code requirement`. La bonne
-séquence pour une session de validation longue est donc :
+Le symptôme, au jalon 4 : `client announced rsaaeskey of 256 bytes, wanted 16` à chaque `ANNOUNCE`,
+décodage de travers, et le mock mort sur un `Bus error`. Trois causes empilées :
 
-1. **geler le code**, `swift test` vert ;
-2. `./make-cli-bundle.sh` **une seule fois** ;
-3. `tccutil reset AudioCapture fr.baptiste.airplaymultioutput.audiocap` (purge l'entrée
-   périmée, sans quoi le dialogue ne réapparaît pas) ;
-4. lancer, faire autoriser le dialogue, **puis ne plus recompiler**.
+1. **Les 67 derniers octets du modulus RSA du code étaient faux** (`oaep decoding error` chez
+   shairport-sync). Le bourrage base64, longtemps suspecté, n'y était pour rien. Côté sender, rien ne
+   le trahit : la clé se charge et chiffre sans erreur, le cryptogramme fait 256 octets.
+2. **L'en-tête ALAC était amputé de 3 bits** : voir le premier piège RAOP.
+3. **shairport-sync jusqu'à 5.2.1 décode L16 + `fmtp` comme de l'ALAC**, quel que soit le `rtpmap`, et
+   en meurt. La ligne `fmtp` reste pourtant envoyée à la Geneva, comme le fait pyatv : elle n'a jamais été
+   validée sans. Elle n'est retirée que face à un récepteur qui annonce aussi ALAC.
 
-### shairport-sync rejette notre SDP et meurt en session — **à élucider au jalon 5**
-
-Constaté au jalon 4, **pas** au jalon 2 où la même session tenait 40 s sans incident. Le mock
-journalise à chaque `ANNOUNCE` :
-
-```
-warning: client announced rsaaeskey of 256 bytes, wanted 16
-warning: Can not process the following ANNOUNCE message:
-```
-
-puis décode de travers (`FIXME: unhandled prediction type`,
-`FIXME: Not enough space in the output buffer for audio frame - E2`) et **le process meurt
-au bout d'environ 25 s de diffusion**, reproductiblement, sur un **`Bus error: 10`** — un
-`SIGBUS`, donc un accès mémoire invalide, pas un arrêt propre. C'est cohérent avec un
-décodeur parti sur des paramètres par défaut faute d'avoir pu lire le SDP.
-
-Ce qu'on sait :
-
-- **Ce n'est pas une régression du jalon 4** : `RAOPCrypto.swift` et `ALACEncoder.swift` sont
-  inchangés depuis le jalon 2 (`git diff` vide). Les octets sur le fil sont exactement ceux
-  qui ont été validés alors, y compris l'aller-retour bit à bit du test unitaire.
-- **Ce n'est pas le backend audio** : basculer `ao` → `pipe` vers `/dev/null` ne change rien.
-  Le puits audio a donc été remis à `ao` (config d'origine du jalon -1).
-- **Ce n'est pas la build** : `shairport-sync -V` ne mentionne pas AirPlay 2, c'est bien une
-  build AirPlay 1 seule. L'hypothèse « il attend une clé FairPlay de 16 octets parce qu'il
-  est en mode AirPlay 2 » est donc écartée.
-- Le message signifie que **le déchiffrement RSA de `rsaaeskey` a échoué chez lui** : il
-  garde les 256 octets bruts au lieu des 16 attendus, part avec des paramètres de décodeur
-  par défaut, et finit par déborder.
-
-Pistes non explorées, par ordre de coût : essayer le base64 **bourré** pour `rsaaeskey` et
-`aesiv` (le jalon 2 avait retenu le non bourré, mais rien ne prouve que ce soit ce que
-shairport 5.2.1 attend) ; comparer octet pour octet avec l'`ANNOUNCE` d'un sender de
-référence ; vérifier si le padding OAEP attendu a changé.
-
-**Conséquence pratique** : toute validation RAOP de longue durée est bloquée tant que ce
-point n'est pas élucidé. La sortie AirPlay 2, elle, est stable.
+Le sender préfère désormais le **clair** quand `et` le propose (`et=0,1`), et le chemin clair a tenu
+60 s contre le mock, son décodé sans anomalie à 440 Hz. **Rien de tout cela ne touchait la vraie Geneva
+ni les HomePod**, qui n'emploient pas RSA.
 
 ### Toujours vérifier que le mock ACCEPTE avant de lancer une session longue
 
-`./run-mocks.sh check` ne teste que l'annonce Bonjour. shairport-sync peut être annoncé alors
-que son port 5000 refuse encore les connexions (il quitte après chaque `TEARDOWN` et met
-quelques secondes à revenir), d'où un `Connection reset by peer` qui tue la sortie RAOP pour
-toute la session. Vérifier réellement le port :
-
-```bash
-nc -z 192.168.1.21 5000 && nc -z 192.168.1.21 7000
-```
-
-**La reconnexion automatique ne rattrape pas ce cas** : elle couvre la perte d'une session
-**établie**, pas un récepteur absent au démarrage, où `start()` remonte l'erreur à l'appelant.
+shairport-sync peut être annoncé alors que son port 5000 refuse encore les connexions : il quitte après
+chaque `TEARDOWN` et met quelques secondes à revenir. `./run-mocks.sh check` vérifie désormais le port.
+Le moteur, lui, attend un récepteur absent en tâche de fond (`waitingForReceiver`), avec repli
+exponentiel : un récepteur en retard ne tue plus une sortie.
 
 ### Capture réseau d'une session AirPlay 2
 
 Mock et sender sur la même machine : capturer sur **`lo0` et `en0` à la fois**, sans filtre
 BPF restrictif (le filtre appliqué à une capture multi-interfaces s'est révélé peu fiable),
-puis filtrer à la lecture (`-Y "tcp.port==7000"`). Trace de référence :
-`captures/jalon3-airplay2-session.pcapng`.
+puis filtrer à la lecture (`-Y "tcp.port==7000"`). Trace de référence, de l'époque où le flux était
+encore en ALAC : `captures/jalon3-airplay2-session.pcapng`.
 
 Elle montre visuellement le chiffrement : les deux `POST /pair-setup` sont lisibles en clair,
-et plus rien ne l'est ensuite. Paquets audio uniformes à **1 447 o UDP**
-(8 + 12 RTP + 1 411 ALAC + 16 étiquette).
+et plus rien ne l'est ensuite. Le RTSP chiffré est illisible en capture : pour un HomePod, lire les
+journaux (`log show`).
+
+---
+
+## Sortie réelle — faits vérifiés sur le matériel (2026-08-11 et 12)
+
+Ce qui suit vient des commits 824f16d à 0cf8a31. Détail dans `PROGRESS.md`. **Ce qui a été ajouté
+depuis n'a jamais été entendu** : la liste est dans la section du jalon 5 de `PROGRESS.md`.
+
+- **Geneva AeroSphere Large** : TXT `et=0,4`, `cn=0`, `features=0x444c0a00` sans aucun bit de pairing,
+  donc récepteur AirPlay 1 même si elle s'annonce aussi en `_airplay._tcp`. Reçoit du PCM `L16`
+  big-endian sans chiffrement. Répond `Audio-Latency: 4096`, soit 92,88 ms, retranchés de l'ancrage
+  (0cf8a31). **Son nom réseau n'a jamais été noté** : le plan la rattache par alias (`Geneva`,
+  `AeroSphere`).
+- **HomePod gen 2**, « Salon » et « Salon (2) » : acceptent le transitoire sans `/pair-pin-start`.
+  **Ils forment une paire stéréo** (fait donné par Baptiste, 2026-11-01). **On ne sait pas ce que joue
+  un membre adressé seul**, ni si une seule session fait jouer les deux : à trancher en phase 3 de
+  `docs/prompt_tests_materiel.md`.
+- **Le HomePod ne répond au `SETUP` qu'après avoir mesuré notre horloge** : le répondeur de timing doit
+  écouter **avant** le `SETUP`. Il refuse le `SETUP` en 400 sur l'IPv6 de lien local : IPv4 d'abord.
+- **Charge utile AirPlay 2 en PCM big-endian.** Données associées de l'AEAD = octets 4 à 12 de l'en-tête
+  RTP. Nonce de 8 octets ajouté après l'étiquette Poly1305. Un bruit blanc est une bonne nouvelle : un
+  paquet mal chiffré serait rejeté et donnerait du silence.
+- **Apple TV** : refuse le transitoire en 470 même en annonçant le bit 48. L'app la signale donc
+  « appairage requis » d'après le TXT `model` (`AppleTV…`). `pair-verify` n'a jamais abouti. Credentials au
+  format pyatv (`ltpk:ltsk:atv_id:client_id`), sous `credentials/`, à passer par chemin absolu
+  (`--credentials2`), jamais à afficher. L'identifiant renvoyé (`pi` Bonjour) diffère de celui enregistré
+  par pyatv : écart journalisé, pas fatal.
+- **`X-Apple-HKP`** : `3` en appairage système, `4` en transitoire. L'accessoire simulé de pyatv refuse en
+  501 un `pair-verify` qui n'annonce pas `3`. Correction confirmée contre un accessoire simulé seulement.
+- **Maintien de session** : chez pyatv, RAOP sonde `POST /feedback` puis répète toutes les 25 s si 200 ;
+  AirPlay 2 toutes les 2 s. Jamais fatal, comme dit plus haut.
+- **Retransmission** : réponse `80 D6 | séquence d'origine (2) | paquet complet` sur le canal de contrôle,
+  depuis `RTPPacketHistory`. L'historique se vide à la reconnexion.
+- **Échelle de volume** : l'interface court de −60 à 0 dB, le protocole de −30 à 0, −144 pour le silence
+  (`BridgeState.receiverVolume`). Master à −24 par défaut pour −12 sur le fil, niveau déjà écouté. Master au
+  minimum = −144, quel que soit le trim.
+- **Dédoublonner une enceinte par adresse, jamais par nom** : une même enceinte s'annonce sur les deux
+  services, et les noms de suffixe (`Salon`, `Salon (2)`) ne concordent pas forcément d'un service à l'autre.
+  **Seule une annonce confirmant le bit 48 peut supplanter ou absorber une ligne RAOP** : une annonce sans TXT
+  effacerait la Geneva et ses réglages.
+- **Nom exact pour l'app** (`ReceiverNameMatching.exact`) : « Salon » est un préfixe de « Salon (2) » et
+  d'« Apple TV Salon ». La correspondance partielle est réservée au CLI.
+
+## Moteur et temps réel — faits vérifiés au jalon 5
+
+- **`for … in 0..<n` alloue à chaque tour en debug** : `while` sur le chemin temps réel. Une sonde
+  `malloc_logger` le vérifie dans les tests.
+- **Une fermeture consommatrice formée dans l'acteur en hérite l'isolation** : celle que reçoit le
+  callback temps réel ne doit pas y être formée.
+- **`totalFramesWritten` compte tout ce que la capture a produit, refus compris** : c'est ce qui rend la
+  graduation commune à toutes les sorties quel que soit le remplissage de leur tampon (`timelineSkew`).
+  L'ancien compteur s'arrêtait au premier débordement, soit à 48 000 trames, quelle que soit la négociation.
+- **L'horloge commune démarre à la capture**, plus au premier sender (`BridgeEngine.start`). **Revenir à
+  l'ancien calcul exige donc deux changements** : retirer `dropped` de `timelineSkew` ne suffit pas, il faut
+  aussi ramener l'origine au premier sender, sinon un récepteur négocié après 5 s annonce un instant passé de
+  4 s. Voir l'ADR `006`.
+- **`shiftOrigin` reporte l'horloge après un vrai trou de capture, confirmé au relevé suivant** : une
+  rafale tardive sans trou ne décale rien. Il vaut pour toutes les sorties à la fois.
+- **`replaceCapture` change la source sans toucher aux sessions des sorties**, et rend la main sans attendre.
+- **Capture bloquée** : reconstruction à 5 s, repli jusqu'à 60 s, seulement si une application joue.
+- **Un abandon avec une raison met la sortie en `failed`, sans relance** (`currentOutputError`). Seuls les
+  refus de capacité ou d'authentification sont permanents (`isPermanentOutputFailure`). `ipv4Required` ne l'est
+  pas : une réponse DNS peut être tardive.
+- **Après 3 reconnexions ratées**, les senders relisent l'annonce du récepteur (`rediscoveryInterval`), par
+  nom exact : une adresse peut avoir changé.
+- **`DNSServiceResolve` veut le nom brut, `DNSServiceQueryRecord` le nom échappé.** A et AAAA arrivent
+  séparément : ne pas s'arrêter à la première réponse. **La découverte ne se connecte plus à aucun appareil.**
+- **Options TCP : `transportProtocol`, jamais `internetProtocol`.** Le transtypage échoue sans bruit :
+  `noDelay` n'avait jamais été appliqué.
+- **`UDPChannel.onReceive` capture le canal en `weak`**, sinon le socket fuit à chaque session.
+- **Pas de surcharge `async` d'un nom synchrone** : elle casse les appelants.
+- **csrp exige `A` avant `B`** côté serveur, d'où `TransientSRPServer` dans les tests.
+
+## Écoute et délais
+
+- **Deux lieux d'écoute sélectionnables** : « À table » par défaut, dos à la fenêtre et face à la télé, et « Au
+  canapé », place gauche sur le plan (`RoomLayout.activeListenerID`, écrit avec le plan). Un seul commande les
+  distances et les délais.
+- **Délai envoyé au moteur = `delayMS` (réglage manuel) + compensation du lieu en vigueur**
+  (`BridgeState.effectiveDelayMS`). Il part sans rupture de flux, et un changement de lieu le pousse en pleine
+  diffusion.
+- **La compensation se calcule sur les sorties rattachées dans le plan**, jamais sur les sorties découvertes ni
+  cochées : cocher une enceinte ou voir la Geneva s'allumer ne doit pas bouger le calage des autres. Une sortie
+  absente du plan a 0 de compensation. Le premier rattachement de la Geneva provoque un seul recalage.
+- Valeurs du plan, sous le seuil de perception : à table 0 à 2,2 ms, au canapé 0 à 5,7 ms.
+
+## Plan et capture de Baptiste
+
+- `RoomLayout.salon` (`Model/SalonPlan.swift`) reproduit sa capture. Échelle de la capture : **178 px/m,
+  origine (166, 150)**, cotes imprimées cohérentes. Les croix jaunes et le point vert désignaient les enceintes :
+  ce n'étaient pas des objets à dessiner.
+- **Hypothèses à confirmer** : gauche = `airplay2/Salon`, hauteurs estimées, place exacte des lieux d'écoute.
+  Présets gardés malgré l'écart avec la capture : canapé (retour de 91 cm, cote relevée, contre ~79 dessinés).
+- Plan réel : `~/Library/Application Support/AirplayPersonalBridge/room-layout.json`. Le régénérer app fermée, car elle
+  sauvegarde en quittant : `SALON_JSON_OUT=<fichier> swift test --filter PlanExport`. Rendu :
+  `PLAN_PNG_OUT=<fichier> swift test --filter PlanExport`. Un JSON illisible est préservé à côté.
+- **`WallSegment.thickness` part à gauche du sens de tracé** : contour horaire = extérieur. **Tout nouveau champ de
+  `WallSegment` doit passer par le décodage manuel**, sinon tous les murs disparaissent à la lecture.
+- **Hors fenêtre, `ImageRenderer` exige `performAsCurrentDrawingAppearance`** pour les couleurs dynamiques.
+
+## Widget et app
+
+- **Barre de menus, pas WidgetKit** : la capture doit tourner dans un processus vivant. Voir l'ADR `005`.
+- **`ImageRenderer` barre les contrôles AppKit** : le panneau se rend dans une fenêtre hors écran,
+  `MENUBAR_PNG_DIR=<dossier> swift test --filter MenuBarPanelExport`. **`glassEffect` ne dessine rien avec
+  `cacheDisplay`** : `panelSimulatesGlass` le remplace dans ces rendus, et le verre ne se juge que dans l'app réelle.
+- **Un nom de SF Symbol inconnu n'affiche rien, sans erreur.** `hifispeaker.slash` n'existe pas.
+- **macOS 27 compose l'icône d'app sans plaque grise** : le vérifier avec `NSWorkspace.icon(forFile:)`. Générée par
+  `scripts/make-app-icon.swift`, dont l'en-tête donne la commande : `swiftc -parse-as-library`, deux fichiers, la
+  géométrie du glyphe vivant dans `Views/BridgeGlyph.swift`.
+- **App Nap** peut frapper une app sans fenêtre : une activité est retenue pendant la diffusion.
+- Seule la première découverte coche d'office. Une sortie disparue reste affichée hors ligne si elle est cochée : une
+  sortie de test restée cochée s'y retrouve, à décocher ou à retirer de `settings.json`, app fermée.
+- La source ou le son du Mac changés en diffusion relancent la capture. La dernière enceinte décochée arrête la
+  diffusion après 4 s de grâce.
+
+## Signature et installation
+
+```bash
+scripts/setup-signing.sh       # une fois, idempotent
+scripts/install-app.sh --open  # compile en Release, signe, remplace l'app dans /Applications, lance
+```
+
+- **L'exigence désignée ne dépend plus du CDHash** (`identifier "…" and certificate leaf = H"…"`) : recompiler
+  conserve l'autorisation « sons du système », à confirmer sur le premier rebuild réel. Un certificat auto-signé
+  suffit, TCC compare une empreinte. Il n'est pas approuvé, donc `find-identity -v` ne l'affiche pas : c'est normal.
+- **Tout passe par `scripts/setup-signing.sh --codesign`.** Sur un trousseau verrouillé, `codesign` et
+  `security show-keychain-info` ouvrent chez Baptiste une fenêtre de mot de passe qu'il ne peut pas remplir : c'est
+  arrivé au moins 4 fois pendant la mise au point. Ne jamais les appeler autrement. Un trousseau qui refuse son mot
+  de passe après une annulation est recréé automatiquement, cause inconnue.
+- `credentials/signing/` vit dans le dépôt principal, ignoré par git : perdre `signing.key` oblige à redonner les
+  autorisations. `make-cli-bundle.sh` emploie la même identité.
+- **Xcode signe en ad-hoc** : le bundle Debug porte son propre identifiant (`….AirplayPersonalBridge.debug`), pour ne pas
+  écraser l'autorisation de l'app installée.
+- **L'app installée quitte sur SIGTERM** (`TerminationSignal.swift`), l'AppleEvent `quit` exigeant un consentement
+  Automation (-1744). Arrêt propre borné à 5 s, avec `TEARDOWN`.
+- **OpenSSL est lié en statique** (`libcrypto.a`) : plus de référence à `/opt/homebrew` à l'exécution, mais toujours requis à
+  la compilation. Le lien exige de renommer `poly1305_init` dans `CChachaPoly`, seul symbole en conflit.
+
+## Tests et outillage
+
+- Toute la logique de l'app passe par `swift test`, avec `@testable import BridgeApp`.
+- **Tests contre mocks**, jamais lancés par défaut : `AUDIOCORE_MOCK_TESTS=1 swift test --filter BridgeEngineMockTests`,
+  `RUN_MOCK_TESTS=1 RAOP_MOCK_INSTANCE=<nom> swift test --filter RAOPMockIntegration`,
+  `RUN_MOCK_TESTS=1 swift test --filter AirPlay2MockIntegrationTests`.
+- **Bout en bout sans autorisation** : `swift run audiocap --tone --airplay Geneva-Mock --volume -30 10`. Niveau par défaut
+  −50 dBFS : shairport joue sur les haut-parleurs du Mac.
+- `./audiocap` relaie sortie, code de retour et Ctrl-C malgré `open` (`open --env/--stdout/--stderr` existent). Codes : 0
+  succès, 1 erreur, 2 silence ou mauvais usage, 3 autorisation refusée, 130 Ctrl-C, 70 mort sans code.
+- `git apply --unidiff-zero` place les ajouts selon la position d'arrivée : à vérifier après application.
+
+## Travailler avec des sous-agents
+
+- **Un worktree d'agent peut partir d'une base périmée** (`origin/main`, ou plusieurs commits derrière `main`) : vérifier
+  `git log -1` au début et repartir de `main` par `git merge main`.
+- **Le scratchpad est partagé entre agents** : un dossier par agent, jamais de nom générique (`commit1.txt`, `mutate.py` ont
+  été écrasés).
+- **Arrêter un processus par son PID, jamais par son nom** : un `pkill` a pu tuer le mock d'un autre agent.
+- **Le vrai matériel est une ressource unique.** Une seule session le fait jouer à la fois, et tout essai contre un mock
+  vise celui-ci par adresse ou par nom exact.
+- Ne pas lire `credentials/` : clés privées. Passer les chemins.
