@@ -366,6 +366,12 @@ struct BridgeEngineRetryTests {
             AirPlay2PairingSession.Failure.authorizationRequired(status: 403, step: "M1")))
         #expect(!isPermanentOutputFailure(
             AirPlay2SenderError.requestForbidden(receiver: "x", step: "SET_PARAMETER", reason: "")))
+        // Un refus d'authentification au pair-setup transitoire : mot de passe fixe, aucun code
+        // saisi, rien à corriger. Relevé sur un HomePod d'une paire stéréo, passager.
+        #expect(!isPermanentOutputFailure(
+            AirPlay2PairingSession.Failure.transientAuthenticationFailed(step: "M4", reason: "x")))
+        #expect(!isPermanentOutputFailure(
+            AirPlay2SenderError.transientPairingRejected(receiver: "x", step: "M4")))
     }
 
     /// Un AAAA arrivé seul dans les 3 s de la résolution, et la sortie était abandonnée pour de bon

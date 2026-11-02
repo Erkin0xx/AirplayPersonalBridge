@@ -144,8 +144,15 @@ public actor AirPlay2Sender {
     /// La session courante est née d'une relance rapide : si elle tombe à son tour en début de
     /// session, on revient au comportement ordinaire plutôt que d'en enchaîner une autre.
     private var sessionFromQuickRetry = false
-    /// Attente de la relance rapide, que `stop()` interrompt.
-    private var quickRetryDelay: Task<Void, Never>?
+    /// Attente avant une nouvelle négociation dans `start()` (fermeture précoce, pair-setup
+    /// refusé), que `stop()` interrompt.
+    private var renegotiationPause: Task<Void, Never>?
+    /// Tour de pairing partagé avec les autres sorties du moteur, voir ``PairingGate``. `nil` : ce
+    /// sender négocie sans attendre personne.
+    private let pairingGate: (any PairingGate)?
+    /// Attente du tour de pairing en cours, que `stop()` interrompt.
+    private var pairingTurnWait: Task<Void, Error>?
+    private var pairingRetryPolicy = PairingRetryPolicy()
     /// Paquets émis, pour répondre aux demandes de retransmission.
     private let retransmitter = AirPlay2Retransmitter()
     /// Maintien de session (`POST /feedback`).
@@ -163,6 +170,22 @@ public actor AirPlay2Sender {
     /// Permet aux tests d'observer le maintien de session sans attendre plusieurs secondes.
     func setKeepAlivePolicy(_ policy: KeepAlivePolicy) {
         keepAlivePolicy = policy
+    }
+
+    /// Nouveaux essais d'un pair-setup transitoire refusé à l'authentification, dans `start()`.
+    ///
+    /// L'attente est tirée au hasard pour désynchroniser deux sorties refusées ensemble : reparties
+    /// au même instant, elles se gêneraient encore.
+    struct PairingRetryPolicy: Sendable {
+        /// Nouveaux essais au plus, après le premier refus.
+        var retries = 3
+        /// Attente avant chacun, en millisecondes.
+        var delayMilliseconds: ClosedRange<Int> = 200...800
+    }
+
+    /// Permet aux tests d'épuiser les nouveaux essais sans attendre.
+    func setPairingRetryPolicy(_ policy: PairingRetryPolicy) {
+        pairingRetryPolicy = policy
     }
 
     /// Échantillons convertis en attente de constituer un paquet complet de 352 trames.
@@ -186,6 +209,8 @@ public actor AirPlay2Sender {
     ///   - rediscover: relit l'annonce du récepteur quand les reconnexions échouent. Ne contacte
     ///     aucun appareil : ce ne sont que des questions mDNS.
     ///   - rediscoveryInterval: échecs de reconnexion entre deux relectures.
+    ///   - pairingGate: tour de pairing commun aux sorties d'un même moteur. Le sender ne sait pas
+    ///     qui d'autre l'attend : il attend son tour avant chaque pairing, rien de plus.
     public init(
         device: AirPlay2Device,
         ring: AudioRingBuffer,
@@ -194,11 +219,13 @@ public actor AirPlay2Sender {
         reconnects: Bool = true,
         credentials: HapCredentials? = nil,
         rediscover: (@Sendable () async -> AirPlay2Device?)? = nil,
-        rediscoveryInterval: Int = 3
+        rediscoveryInterval: Int = 3,
+        pairingGate: (any PairingGate)? = nil
     ) {
         self.device = device
         self.rediscover = rediscover
         self.rediscoveryInterval = max(1, rediscoveryInterval)
+        self.pairingGate = pairingGate
         self.ring = ring
         self.captureFormat = captureFormat
         self.reconnects = reconnects
@@ -229,6 +256,12 @@ public actor AirPlay2Sender {
     /// Un récepteur qui ferme la connexion juste après le `SETUP` du flux vaut **une** nouvelle
     /// négociation immédiate, avant de rendre l'échec : voir ``isEarlyReceiverClosure(_:)``.
     ///
+    /// Un pair-setup transitoire refusé à l'authentification vaut **quelques** nouvelles
+    /// négociations, après une courte attente tirée au hasard (``PairingRetryPolicy``). Le mot de
+    /// passe y étant fixe, ce refus ne désigne aucune erreur de l'utilisateur : relevé sur un HomePod
+    /// d'une paire stéréo, il a cédé au pair-setup suivant. Au-delà, l'échec rendu est passager
+    /// (``AirPlay2SenderError/transientPairingRejected(receiver:step:)``), et le moteur réessaie.
+    ///
     /// - Throws: un ``AirPlay2SenderError`` dont la description est faite pour l'affichage, ou
     ///   `CancellationError` si la tâche a été annulée ou `stop()` appelé entre-temps.
     public func start(volume: Float = -20) async throws {
@@ -238,6 +271,7 @@ public actor AirPlay2Sender {
         stopRequestedDuringStart = false
 
         var quickRetryUsed = false
+        var pairingRetries = 0
         while true {
             do {
                 try await negotiateCancellably(volume: volume)
@@ -252,6 +286,17 @@ public actor AirPlay2Sender {
                 if earlyClosure, !quickRetryUsed {
                     quickRetryUsed = true
                     let waited = await waitBeforeQuickRenegotiation()
+                    guard waited, !stopRequestedDuringStart else {
+                        state = .idle
+                        throw CancellationError()
+                    }
+                    continue
+                }
+                if Self.isTransientAuthenticationFailure(error),
+                    pairingRetries < pairingRetryPolicy.retries
+                {
+                    pairingRetries += 1
+                    let waited = await waitBeforePairingRetry(after: error, attempt: pairingRetries)
                     guard waited, !stopRequestedDuringStart else {
                         state = .idle
                         throw CancellationError()
@@ -441,15 +486,97 @@ public actor AirPlay2Sender {
             "\(self.device.serviceName, privacy: .public) : fermeture du récepteur en début de session, nouvelle négociation immédiate"
         )
         statistics.earlyCloseRenegotiations += 1
-        let delay = Task<Void, Never> { try? await Task.sleep(for: Self.earlyCloseRetryDelay) }
-        quickRetryDelay = delay
+        return await pauseBeforeRenegotiation(Self.earlyCloseRetryDelay)
+    }
+
+    // MARK: - Pair-setup transitoire refusé
+
+    private static func isTransientAuthenticationFailure(_ error: Error) -> Bool {
+        if case AirPlay2PairingSession.Failure.transientAuthenticationFailed = error { return true }
+        return false
+    }
+
+    /// Journalise et compte un nouvel essai de pair-setup, puis en attend le délai, tiré au hasard.
+    ///
+    /// - Returns: faux si l'attente a été interrompue, par `stop()` ou une annulation.
+    private func waitBeforePairingRetry(after error: Error, attempt: Int) async -> Bool {
+        let range = pairingRetryPolicy.delayMilliseconds
+        let delay = Duration.milliseconds(Int.random(in: range))
+        log.error(
+            "\(self.device.serviceName, privacy: .public) : \(String(describing: error), privacy: .public) — nouveau pair-setup \(attempt)/\(self.pairingRetryPolicy.retries) dans \(delay, privacy: .public)"
+        )
+        statistics.transientPairingRetries += 1
+        return await pauseBeforeRenegotiation(delay)
+    }
+
+    /// Attend avant une nouvelle négociation, en restant interruptible par `stop()`.
+    ///
+    /// - Returns: faux si l'attente a été interrompue : il n'y a alors rien à relancer, et l'appelant
+    ///   rend la main aussitôt.
+    private func pauseBeforeRenegotiation(_ duration: Duration) async -> Bool {
+        let delay = Task<Void, Never> { try? await Task.sleep(for: duration) }
+        renegotiationPause = delay
         await withTaskCancellationHandler {
             await delay.value
         } onCancel: {
             delay.cancel()
         }
-        quickRetryDelay = nil
+        renegotiationPause = nil
         return !Task.isCancelled && !delay.isCancelled
+    }
+
+    // MARK: - Tour de pairing
+
+    /// Le pairing de cette négociation, à son tour.
+    ///
+    /// Seuls les échanges de pairing sont tenus : la connexion est déjà ouverte (une connexion qui
+    /// traîne ne retient donc personne), et le tour est rendu dès les clés obtenues ou l'échec connu.
+    /// Le `defer` le rend sur tous les chemins, annulation comprise.
+    private func pairWithReceiver(
+        over client: RTSPClient
+    ) async throws -> AirPlay2PairingSession.SessionKeys {
+        let pairing = AirPlay2PairingSession(client: client, device: device)
+        guard let pairingGate else { return try await perform(pairing) }
+        try await waitForPairingTurn(pairingGate)
+        defer { pairingGate.release() }
+        // `stop()` a pu tomber pendant l'attente : la connexion est fermée, ne rien y envoyer.
+        try Task.checkCancellation()
+        if stopRequestedDuringStart { throw CancellationError() }
+        return try await perform(pairing)
+    }
+
+    /// Deux chemins, et c'est la présence de credentials qui tranche : un appairage système déjà
+    /// acquis se rejoue par `pair-verify`, sans code à saisir ; à défaut, on tente le transitoire,
+    /// qui n'exige rien mais que certains récepteurs — un Apple TV, typiquement — refusent en 470.
+    private func perform(
+        _ pairing: AirPlay2PairingSession
+    ) async throws -> AirPlay2PairingSession.SessionKeys {
+        if let credentials {
+            return try await pairing.performPairVerify(credentials: credentials)
+        }
+        return try await pairing.performTransientPairSetup()
+    }
+
+    /// Attend le tour de pairing, en restant interruptible par `stop()` comme par l'annulation.
+    ///
+    /// Aboutit si et seulement si le tour est pris : l'appelant le rend alors lui-même.
+    private func waitForPairingTurn(_ gate: any PairingGate) async throws {
+        let requested = ContinuousClock.now
+        let turn = Task { try await gate.acquire() }
+        pairingTurnWait = turn
+        defer { pairingTurnWait = nil }
+        try await withTaskCancellationHandler {
+            try await turn.value
+        } onCancel: {
+            turn.cancel()
+        }
+        let waited = ContinuousClock.now - requested
+        if waited >= .milliseconds(20) {
+            let group = device.tightSyncIdentifier ?? device.groupIdentifier ?? "—"
+            log.info(
+                "\(self.device.serviceName, privacy: .public) : pairing différé de \(waited, privacy: .public), un autre était en cours (tsid/gid \(group, privacy: .public))"
+            )
+        }
     }
 
     /// Relit l'adresse et le port annoncés, quand les reconnexions s'enchaînent en échec.
@@ -489,9 +616,11 @@ public actor AirPlay2Sender {
     /// le fait — d'où les tâches non structurées, qui n'héritent pas de cette annulation.
     public func stop() async {
         if state == .connecting { stopRequestedDuringStart = true }
-        // Une relance rapide en attente ne doit pas retenir l'arrêt, ni repartir après lui.
-        quickRetryDelay?.cancel()
-        quickRetryDelay = nil
+        // Une relance en attente ne doit pas retenir l'arrêt, ni repartir après lui. L'attente du
+        // tour de pairing non plus : elle durerait le pairing d'une autre sortie.
+        renegotiationPause?.cancel()
+        renegotiationPause = nil
+        pairingTurnWait?.cancel()
         let supervision = streamTask
         streamTask = nil
         supervision?.cancel()
@@ -606,17 +735,8 @@ public actor AirPlay2Sender {
             }
         }
 
-        // 1. Pairing. Deux chemins, et c'est la présence de credentials qui tranche :
-        //    un appairage système déjà acquis se rejoue par `pair-verify`, sans code à
-        //    saisir ; à défaut, on tente le transitoire, qui n'exige rien mais que certains
-        //    récepteurs — un Apple TV, typiquement — refusent en 470.
-        let pairing = AirPlay2PairingSession(client: client, device: device)
-        let keys: AirPlay2PairingSession.SessionKeys
-        if let credentials {
-            keys = try await pairing.performPairVerify(credentials: credentials)
-        } else {
-            keys = try await pairing.performTransientPairSetup()
-        }
+        // 1. Pairing, à son tour : jamais en même temps que celui d'une autre sortie du moteur.
+        let keys = try await pairWithReceiver(over: client)
 
         // 2. Tout ce qui suit passe en chiffré. À activer seulement une fois la réponse M4
         //    entièrement lue : le récepteur ne chiffre qu'à partir du message suivant.
@@ -1166,6 +1286,9 @@ public struct AirPlay2Statistics: Sendable {
     /// de session (voir `AirPlay2Sender.isEarlyReceiverClosure`). Celles de la supervision comptent
     /// aussi dans `reconnections` ; celles de `start()` non, aucune session n'ayant encore tenu.
     public var earlyCloseRenegotiations = 0
+    /// Pair-setups transitoires refaits dans `start()` après un refus d'authentification (voir
+    /// `AirPlay2Sender.PairingRetryPolicy`).
+    public var transientPairingRetries = 0
 
     public init() {}
 }

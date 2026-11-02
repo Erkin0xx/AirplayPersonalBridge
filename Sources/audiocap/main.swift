@@ -325,6 +325,7 @@ if browse2Only {
             \(device.requiresSystemPairing ? ", appairage système exigé (bit 43)" : "")
                 identifiant  : \(device.pairingIdentifier.isEmpty ? "—" : device.pairingIdentifier)
                 clé publique : \(device.publicKey.map { "\($0.count) octets" } ?? "absente")
+                paire, groupe : tsid \(device.tightSyncIdentifier ?? "—"), gid \(device.groupIdentifier ?? "—")
             """)
     }
     exit(0)
