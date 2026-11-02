@@ -24,6 +24,9 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
     /// Borne de l'arrêt à la fermeture de l'app. Un récepteur muet ne doit pas retenir la session
     /// de l'utilisateur ; au-delà, ce récepteur finira par expirer de lui-même.
     static let shutdownTimeout: Duration = .seconds(5)
+    /// Au-delà, AppKit a sa réponse même si l'arrêt n'a pas pu tourner (`TerminationReply`). Après la
+    /// borne : tant que le MainActor tourne, c'est elle qui répond.
+    static let replyFallbackDelay: Duration = shutdownTimeout + .seconds(1)
 
     let state: BridgeState
     let loginItem: LoginItemController
@@ -179,7 +182,9 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
     /// Sans diffusion, l'app peut quitter tout de suite. Sinon elle attend un arrêt borné : quitter
     /// sur-le-champ laisserait un récepteur bloqué sur une session sans `TEARDOWN`.
     ///
-    /// Vaut aussi pour SIGTERM : `TerminationSignal` le convertit en `terminate`, qui passe ici.
+    /// Vaut aussi pour SIGTERM : `TerminationSignal` le convertit en `terminate`, qui passe ici. La
+    /// borne ne tient que si le MainActor tourne pendant l'attente d'AppKit : `TerminationReply` répond
+    /// de lui-même sinon.
     func handleTerminationRequest(reply: @escaping () -> Void) -> NSApplication.TerminateReply {
         guard state.needsOrderlyShutdown else {
             state.flushSettings()
@@ -188,9 +193,10 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
         }
         guard !isTerminating else { return .terminateLater }
         isTerminating = true
+        let answer = TerminationReply(fallbackAfter: Self.replyFallbackDelay, reply: reply)
         Task {
             await state.shutdown(timeout: Self.shutdownTimeout)
-            reply()
+            answer.send()
         }
         return .terminateLater
     }

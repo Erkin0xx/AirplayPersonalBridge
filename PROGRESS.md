@@ -1069,6 +1069,24 @@ réponse DNS tardive ; `Audio-Latency` des HomePod jamais lue. Les senders relis
 **À vérifier à l'usage** : liste en phase 4 du prompt (verre, Dock, liens des Réglages, ouverture de session,
 veille, entrée physique). `Privacy_ScreenCapture` n'est pas confirmé.
 
+### Seconde relecture des corrections de la passe
+
+Un relecteur indépendant a lu le diff de ces corrections (`8127bb1~1..2e4b16d`), sans rien exécuter. Sur 5 constats, tous
+corrigés (`0444a8f`, `cc1472e`, `225f3f5`) :
+- **Reprise après une pause** : l'échéance de reconstruction, comptée depuis le dernier bloc, était déjà dépassée. Le tap pouvait
+  être détruit au moment où le son démarrait. Elle part maintenant de la reprise. Une reconstruction plus longue que le délai
+  n'en enchaîne plus une autre aussitôt.
+- **Application attendue invisible** : choisie la veille et sans jouer, elle laissait le sélecteur sur le global, puis prenait
+  la main à son premier son, en pleine diffusion d'autre chose, sans moyen d'y renoncer. Une ligne le dit, avec `Annuler`.
+- **Adresse relue** : une IPv6 passagère remplaçait une IPv4 redevenue valable, et retardait la reprise de ~40 à 70 s.
+- **Reconstruction sans fin** : elle interdisait tout changement de source. Elle cède la place, et un PID mort n'entre plus dans la
+  description du tap. **Le déclencheur reste supposé** : on ignore ce que Core Audio fait d'un objet inconnu.
+- **Repli remis à zéro par un seul bloc** : seul un flux établi 5 s le fait. Plausible seulement, aucun périphérique connu ne s'est
+  comporté ainsi.
+
+Preuve : test, chaque correction défaite une fois. Côté AirPlay 2, la relecture d'adresse n'est couverte que par le test de la
+règle commune, pas par une session. La ligne « Passera sur… » n'a pas été vue à l'écran : à regarder en phase 4 du prompt.
+
 ### Essai de bout en bout contre mocks et stabilisation des tests
 
 **Contre mocks**, mesuré à `b69b127` (avant les correctifs HomePod de la session matérielle), non rejoué depuis. Vrai

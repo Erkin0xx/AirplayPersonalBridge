@@ -55,40 +55,104 @@ extension OutputState {
     }
 }
 
+/// Ce que le tiroir des basses fait d'un geste du curseur.
+///
+/// Hors de la vue pour être testé : c'est par ici que passe tout réglage fait dans le panneau. Il
+/// n'écrit que dans `OutputState.bassBoostDB`, et c'est la boucle de `BridgeState` qui le fait suivre
+/// au moteur, au plus une fois par tour et seulement sur changement : un glissement ne pousse pas un
+/// réglage par pixel.
+enum PanelBassControl {
+    /// Le pas du curseur. Plus fin ne s'entendrait pas, et chaque pas de moins est une poussée de moins.
+    static let step = 0.5
+    static var range: ClosedRange<Double> { BridgeSettings.Limits.bassBoostDB }
+
+    /// Sans effet sur une sortie qui n'a pas de renfort (`supportsBassBoost`) : les HomePod gardent
+    /// une stéréo pleine bande intacte (ADR-002).
+    static func set(_ value: Double, on output: OutputState) {
+        guard output.supportsBassBoost else { return }
+        let rounded = (value / step).rounded() * step
+        output.bassBoostDB = min(max(rounded, range.lowerBound), range.upperBound)
+    }
+
+    static func reset(_ output: OutputState) {
+        set(0, on: output)
+    }
+}
+
 /// Une enceinte, comme dans le sélecteur de sortie audio de macOS : on clique n'importe où sur la
 /// rangée, et elle joue.
 ///
 /// La rangée garde sa hauteur qu'elle soit retenue ou non : le curseur vient se loger sous le nom, à
 /// l'intérieur de la hauteur de la pastille. Cocher ne fait donc jamais sauter le panneau.
+///
+/// Une sortie qui a des réglages propres (aujourd'hui les basses de la Geneva) porte un chevron au
+/// bout de la ligne du nom, qui déplie un tiroir sous la rangée. Le tiroir s'ouvre vers le bas, et rien
+/// d'autre ne bouge : ni les colonnes, ni la ligne du nom, ni les rangées du dessus.
 struct PanelSpeakerRow: View {
     @Bindable var output: OutputState
     /// Rien ne signale de silence : l'indicateur de la rangée peut bouger.
     let isAudible: Bool
+    /// Une rangée au moins a un tiroir : toutes réservent la colonne du chevron, pour que leurs
+    /// témoins restent l'un sous l'autre.
+    let reservesDrawerColumn: Bool
+    @Binding var isDrawerOpen: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appearsActive) private var appearsActive
     @State private var isHovering: Bool
+    @State private var isHoveringChevron = false
     @State private var isAdjusting = false
 
     /// Plus haute que la pastille : le nom et le curseur y tiennent sans tasser le texte.
     private static let rowHeight: CGFloat = 34
+    /// La hauteur de la ligne du nom, à laquelle le chevron s'aligne.
+    private static let nameLineHeight: CGFloat = 18
+    static let drawerColumn: CGFloat = 20
 
-    init(output: OutputState, isAudible: Bool, previewHovering: Bool = false) {
+    init(
+        output: OutputState, isAudible: Bool, reservesDrawerColumn: Bool = false,
+        isDrawerOpen: Binding<Bool> = .constant(false), previewHovering: Bool = false
+    ) {
         self.output = output
         self.isAudible = isAudible
+        self.reservesDrawerColumn = reservesDrawerColumn
+        _isDrawerOpen = isDrawerOpen
         _isHovering = State(initialValue: previewHovering)
     }
 
+    /// Le tiroir n'existe que pour ce qu'il sait régler, et pas sur une rangée en retrait : l'Apple TV
+    /// passe en RAOP et accepterait des basses, mais elle ne jouera pas sans appairage, et son chevron
+    /// ne serait que du bruit. La colonne restant réservée, il peut apparaître sans rien décaler.
+    private var hasDrawer: Bool { output.supportsBassBoost && !output.isInRetreat }
+
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            row
+            // Hors de la surface de la rangée : un clic à côté du curseur ne doit pas la décocher.
+            if hasDrawer, isDrawerOpen {
+                PanelBassDrawer(output: output)
+                    .padding(.top, 2)
+                    .padding(.bottom, 4)
+                    .transition(.opacity)
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var row: some View {
         HStack(alignment: .top, spacing: PanelMetrics.columnGap) {
             pastille
                 .padding(.top, (Self.rowHeight - PanelMetrics.pastille) / 2)
                 .allowsHitTesting(false)
             VStack(alignment: .leading, spacing: 1) {
-                // Le nom est déjà dans le libellé du bouton : VoiceOver le dirait deux fois.
-                nameLine
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+                HStack(spacing: 6) {
+                    // Le nom est déjà dans le libellé du bouton : VoiceOver le dirait deux fois.
+                    nameLine
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                    if reservesDrawerColumn { drawerToggle }
+                }
+                .frame(height: Self.nameLineHeight)
                 if output.isEnabled {
                     volume.transition(.opacity)
                 }
@@ -105,7 +169,42 @@ struct PanelSpeakerRow: View {
         .background { toggleSurface }
         .onHover { isHovering = $0 }
         .animation(PanelMotion.quick(reduceMotion: reduceMotion), value: isHovering)
-        .accessibilityElement(children: .contain)
+    }
+
+    // MARK: Tiroir
+
+    /// Le chevron du tiroir, ou sa place vide : la colonne existe sur toutes les rangées dès qu'une
+    /// seule en a besoin. Il tourne sur place, comme celui des options.
+    @ViewBuilder
+    private var drawerToggle: some View {
+        if hasDrawer {
+            Button {
+                withAnimation(PanelMotion.standard(reduceMotion: reduceMotion)) {
+                    isDrawerOpen.toggle()
+                }
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isDrawerOpen ? 90 : 0))
+                    .frame(width: Self.drawerColumn, height: Self.nameLineHeight)
+                    .background(
+                        isHoveringChevron ? PanelPalette.press : .clear,
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { isHoveringChevron = $0 }
+            .help(isDrawerOpen ? "Masquer le réglage des basses" : "Régler les basses de cette enceinte")
+            .accessibilityLabel("Réglage des basses de \(output.displayName)")
+            .accessibilityValue(isDrawerOpen ? "déplié" : "replié")
+        } else {
+            Color.clear
+                .frame(width: Self.drawerColumn, height: Self.nameLineHeight)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 
     /// Toute la rangée répond, comme dans le menu de macOS, où l'on vise un nom et pas un carré de
@@ -234,6 +333,86 @@ struct PanelSpeakerRow: View {
         .tint(.secondary)
         .help("Volume de cette enceinte, en plus du volume master")
         .accessibilityValue(PanelFormat.decibels(output.trimDB, fractionDigits: 1, signed: true))
+    }
+}
+
+/// Le tiroir d'une enceinte : ses basses, de 0 à +12 dB (plateau grave à 80 Hz, limiteur compris,
+/// ADR-002).
+///
+/// Une rangée en miniature, sur la même grille : le symbole sur l'axe des pastilles, le libellé et la
+/// valeur sur la ligne du nom, le curseur dessous, à la largeur de celui du volume. Il agit que la
+/// sortie soit cochée ou non : décochée, elle partira avec ce réglage.
+struct PanelBassDrawer: View {
+    @Bindable var output: OutputState
+
+    static let symbol = "slider.vertical.3"
+    static let resetSymbol = "arrow.counterclockwise"
+
+    private var valueText: String {
+        PanelFormat.decibels(output.bassBoostDB, fractionDigits: 1, signed: true)
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: PanelMetrics.columnGap) {
+            Image(systemName: Self.symbol)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: PanelMetrics.pastille, height: 18)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text("Basses")
+                        .font(.system(size: 12))
+                        .accessibilityHidden(true)
+                    Spacer(minLength: 4)
+                    Text(valueText)
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    // La flèche dit « revenir à » : sans elle, « 0 dB » à côté de la valeur se lirait
+                    // comme une seconde valeur.
+                    Button {
+                        PanelBassControl.reset(output)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: Self.resetSymbol).font(.system(size: 9, weight: .semibold))
+                            Text("0 dB")
+                        }
+                    }
+                    .buttonStyle(PanelChipButtonStyle())
+                    .disabled(output.bassBoostDB == 0)
+                    .help("Remettre les basses à 0 dB")
+                    .accessibilityLabel("Remettre les basses de \(output.displayName) à 0 dB")
+                }
+                .frame(height: 18)
+                slider
+            }
+        }
+        .padding(.horizontal, PanelMetrics.margin - PanelMetrics.rowInset)
+        .padding(.vertical, 6)
+        .background(
+            PanelPalette.tray,
+            in: RoundedRectangle(cornerRadius: PanelMetrics.rowRadius, style: .continuous)
+        )
+        .accessibilityElement(children: .contain)
+    }
+
+    /// Le même curseur que celui du volume, au même pas arrondi à la main (voir `PanelSpeakerRow`).
+    private var slider: some View {
+        Slider(
+            value: Binding(
+                get: { output.bassBoostDB },
+                set: { PanelBassControl.set($0, on: output) }
+            ),
+            in: PanelBassControl.range
+        ) {
+            Text("Basses de \(output.displayName)")
+        }
+        .labelsHidden()
+        .controlSize(.mini)
+        .tint(.secondary)
+        .help("Renfort des graves sous 80 Hz, pour cette enceinte seulement")
+        .accessibilityValue(valueText)
     }
 }
 

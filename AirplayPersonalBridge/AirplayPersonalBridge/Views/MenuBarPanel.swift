@@ -102,6 +102,8 @@ struct PanelPreviewOptions {
     var expandsOptions = false
     var hoveredSpeakerID: String?
     var showsVolumeValue = false
+    /// L'enceinte dont le tiroir est déplié.
+    var openDrawerSpeakerID: String?
 }
 
 /// Le contenu du panneau : d'un coup d'œil, ce qui joue et où ; d'un clic, jouer ailleurs.
@@ -110,7 +112,8 @@ struct PanelPreviewOptions {
 /// tableau de bord. D'où trois partis pris : **aucun fond maison**, le panneau hérite du matériau de
 /// `MenuBarExtra` et tout s'y pose en couleurs sémantiques ; des **rangées plutôt que des cases**, où
 /// c'est la pastille qui dit qu'une enceinte est retenue ; et **le reste en retrait**, derrière une
-/// section repliable. Les réglages fins (délai, basses, plan) restent dans la fenêtre.
+/// section repliable. Les réglages fins (délai, plan) restent dans la fenêtre ; les basses de la Geneva
+/// ont leur tiroir sous sa rangée, parce qu'elles se retouchent en écoutant.
 ///
 /// Ce qui est propre au widget vit dans ses fichiers (`PanelControls`, `PanelSpeakerRow`,
 /// `MenuBarGlyph`) : le thème de `DesignSystem` sert à la fenêtre principale.
@@ -121,6 +124,8 @@ struct MenuBarPanelContent: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isOptionsExpanded: Bool
+    /// Un seul tiroir ouvert à la fois : le panneau reste court.
+    @State private var openDrawerSpeakerID: String?
     private let previewOptions: PanelPreviewOptions
 
     /// Au-delà, la liste défile plutôt que de pousser le panneau hors de l'écran.
@@ -137,6 +142,13 @@ struct MenuBarPanelContent: View {
         self.previewOptions = preview
         // Un message de l'ouverture de session demande une action : il ne doit pas rester caché.
         _isOptionsExpanded = State(initialValue: preview.expandsOptions || loginItem.message != nil)
+        _openDrawerSpeakerID = State(initialValue: preview.openDrawerSpeakerID)
+    }
+
+    /// Un son passe vraiment vers les enceintes : la capture ne signale rien, et le silence n'est pas
+    /// mis. Sinon, rien dans le panneau ne bouge comme si un son passait.
+    private var isAudible: Bool {
+        state.captureAlert == nil && !state.isMuted
     }
 
     var body: some View {
@@ -145,11 +157,7 @@ struct MenuBarPanelContent: View {
                 VStack(alignment: .leading, spacing: 12) {
                     header
                     notices
-                    PanelVolumeSlider(
-                        decibels: $state.masterVolumeDB, isMuted: $state.isMuted,
-                        range: BridgeSettings.Limits.masterDB,
-                        showsValue: previewOptions.showsVolumeValue
-                    )
+                    master
                 }
                 .padding(.horizontal, PanelMetrics.margin)
                 .padding(.top, PanelMetrics.margin)
@@ -186,7 +194,7 @@ struct MenuBarPanelContent: View {
     private var header: some View {
         let status = state.status
         return HStack(spacing: PanelMetrics.columnGap) {
-            PanelStatusChip(status: status.menuBar, isAudible: state.captureAlert == nil)
+            PanelStatusChip(status: status.menuBar, isAudible: isAudible)
             VStack(alignment: .leading, spacing: 0) {
                 Text(status.title)
                     .font(.system(size: 13, weight: .semibold))
@@ -255,6 +263,22 @@ struct MenuBarPanelContent: View {
         }
     }
 
+    // MARK: - Volume master et silence
+
+    /// Le bouton de silence au bout du curseur, sur le bord droit commun au bouton Diffuser et aux
+    /// chevrons des rangées. Coupé, le curseur reste en place et dit « Son coupé » ; le pousser
+    /// rétablit le son.
+    private var master: some View {
+        HStack(spacing: 8) {
+            PanelVolumeSlider(
+                decibels: $state.masterVolumeDB, isMuted: $state.isMuted,
+                range: BridgeSettings.Limits.masterDB,
+                showsValue: previewOptions.showsVolumeValue
+            )
+            PanelMuteButton(isMuted: $state.isMuted)
+        }
+    }
+
     // MARK: - Les enceintes
 
     private var speakers: some View {
@@ -301,15 +325,31 @@ struct MenuBarPanelContent: View {
     }
 
     private var speakerRows: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let reservesDrawerColumn = state.outputs.contains(where: \.supportsBassBoost)
+        return VStack(alignment: .leading, spacing: 0) {
             ForEach(PanelSpeakerOrder.sorted(state.outputs)) { output in
                 PanelSpeakerRow(
-                    output: output, isAudible: state.captureAlert == nil,
+                    output: output, isAudible: isAudible,
+                    reservesDrawerColumn: reservesDrawerColumn,
+                    isDrawerOpen: drawerBinding(for: output.id),
                     previewHovering: previewOptions.hoveredSpeakerID == output.id
                 )
             }
         }
         .padding(.horizontal, PanelMetrics.rowInset)
+    }
+
+    private func drawerBinding(for id: String) -> Binding<Bool> {
+        Binding(
+            get: { openDrawerSpeakerID == id },
+            set: { isOpen in
+                if isOpen {
+                    openDrawerSpeakerID = id
+                } else if openDrawerSpeakerID == id {
+                    openDrawerSpeakerID = nil
+                }
+            }
+        )
     }
 
     private var emptySpeakers: some View {
@@ -459,12 +499,18 @@ struct MenuBarPanelContent: View {
                 }
             }
 
-            PanelOptionToggle(title: "Couper le son du Mac", isOn: $state.muteLocalOutput)
-                .disabled(state.selectedSource.tapMode == nil)
-                .help(
-                    "Ne s'applique qu'à la capture du son système ou d'une application. "
-                        + "Pendant une diffusion, le changer la relance."
-                )
+            // À ne pas confondre avec le bouton de silence, en haut, qui coupe les enceintes : celle-ci
+            // éteint la sortie du Mac, et les enceintes continuent de jouer.
+            PanelOptionToggle(
+                title: "Couper le son du Mac",
+                detail: "Les enceintes continuent de jouer.",
+                isOn: $state.muteLocalOutput
+            )
+            .disabled(state.selectedSource.tapMode == nil)
+            .help(
+                "Éteint la sortie de ce Mac pendant la capture du son système ou d'une application. "
+                    + "Pendant une diffusion, le changer la relance."
+            )
 
             PanelOptionToggle(
                 title: "Démarrer à l'ouverture de session",

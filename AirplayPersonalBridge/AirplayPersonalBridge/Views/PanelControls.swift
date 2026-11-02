@@ -34,6 +34,10 @@ enum PanelPalette {
     static let press = Color.primary.opacity(0.12)
     /// Le rail du curseur, plus creux que le survol : il doit se lire comme un logement.
     static let track = Color.primary.opacity(0.13)
+    /// Le remplissage du master pendant le silence : un gris, là où il est blanc en temps normal.
+    static let silencedFill = Color.primary.opacity(0.16)
+    /// Le fond d'un tiroir déplié sous une rangée : plus discret que le survol, qu'il ne doit pas imiter.
+    static let tray = Color.primary.opacity(0.05)
 
     /// L'orange et le rouge système sont faits pour des aplats : en texte de 11 pt sur un fond clair,
     /// ils passent sous le seuil de lecture. Le mode clair prend donc une nuance plus sombre.
@@ -116,12 +120,16 @@ struct PanelCommandButtonStyle: ButtonStyle {
 
 // MARK: - Volume master
 
-/// Le curseur épais du Centre de contrôle : l'icône à l'intérieur, et un clic dessus coupe le son.
+/// Le curseur épais du Centre de contrôle, l'icône à l'intérieur.
 ///
 /// Écrit à la main, un `Slider` macOS ne se laissant pas épaissir. Ce qu'on perd en quittant le
 /// contrôle système est donc rétabli explicitement : flèches du clavier, VoiceOver, anneau de focus.
 ///
 /// La valeur reste linéaire en dB, comme celle du curseur de la fenêtre : les deux bougent ensemble.
+///
+/// Le silence se commande d'abord par `PanelMuteButton`, à côté : un clic sur l'icône du curseur le
+/// faisait déjà, mais rien ne disait qu'on pouvait cliquer là, et Baptiste ne l'avait pas vu. Ce clic
+/// reste un raccourci à la souris, sans doubler le bouton pour VoiceOver ni pour le clavier.
 struct PanelVolumeSlider: View {
     @Binding var decibels: Double
     @Binding var isMuted: Bool
@@ -139,10 +147,9 @@ struct PanelVolumeSlider: View {
     private let height = PanelMetrics.pastille
     private let keyStep = 1.5
 
-    /// Coupé, le curseur redescend à zéro comme celui du système ; le réglage reste en mémoire et
-    /// revient au rétablissement.
+    /// Coupé, le curseur reste où il était, éteint : c'est ce niveau-là que le rétablissement rendra,
+    /// et le voir évite de se demander s'il a été perdu. Le bouton de la fenêtre fait de même.
     private var fraction: Double {
-        guard !isMuted else { return 0 }
         let span = range.upperBound - range.lowerBound
         guard span > 0 else { return 0 }
         return min(max((decibels - range.lowerBound) / span, 0), 1)
@@ -172,7 +179,7 @@ struct PanelVolumeSlider: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(PanelPalette.track)
                 Capsule()
-                    .fill(.white.opacity(0.92))
+                    .fill(isMuted ? AnyShapeStyle(PanelPalette.silencedFill) : AnyShapeStyle(.white.opacity(0.92)))
                     .frame(width: offset + height)
                 Circle()
                     .fill(.white)
@@ -221,9 +228,11 @@ struct PanelVolumeSlider: View {
     private func valueLabel(width: CGFloat, knobEnd: CGFloat) -> some View {
         let room: CGFloat = 62
         let fitsInTrack = knobEnd + room < width
+        // Le remplissage du silence est gris : le secondaire s'y lit, en clair comme en sombre.
+        let onLightFill = !fitsInTrack && !isMuted
         return Text(valueText)
             .font(.system(size: 11, weight: .medium).monospacedDigit())
-            .foregroundStyle(fitsInTrack ? AnyShapeStyle(.secondary) : AnyShapeStyle(.black.opacity(0.55)))
+            .foregroundStyle(onLightFill ? AnyShapeStyle(.black.opacity(0.55)) : AnyShapeStyle(.secondary))
             .lineLimit(1)
             .frame(width: room, alignment: fitsInTrack ? .trailing : .leading)
             .offset(x: fitsInTrack ? width - room - 12 : knobEnd - height - room + 8)
@@ -254,25 +263,76 @@ struct PanelVolumeSlider: View {
 
     // MARK: Icône
 
+    /// Un bouton plutôt qu'un dessin : sans lui, un clic sur l'icône tomberait sur le rail et mettrait
+    /// le master au minimum, perdant le niveau que le silence devait garder. Caché à VoiceOver et hors
+    /// du parcours au clavier, où `PanelMuteButton` tient ce rôle avec un libellé explicite.
     private var muteButton: some View {
         Button {
             isMuted.toggle()
         } label: {
             Group {
                 if isMuted {
-                    Image(systemName: "speaker.slash.fill")
+                    Image(systemName: PanelMuteButton.symbol)
                 } else {
                     Image(systemName: "speaker.wave.3.fill", variableValue: fraction)
                 }
             }
             .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(.black.opacity(0.65))
+            // Coupé, l'icône se pose sur le remplissage gris et non plus sur le blanc du curseur.
+            .foregroundStyle(isMuted ? AnyShapeStyle(.secondary) : AnyShapeStyle(.black.opacity(0.65)))
             .frame(width: height, height: height)
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .help(isMuted ? "Rétablir le son" : "Couper le son")
-        .accessibilityLabel(isMuted ? "Rétablir le son" : "Couper le son")
+        .focusable(false)
+        .help(isMuted ? "Rétablir le son des enceintes" : "Couper le son des enceintes")
+        .accessibilityHidden(true)
+    }
+}
+
+/// Le silence des enceintes, en bouton à part, au bout du curseur master.
+///
+/// Il ne joue que sur le volume envoyé (`BridgeState.isMuted`, −144 dB sur le fil) : les sessions
+/// restent ouvertes, et rétablir le son rend aussitôt le niveau d'avant. **À ne pas confondre avec
+/// « Couper le son du Mac »**, qui éteint la sortie de ce Mac pendant que les enceintes jouent : d'où
+/// le complément des enceintes dans le libellé, et jamais un « Couper le son » tout court.
+///
+/// L'icône ne change pas d'un état à l'autre : elle dit ce que fait le bouton, et c'est le fond qui dit
+/// s'il est enclenché, comme les commandes du Centre de contrôle.
+struct PanelMuteButton: View {
+    @Binding var isMuted: Bool
+
+    static let symbol = "speaker.slash.fill"
+    static let title = "Couper le son des enceintes"
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovering = false
+
+    var body: some View {
+        Button {
+            isMuted.toggle()
+        } label: {
+            Image(systemName: Self.symbol)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(isMuted ? Color.white : Color.primary.opacity(0.75))
+                .frame(width: PanelMetrics.pastille, height: PanelMetrics.pastille)
+                .background(background, in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .animation(PanelMotion.quick(reduceMotion: reduceMotion), value: isHovering)
+        .animation(PanelMotion.standard(reduceMotion: reduceMotion), value: isMuted)
+        .help(isMuted ? "Rétablir le son des enceintes" : "\(Self.title), sans les déconnecter")
+        .accessibilityLabel(Self.title)
+        .accessibilityValue(isMuted ? "activé" : "désactivé")
+        .accessibilityHint("Les enceintes restent connectées.")
+        .accessibilityAddTraits(.isToggle)
+    }
+
+    private var background: AnyShapeStyle {
+        if isMuted { return AnyShapeStyle(Color.accentColor) }
+        return AnyShapeStyle(isHovering ? PanelPalette.press : PanelPalette.quietFill)
     }
 }
 
@@ -308,21 +368,55 @@ struct PanelMenuRowStyle: ButtonStyle {
 /// colonne commune.
 struct PanelOptionToggle: View {
     let title: String
+    /// Une précision sous le libellé, quand il pourrait se confondre avec une autre commande.
+    var detail: String?
     @Binding var isOn: Bool
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(title)
-                .font(.system(size: 12))
-                .foregroundStyle(isEnabled ? .primary : .secondary)
-                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 12))
+                    .foregroundStyle(isEnabled ? .primary : .secondary)
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .accessibilityHidden(true)
             Spacer(minLength: 4)
             Toggle(title, isOn: $isOn)
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.mini)
+                .accessibilityHint(detail ?? "")
         }
+    }
+}
+
+/// Un petit bouton en pastille, pour une action secondaire logée dans une ligne de réglage.
+struct PanelChipButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 11, weight: .medium).monospacedDigit())
+            .foregroundStyle(isEnabled ? .primary : .tertiary)
+            .padding(.horizontal, 7)
+            .frame(height: 18)
+            .background(
+                configuration.isPressed || (isHovering && isEnabled)
+                    ? PanelPalette.press : PanelPalette.quietFill,
+                in: Capsule()
+            )
+            .contentShape(Capsule())
+            .onHover { isHovering = $0 }
+            .animation(PanelMotion.quick(reduceMotion: reduceMotion), value: isHovering)
     }
 }
 

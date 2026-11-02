@@ -598,13 +598,17 @@ depuis n'a jamais été entendu** : la liste est dans la section du jalon 5 de `
   4 s. Voir l'ADR `006`.
 - **`shiftOrigin` reporte l'horloge après un vrai trou de capture, confirmé au relevé suivant** : une
   rafale tardive sans trou ne décale rien. Il vaut pour toutes les sorties à la fois.
-- **`replaceCapture` change la source sans toucher aux sessions des sorties**, et rend la main sans attendre.
-- **Capture bloquée** : reconstruction à 5 s, repli jusqu'à 60 s, seulement si une application joue.
+- **`replaceCapture` change la source sans toucher aux sessions des sorties**, et rend la main sans attendre. Une
+  reconstruction en échec lui cède la place et reprend s'il échoue : elle ne finira peut-être jamais.
+- **Capture bloquée** : reconstruction à 5 s, repli jusqu'à 60 s, seulement si une application joue. L'échéance part du
+  dernier bloc, **sauf après une pause**, où elle part de la reprise : sinon le tap est détruit quand le son démarre. Seul
+  un flux établi 5 s remet le repli à zéro. Un PID mort n'entre pas dans la description du tap.
 - **Un abandon avec une raison met la sortie en `failed`, sans relance** (`currentOutputError`). Seuls les
   refus de capacité ou d'authentification sont permanents (`isPermanentOutputFailure`). `ipv4Required` ne l'est
   pas : une réponse DNS peut être tardive.
 - **Après 3 reconnexions ratées**, les senders relisent l'annonce du récepteur (`rediscoveryInterval`), par
-  nom exact : une adresse peut avoir changé.
+  nom exact : une adresse peut avoir changé. **Jamais une IPv4 remplacée par une IPv6** : A et AAAA reviennent séparément
+  quand un appareil redémarre (`BonjourAddressResolver.canReplace`).
 - **`DNSServiceResolve` veut le nom brut, `DNSServiceQueryRecord` le nom échappé.** A et AAAA arrivent
   séparément : ne pas s'arrêter à la première réponse. **La découverte ne se connecte plus à aucun appareil.**
 - **Options TCP : `transportProtocol`, jamais `internetProtocol`.** Le transtypage échoue sans bruit :
@@ -653,6 +657,9 @@ depuis n'a jamais été entendu** : la liste est dans la section du jalon 5 de `
 - **App Nap** peut frapper une app sans fenêtre : une activité est retenue pendant la diffusion.
 - Seule la première découverte coche d'office. Une sortie disparue reste affichée hors ligne si elle est cochée : une
   sortie de test restée cochée s'y retrouve, à décocher ou à retirer de `settings.json`, app fermée.
+- **Une application choisie qui ne joue pas reste attendue** : le sélecteur montre le global, une ligne dit qu'elle reprendra la
+  main, et `Annuler` y renonce (`awaitedSourceName`). Ne pas compter sur le setter du `Picker` pour cela : rien ne garantit
+  qu'il réagisse à l'option déjà sélectionnée, ni qu'il se comporte de même dans le `Menu` du panneau.
 - La source ou le son du Mac changés en diffusion relancent la capture. La dernière enceinte décochée arrête la
   diffusion après 4 s de grâce.
 
