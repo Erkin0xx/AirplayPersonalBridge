@@ -31,11 +31,12 @@ public struct OutputLevel: Sendable, Equatable {
 /// capture, juste avant le rééchantillonnage et la conversion en 16 bits. Le tampon partagé n'est
 /// jamais touché, et l'autre sortie n'en sait rien.
 ///
-/// En RAOP, **après** la chaîne DSP (renfort de basses et ce qui la suit) : il tient la place du
-/// volume du récepteur, qui s'applique lui aussi en bout de chaîne. Deux conséquences voulues : le
-/// silence coupe aussi la queue des filtres, et la chaîne continue de tourner sur le vrai signal
-/// pendant le silence, si bien qu'au retour du son elle est déjà en régime, sans transitoire. Le
-/// limiteur du renfort voit le même signal quel que soit le gain : le timbre ne dépend pas du niveau.
+/// En RAOP, **après** la chaîne DSP (`ToneControl` : aigus, basses, correction dynamique et limiteur) :
+/// il tient la place du volume du récepteur, qui s'applique lui aussi en bout de chaîne. Deux
+/// conséquences voulues : le silence coupe aussi la queue des filtres, et la chaîne continue de tourner
+/// sur le vrai signal pendant le silence, si bien qu'au retour du son elle est déjà en régime, sans
+/// transitoire. La correction dynamique voit le même signal quel que soit le gain : le timbre ne dépend
+/// pas du niveau.
 /// Atténuer avant la conversion en 16 bits plutôt qu'après ne coûte aucune résolution.
 ///
 /// ## Transparence

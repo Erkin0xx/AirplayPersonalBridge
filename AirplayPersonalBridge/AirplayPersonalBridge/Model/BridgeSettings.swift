@@ -22,7 +22,8 @@ struct BridgeSettings: Codable, Equatable {
         static let masterDB: ClosedRange<Double> = -60...0
         static let trimDB: ClosedRange<Double> = -12...12
         static let delayMS: ClosedRange<Double> = -200...200
-        static let bassBoostDB = LowShelfFilter.gainRangeDecibels
+        static let bassBoostDB = ToneControl.bassRangeDecibels
+        static let trebleCutDB = ToneControl.trebleRangeDecibels
     }
 
     struct Output: Codable, Equatable {
@@ -30,6 +31,8 @@ struct BridgeSettings: Codable, Equatable {
         var trimDB = 0.0
         var delayMS = 0.0
         var bassBoostDB = 0.0
+        /// Coupe des aigus, de 0 à −9 dB.
+        var trebleCutDB = 0.0
         /// Pour montrer une sortie cochée avant que la découverte l'ait revue. Facultatif : à
         /// défaut, le nom se lit dans l'identifiant.
         var displayName: String?
@@ -41,17 +44,19 @@ struct BridgeSettings: Codable, Equatable {
         var tightSyncIdentifier: String?
 
         private enum CodingKeys: String, CodingKey {
-            case isEnabled, trimDB, delayMS, bassBoostDB, displayName, isMuted, tightSyncIdentifier
+            case isEnabled, trimDB, delayMS, bassBoostDB, trebleCutDB, displayName
+            case isMuted, tightSyncIdentifier
         }
 
         init(
             isEnabled: Bool = true, trimDB: Double = 0, delayMS: Double = 0,
-            bassBoostDB: Double = 0, displayName: String? = nil
+            bassBoostDB: Double = 0, trebleCutDB: Double = 0, displayName: String? = nil
         ) {
             self.isEnabled = isEnabled
             self.trimDB = trimDB
             self.delayMS = delayMS
             self.bassBoostDB = bassBoostDB
+            self.trebleCutDB = trebleCutDB
             self.displayName = displayName
         }
 
@@ -62,6 +67,7 @@ struct BridgeSettings: Codable, Equatable {
             trimDB = fields.value(.trimDB, default: 0).clamped(to: Limits.trimDB)
             delayMS = fields.value(.delayMS, default: 0).clamped(to: Limits.delayMS)
             bassBoostDB = fields.value(.bassBoostDB, default: 0).clamped(to: Limits.bassBoostDB)
+            trebleCutDB = fields.value(.trebleCutDB, default: 0).clamped(to: Limits.trebleCutDB)
             displayName = fields.value(.displayName, default: nil)
             isMuted = fields.value(.isMuted, default: false)
             tightSyncIdentifier = fields.value(.tightSyncIdentifier, default: nil)

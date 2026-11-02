@@ -4,8 +4,8 @@ import Testing
 
 @testable import BridgeApp
 
-// Ce que règlent le bouton de silence et le tiroir des basses du panneau, jusqu'au moteur : le vrai
-// `BridgeEngine`, avec des senders sans réseau (`BridgeStateTestSupport`).
+// Ce que règlent le bouton de silence et le tiroir des basses et des aigus du panneau, jusqu'au moteur :
+// le vrai `BridgeEngine`, avec des senders sans réseau (`BridgeStateTestSupport`).
 
 @Suite("État — silence des enceintes")
 struct BridgeStateMuteTests {
@@ -18,12 +18,17 @@ struct BridgeStateMuteTests {
         let harness = BridgeHarness()
         await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.left, Devices.right])
         try #require(harness.output(Devices.genevaID)).bassBoostDB = 6
+        try #require(harness.output(Devices.genevaID)).trebleCutDB = -3
         try #require(harness.output(Devices.rightID)).trimDB = 1.5
         await harness.startStreaming(expecting: ids)
         let senders = try ids.map { try #require(harness.factory.latest($0)) }
         let created = harness.factory.createdCount
         var bassBefore: [[Float]] = []
-        for sender in senders { bassBefore.append(await sender.pushedBass) }
+        var trebleBefore: [[Float]] = []
+        for sender in senders {
+            bassBefore.append(await sender.pushedBass)
+            trebleBefore.append(await sender.pushedTreble)
+        }
 
         for _ in 0..<3 {
             harness.state.isMuted = true
@@ -44,6 +49,7 @@ struct BridgeStateMuteTests {
             #expect(await sender.stopCount == 0)
             #expect(await sender.pushedDelays.isEmpty)
             #expect(await sender.pushedBass == bassBefore[index])
+            #expect(await sender.pushedTreble == trebleBefore[index])
             #expect(await sender.pushedVolumes.count == 6)
         }
         for id in ids { #expect(harness.output(id)?.connection == .streaming) }
@@ -203,6 +209,108 @@ struct PanelSpeakerRowBassTests {
         #expect(harness.factory.lastRequest(Devices.genevaID)?.bassBoostDB == 9)
         let sender = try #require(harness.factory.latest(Devices.genevaID))
         #expect(await sender.startedBass == 9)
+        await harness.stopStreaming()
+    }
+}
+
+@Suite("Panneau — curseur des aigus", .serialized)
+struct PanelSpeakerRowTrebleTests {
+    @Test("Le curseur arrondit au demi-décibel, et borne à la plage du filtre : une coupe seulement")
+    func rounding() {
+        let geneva = OutputState(
+            id: Devices.genevaID, displayName: "Geneva", host: "h", port: 1, proto: .raop
+        )
+        PanelTrebleControl.set(-4.3, on: geneva)
+        #expect(geneva.trebleCutDB == -4.5)
+        PanelTrebleControl.set(-14, on: geneva)
+        #expect(geneva.trebleCutDB == -9)
+        PanelTrebleControl.set(3, on: geneva)
+        #expect(geneva.trebleCutDB == 0)
+        PanelTrebleControl.set(-2.2, on: geneva)
+        PanelTrebleControl.reset(geneva)
+        #expect(geneva.trebleCutDB == 0)
+        #expect(geneva.bassBoostDB == 0, "les aigus ne touchent pas aux basses")
+    }
+
+    @Test("Un réglage des aigus atteint la Geneva, et elle seule")
+    func reachesTheRightOutput() async throws {
+        let harness = BridgeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.left, Devices.right])
+        let ids = [Devices.genevaID, Devices.leftID, Devices.rightID]
+        await harness.startStreaming(expecting: ids)
+        let geneva = try #require(harness.output(Devices.genevaID))
+        let left = try #require(harness.output(Devices.leftID))
+        let genevaSender = try #require(harness.factory.latest(Devices.genevaID))
+        let homePods = try [Devices.leftID, Devices.rightID].map { try #require(harness.factory.latest($0)) }
+
+        PanelTrebleControl.set(-4.3, on: geneva)
+        #expect(await eventually { await genevaSender.pushedTreble.last == -4.5 })
+        // Une sortie AirPlay 2 n'a pas de tiroir : un appel égaré n'y écrit rien.
+        PanelTrebleControl.set(-6, on: left)
+        #expect(left.trebleCutDB == 0)
+        for sender in homePods {
+            #expect(await staysFalse { await !sender.pushedTreble.isEmpty })
+        }
+
+        PanelTrebleControl.reset(geneva)
+        #expect(await eventually { await genevaSender.pushedTreble.last == 0 })
+        #expect(await genevaSender.stopCount == 0)
+        #expect(await genevaSender.pushedVolumes.isEmpty)
+        #expect(await genevaSender.pushedBass == [0], "seule la valeur de départ des basses")
+        await harness.stopStreaming()
+    }
+
+    /// Un glissement réel, étalé dans le temps : au plus une poussée par tour de la boucle, quelle que
+    /// soit la cadence du curseur.
+    @Test("Un glissement des aigus pousse au plus un réglage par tour de la boucle")
+    func dragIsRateLimited() async throws {
+        var timing = BridgeEnvironment.Timing.fast
+        timing.pollInterval = .milliseconds(40)
+        let harness = BridgeHarness(timing: timing)
+        await harness.discover(raop: [Devices.genevaRAOP])
+        await harness.startStreaming(expecting: [Devices.genevaID])
+        let geneva = try #require(harness.output(Devices.genevaID))
+        let sender = try #require(harness.factory.latest(Devices.genevaID))
+        let before = await sender.pushedTreble.count
+
+        let clock = ContinuousClock()
+        let start = clock.now
+        var writes = 0
+        for step in 0...180 {
+            PanelTrebleControl.set(-Double(step) / 20, on: geneva)
+            writes += 1
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        let elapsed = start.duration(to: clock.now)
+        #expect(await eventually { await sender.pushedTreble.last == -9 })
+
+        let pushes = await sender.pushedTreble.count - before
+        let rounds = Int(elapsed / timing.pollInterval) + 2
+        #expect(pushes <= rounds, "\(pushes) poussées pour \(writes) gestes en \(elapsed)")
+        #expect(pushes <= 19, "jamais plus que de valeurs distinctes au demi-décibel")
+        await harness.stopStreaming()
+    }
+
+    @Test("Décochée, la Geneva garde les aigus du tiroir, les sauvegarde, et part avec en diffusion")
+    func appliesWhileUnchecked() async throws {
+        let harness = BridgeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.left])
+        let geneva = try #require(harness.output(Devices.genevaID))
+        geneva.isEnabled = false
+        await harness.startStreaming(expecting: [Devices.leftID])
+
+        PanelTrebleControl.set(-6, on: geneva)
+        PanelBassControl.set(4, on: geneva)
+        #expect(await eventually { harness.store.stored.outputs[Devices.genevaID]?.trebleCutDB == -6 })
+        #expect(harness.store.stored.outputs[Devices.genevaID]?.bassBoostDB == 4)
+        #expect(harness.factory.senders(Devices.genevaID).isEmpty)
+
+        geneva.isEnabled = true
+        #expect(await eventually { geneva.connection == .streaming })
+        #expect(harness.factory.lastRequest(Devices.genevaID)?.trebleCutDB == -6)
+        let sender = try #require(harness.factory.latest(Devices.genevaID))
+        #expect(await sender.startedTreble == -6)
+        #expect(await sender.startedBass == 4)
         await harness.stopStreaming()
     }
 }

@@ -305,6 +305,8 @@ actor FakeSender: OutputSender {
     private(set) var pushedDelays: [TimeInterval] = []
     private(set) var pushedBassBoosts: [Float] = []
     private(set) var startedBassBoost: Float?
+    private(set) var pushedTrebleCuts: [Float] = []
+    private(set) var startedTrebleCut: Float?
     private var errorMessage: String?
     private(set) var stopCount = 0
     private var statistics = OutputStatistics()
@@ -331,6 +333,7 @@ actor FakeSender: OutputSender {
         startedLevel = pushedLevels.last
         startedDelay = synchronizer.manualOffsetSeconds
         startedBassBoost = pushedBassBoosts.last
+        startedTrebleCut = pushedTrebleCuts.last
         state = .connecting
         switch behaviour {
         case .succeed:
@@ -382,6 +385,7 @@ actor FakeSender: OutputSender {
     }
 
     func setBassBoost(decibels: Float) { pushedBassBoosts.append(decibels) }
+    func setTrebleCut(decibels: Float) { pushedTrebleCuts.append(decibels) }
 
     func currentOutputError() -> String? { errorMessage }
     func currentOutputState() -> OutputSenderState { state }
@@ -517,11 +521,11 @@ func makeEngine(
 
 func request(
     _ id: String, volume: Float = -20, delay: TimeInterval = 0,
-    proto: BridgeEngine.OutputProtocol = .raop, bassBoost: Float = 0
+    proto: BridgeEngine.OutputProtocol = .raop, bassBoost: Float = 0, trebleCut: Float = 0
 ) -> BridgeEngine.OutputRequest {
     BridgeEngine.OutputRequest(
         id: id, proto: proto, deviceName: id, volumeDB: volume, manualDelaySeconds: delay,
-        bassBoostDB: bassBoost
+        bassBoostDB: bassBoost, trebleCutDB: trebleCut
     )
 }
 

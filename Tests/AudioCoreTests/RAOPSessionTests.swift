@@ -813,7 +813,7 @@ struct RAOPSessionTests {
     @Test("Le renfort s'entend dans le flux émis, et 0 dB est bit à bit sans filtre")
     func bassBoostReachesTheWire() async throws {
         func levelAt(boost: Float) async throws -> Double {
-            // Assez bas pour que le limiteur n'entre pas en jeu.
+            // Assez bas pour que la correction dynamique n'entre pas en jeu.
             let rig = try await makeRig(hz: 40, amplitude: 0.05)
             await rig.sender.setBassBoost(decibels: boost)
             try await rig.sender.start(volume: -20)
@@ -826,7 +826,39 @@ struct RAOPSessionTests {
         let flat = try await levelAt(boost: 0)
         let boosted = try await levelAt(boost: 12)
         let gain = 20 * log10(boosted / flat)
-        #expect(abs(gain - 11.2) < 1.5, "gain mesuré sur le flux : \(gain) dB")
+        // Plateau à +11,05 dB à 40 Hz, moins 1,19 dB de passe-haut : 9,86 dB (`DSPToneControlTests`).
+        #expect(abs(gain - 9.9) < 1.0, "gain mesuré sur le flux : \(gain) dB")
+    }
+
+    @Test("La coupe des aigus s'entend dans le flux émis, et survit à une reconnexion")
+    func trebleCutReachesTheWireAndSurvivesReconnection() async throws {
+        func settledLevel(_ rig: Rig) -> Double {
+            rms(rig.server.audioPackets.suffix(40).flatMap { samples(ofL16: $0.payload) })
+        }
+        let reference = try await makeRig(hz: 8_000, amplitude: 0.1)
+        try await reference.sender.start(volume: -20)
+        #expect(await raopEventually { reference.server.audioPackets.count > 80 })
+        let flat = settledLevel(reference)
+        await reference.close()
+
+        let rig = try await makeRig(hz: 8_000, amplitude: 0.1)
+        await rig.sender.setTrebleCut(decibels: -6)
+        try await rig.sender.start(volume: -20)
+        #expect(await raopEventually { rig.server.audioPackets.count > 80 })
+        // Plateau à −5,90 dB à 8 kHz (`DSPToneControlTests`), lu après le rééchantillonnage.
+        let cut = 20 * log10(settledLevel(rig) / flat)
+        #expect(abs(cut + 5.9) < 0.5, "coupe mesurée sur le flux : \(cut) dB")
+
+        rig.server.closeConnections()
+        #expect(await raopEventually(within: .seconds(5)) {
+            rig.server.requests.filter { $0.method == "RECORD" }.count == 2
+        })
+        let resumed = rig.server.audioPackets.count
+        #expect(await raopEventually { rig.server.audioPackets.count > resumed + 60 })
+        let after = 20 * log10(settledLevel(rig) / flat)
+        #expect(abs(after + 5.9) < 0.5, "coupe après reconnexion : \(after) dB")
+        #expect(await rig.sender.statistics.trebleCutDecibels == -6)
+        await rig.close()
     }
 
     @Test("Le renfort se règle en pleine diffusion, et survit à une reconnexion")
@@ -840,7 +872,7 @@ struct RAOPSessionTests {
         let before = rig.server.audioPackets.count
         #expect(await raopEventually { rig.server.audioPackets.count > before + 60 })
         let boosted = rms(rig.server.audioPackets.suffix(40).flatMap { samples(ofL16: $0.payload) })
-        #expect(20 * log10(boosted / flat) > 9)
+        #expect(20 * log10(boosted / flat) > 8.5)
 
         rig.server.closeConnections()
         #expect(await raopEventually(within: .seconds(5)) {
@@ -849,20 +881,21 @@ struct RAOPSessionTests {
         let resumed = rig.server.audioPackets.count
         #expect(await raopEventually { rig.server.audioPackets.count > resumed + 60 })
         let after = rms(rig.server.audioPackets.suffix(40).flatMap { samples(ofL16: $0.payload) })
-        #expect(20 * log10(after / flat) > 9)
+        #expect(20 * log10(after / flat) > 8.5)
 
         let statistics = await rig.sender.statistics
         #expect(statistics.bassBoostDecibels == 12)
         await rig.close()
     }
 
-    @Test("Le renfort d'une sortie n'atteint pas le tampon partagé")
+    @Test("Basses et aigus d'une sortie n'atteignent pas le tampon partagé")
     func bassBoostLeavesSharedRingUntouched() async throws {
         // Le producteur écrit un motif connu ; le sender lit et filtre sa copie. Une seconde
         // lecture directe du stockage du ring n'est pas possible sans casser le contrat SPSC :
         // on vérifie donc au niveau du filtre, sur une copie, et que l'original n'a pas bougé.
-        var filter = LowShelfFilter(sampleRate: 48_000, channelCount: 2)
-        filter.setGain(decibels: 12)
+        var filter = ToneControl(sampleRate: 48_000, channelCount: 2)
+        filter.setBassBoost(decibels: 12)
+        filter.setTrebleCut(decibels: -6)
         let original = (0..<9_600).map { Float(sin(Double($0) * 0.005)) * 0.5 }
         var copy = original
         copy.withUnsafeMutableBufferPointer { buffer in
