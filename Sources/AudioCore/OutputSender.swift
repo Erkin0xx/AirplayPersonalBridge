@@ -24,9 +24,14 @@ public protocol OutputSender: Actor {
     /// Arrête la diffusion et libère la session. Idempotent.
     func stop() async
     func setVolume(_ volume: Float) async throws
+    /// Gain numérique et silence de cette sortie, sur sa copie du flux (``OutputGainStage``).
+    /// Applicable à tout moment, et conservé d'une reconnexion à l'autre.
+    func setOutputLevel(_ level: OutputLevel)
     func setManualDelay(seconds: TimeInterval)
     /// Renfort de basses, en dB. Applicable à tout moment, et conservé d'une reconnexion à l'autre.
     func setBassBoost(decibels: Float)
+    /// Coupe des aigus, en dB (négative ou nulle). Mêmes garanties que le renfort de basses.
+    func setTrebleCut(decibels: Float)
 
     /// État courant. Lu périodiquement : c'est ce qui fait remonter une reconnexion.
     func currentOutputState() -> OutputSenderState
@@ -121,8 +126,12 @@ extension RAOPSender: OutputSender {
 
 extension AirPlay2Sender: OutputSender {
     /// Le CDC ne prévoit le renfort que pour la Geneva : les HomePod gardent une stéréo pleine
-    /// bande intacte. Le moteur ne l'appelle d'ailleurs pas sur cette sortie.
+    /// bande intacte. Le moteur ne l'appelle d'ailleurs pas sur cette sortie
+    /// (`OutputProtocol.supportsToneControl`).
     public func setBassBoost(decibels: Float) {}
+
+    /// Comme les basses : les HomePod portent l'image stéréo et le détail, intacts.
+    public func setTrebleCut(decibels: Float) {}
 
     public func currentOutputError() -> String? { statistics.lastFailure }
 

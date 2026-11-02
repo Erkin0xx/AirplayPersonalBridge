@@ -27,6 +27,8 @@ struct DiscoveredOutput: Sendable, Equatable {
     var unavailability: OutputUnavailability?
     /// Cette annonce porte le bit 48 : ce n'est pas une ligne AirPlay 2 par défaut d'autre chose.
     var confirmsTransientPairing = false
+    /// `tsid` d'une annonce AirPlay 2, commun aux membres d'une paire stéréo (`VolumeGroups`).
+    var tightSyncIdentifier: String?
 }
 
 /// Présence d'une sortie sur le réseau, distincte de son état de connexion.
@@ -85,7 +87,8 @@ enum OutputCatalog {
                 id: "airplay2/\(device.serviceName)", displayName: device.serviceName,
                 host: device.host, port: device.port, proto: .airplay2,
                 unavailability: needsPairing ? .pairingRequired : nil,
-                confirmsTransientPairing: device.supportsTransientPairing
+                confirmsTransientPairing: device.supportsTransientPairing,
+                tightSyncIdentifier: device.tightSyncIdentifier
             )
         }
         return byHost.values.sorted(by: isOrderedBefore)

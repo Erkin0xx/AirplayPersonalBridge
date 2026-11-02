@@ -523,6 +523,67 @@ struct BridgeEngineRetryTests {
         await engine.stop()
     }
 
+    @Test("La coupe des aigus part avant la connexion, puis suit les changements, sans toucher aux basses")
+    func trebleCutReachesRAOPSender() async throws {
+        let factory = FakeSenderFactory()
+        let engine = makeEngine(source: ManualCaptureSource(), factory: factory)
+        try await engine.start(
+            source: source0, outputs: [request("a", bassBoost: 6, trebleCut: -3)]
+        )
+        #expect(await eventually { await engine.phase(of: "a") == .streaming })
+
+        let sender = try #require(factory.latest("a"))
+        #expect(await sender.startedTrebleCut == -3)
+        #expect(await sender.startedBassBoost == 6)
+
+        await engine.setTrebleCut(-7.5, for: "a")
+        #expect(await sender.pushedTrebleCuts.last == -7.5)
+        #expect(await sender.pushedBassBoosts == [6])
+        await engine.stop()
+    }
+
+    @Test("La coupe réglée pendant la négociation est appliquée à la connexion, et survit au sender")
+    func trebleCutDuringNegotiationIsApplied() async throws {
+        let factory = FakeSenderFactory()
+        factory.script("a", [.hang])
+        let engine = makeEngine(source: ManualCaptureSource(), factory: factory)
+        try await engine.start(source: source0, outputs: [request("a", trebleCut: -2)])
+        #expect(await eventually {
+            guard let sender = factory.latest("a") else { return false }
+            return await sender.isNegotiating
+        })
+
+        await engine.setTrebleCut(-6, for: "a")
+        let first = try #require(factory.latest("a"))
+        await first.releaseStart()
+        #expect(await eventually { await first.pushedTrebleCuts.last == -6 })
+
+        // Un sender abandonné est remplacé : le suivant repart de la dernière consigne.
+        await first.setState(.failed)
+        #expect(await eventually { factory.senders("a").count == 2 })
+        let second = try #require(factory.latest("a"))
+        #expect(await eventually { await second.startedTrebleCut == -6 })
+        await engine.stop()
+    }
+
+    /// Les HomePod portent l'image stéréo et le détail : ils ne reçoivent jamais la coupe.
+    @Test("La coupe des aigus n'atteint jamais une sortie AirPlay 2")
+    func trebleCutIgnoresAirPlay2() async throws {
+        let factory = FakeSenderFactory()
+        let engine = makeEngine(source: ManualCaptureSource(), factory: factory)
+        try await engine.start(
+            source: source0, outputs: [request("homepod", proto: .airplay2, trebleCut: -6)]
+        )
+        #expect(await eventually { await engine.phase(of: "homepod") == .streaming })
+
+        await engine.setTrebleCut(-9, for: "homepod")
+        await engine.setTrebleCut(-9, for: "inconnue")
+        let sender = try #require(factory.latest("homepod"))
+        #expect(await sender.pushedTrebleCuts.isEmpty)
+        #expect(await sender.startedTrebleCut == nil)
+        await engine.stop()
+    }
+
     /// Défaut d'origine : un réglage poussé avant la fin de la connexion était perdu, alors que
     /// l'appelant le croyait transmis et ne le renvoyait jamais.
     @Test("Volume et délai réglés pendant la négociation sont appliqués à la connexion")

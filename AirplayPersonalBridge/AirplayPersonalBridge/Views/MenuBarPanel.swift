@@ -7,14 +7,20 @@ import AppKit
 import AudioCore
 import SwiftUI
 
-/// L'icône de la barre de menus. La barre est monochrome : seule la forme dit où on en est.
+/// L'icône de la barre de menus. La barre est monochrome : seule la forme dit où on en est, et la
+/// vague qu'un son passe.
 struct MenuBarLabel: View {
     let state: BridgeState
 
     var body: some View {
         let status = state.status.menuBar
-        Image(nsImage: MenuBarGlyphImage.image(for: status.glyph))
+        MenuBarGlyphLabel(status: status, isAudible: Self.isAudible(state))
             .accessibilityLabel(status.accessibilityLabel)
+    }
+
+    /// La règle de `MenuBarPanelContent.isAudible` : l'icône s'immobilise avec le panneau.
+    static func isAudible(_ state: BridgeState) -> Bool {
+        state.captureAlert == nil && !state.isMuted
     }
 }
 
@@ -112,8 +118,8 @@ struct PanelPreviewOptions {
 /// tableau de bord. D'où trois partis pris : **aucun fond maison**, le panneau hérite du matériau de
 /// `MenuBarExtra` et tout s'y pose en couleurs sémantiques ; des **rangées plutôt que des cases**, où
 /// c'est la pastille qui dit qu'une enceinte est retenue ; et **le reste en retrait**, derrière une
-/// section repliable. Les réglages fins (délai, plan) restent dans la fenêtre ; les basses de la Geneva
-/// ont leur tiroir sous sa rangée, parce qu'elles se retouchent en écoutant.
+/// section repliable. Les réglages fins (délai, plan) restent dans la fenêtre ; les basses et les aigus
+/// de la Geneva ont leur tiroir sous sa rangée, parce qu'ils se retouchent en écoutant.
 ///
 /// Ce qui est propre au widget vit dans ses fichiers (`PanelControls`, `PanelSpeakerRow`,
 /// `MenuBarGlyph`) : le thème de `DesignSystem` sert à la fenêtre principale.
@@ -325,7 +331,7 @@ struct MenuBarPanelContent: View {
     }
 
     private var speakerRows: some View {
-        let reservesDrawerColumn = state.outputs.contains(where: \.supportsBassBoost)
+        let reservesDrawerColumn = state.outputs.contains(where: \.supportsToneControl)
         return VStack(alignment: .leading, spacing: 0) {
             ForEach(PanelSpeakerOrder.sorted(state.outputs)) { output in
                 PanelSpeakerRow(

@@ -55,23 +55,48 @@ extension OutputState {
     }
 }
 
-/// Ce que le tiroir des basses fait d'un geste du curseur.
+/// Ce que les curseurs du tiroir font d'un geste : un pas, et les bornes du filtre.
 ///
 /// Hors de la vue pour être testé : c'est par ici que passe tout réglage fait dans le panneau. Il
-/// n'écrit que dans `OutputState.bassBoostDB`, et c'est la boucle de `BridgeState` qui le fait suivre
-/// au moteur, au plus une fois par tour et seulement sur changement : un glissement ne pousse pas un
-/// réglage par pixel.
-enum PanelBassControl {
-    /// Le pas du curseur. Plus fin ne s'entendrait pas, et chaque pas de moins est une poussée de moins.
+/// n'écrit que dans `OutputState`, et c'est la boucle de `BridgeState` qui le fait suivre au moteur, au
+/// plus une fois par tour et seulement sur changement : un glissement ne pousse pas un réglage par pixel.
+enum PanelToneStep {
+    /// Le pas des curseurs. Plus fin ne s'entendrait pas, et chaque pas de moins est une poussée de moins.
     static let step = 0.5
+
+    static func rounded(_ value: Double, in range: ClosedRange<Double>) -> Double {
+        let rounded = (value / step).rounded() * step
+        return min(max(rounded, range.lowerBound), range.upperBound)
+    }
+}
+
+/// Le curseur « Basses » du tiroir : `OutputState.bassBoostDB`, de 0 à +12 dB.
+enum PanelBassControl {
+    static var step: Double { PanelToneStep.step }
     static var range: ClosedRange<Double> { BridgeSettings.Limits.bassBoostDB }
 
-    /// Sans effet sur une sortie qui n'a pas de renfort (`supportsBassBoost`) : les HomePod gardent
+    /// Sans effet sur une sortie sans réglage de tonalité (`supportsToneControl`) : les HomePod gardent
     /// une stéréo pleine bande intacte (ADR-002).
     static func set(_ value: Double, on output: OutputState) {
-        guard output.supportsBassBoost else { return }
-        let rounded = (value / step).rounded() * step
-        output.bassBoostDB = min(max(rounded, range.lowerBound), range.upperBound)
+        guard output.supportsToneControl else { return }
+        output.bassBoostDB = PanelToneStep.rounded(value, in: range)
+    }
+
+    static func reset(_ output: OutputState) {
+        set(0, on: output)
+    }
+}
+
+/// Le curseur « Aigus » du tiroir : `OutputState.trebleCutDB`, de −9 à 0 dB. Une coupe seulement : les
+/// HomePod portent l'image stéréo et le détail, la Geneva le corps.
+enum PanelTrebleControl {
+    static var step: Double { PanelToneStep.step }
+    static var range: ClosedRange<Double> { BridgeSettings.Limits.trebleCutDB }
+
+    /// Sans effet sur une sortie sans réglage de tonalité, comme les basses.
+    static func set(_ value: Double, on output: OutputState) {
+        guard output.supportsToneControl else { return }
+        output.trebleCutDB = PanelToneStep.rounded(value, in: range)
     }
 
     static func reset(_ output: OutputState) {
@@ -85,8 +110,8 @@ enum PanelBassControl {
 /// La rangée garde sa hauteur qu'elle soit retenue ou non : le curseur vient se loger sous le nom, à
 /// l'intérieur de la hauteur de la pastille. Cocher ne fait donc jamais sauter le panneau.
 ///
-/// Une sortie qui a des réglages propres (aujourd'hui les basses de la Geneva) porte un chevron au
-/// bout de la ligne du nom, qui déplie un tiroir sous la rangée. Le tiroir s'ouvre vers le bas, et rien
+/// Une sortie qui a des réglages propres (aujourd'hui les basses et les aigus de la Geneva) porte un
+/// chevron au bout de la ligne du nom, qui déplie un tiroir sous la rangée. Le tiroir s'ouvre vers le bas, et rien
 /// d'autre ne bouge : ni les colonnes, ni la ligne du nom, ni les rangées du dessus.
 struct PanelSpeakerRow: View {
     @Bindable var output: OutputState
@@ -121,16 +146,16 @@ struct PanelSpeakerRow: View {
     }
 
     /// Le tiroir n'existe que pour ce qu'il sait régler, et pas sur une rangée en retrait : l'Apple TV
-    /// passe en RAOP et accepterait des basses, mais elle ne jouera pas sans appairage, et son chevron
-    /// ne serait que du bruit. La colonne restant réservée, il peut apparaître sans rien décaler.
-    private var hasDrawer: Bool { output.supportsBassBoost && !output.isInRetreat }
+    /// passe en RAOP et accepterait basses et aigus, mais elle ne jouera pas sans appairage, et son
+    /// chevron ne serait que du bruit. La colonne restant réservée, il peut apparaître sans rien décaler.
+    private var hasDrawer: Bool { output.supportsToneControl && !output.isInRetreat }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             row
             // Hors de la surface de la rangée : un clic à côté du curseur ne doit pas la décocher.
             if hasDrawer, isDrawerOpen {
-                PanelBassDrawer(output: output)
+                PanelToneDrawer(output: output)
                     .padding(.top, 2)
                     .padding(.bottom, 4)
                     .transition(.opacity)
@@ -154,7 +179,15 @@ struct PanelSpeakerRow: View {
                 }
                 .frame(height: Self.nameLineHeight)
                 if output.isEnabled {
-                    volume.transition(.opacity)
+                    // Le silence de l'enceinte au bout de son curseur, dans la colonne du chevron s'il
+                    // y en a une, sinon sous le témoin : les boutons restent l'un sous l'autre.
+                    HStack(spacing: 6) {
+                        volume
+                        PanelSpeakerMuteButton(
+                            output: output, width: reservesDrawerColumn ? Self.drawerColumn : 16
+                        )
+                    }
+                    .transition(.opacity)
                 }
                 if let message = output.panelMessage {
                     PanelStatusMessage(text: message.text, tone: message.tone, isMuted: output.isInRetreat)
@@ -196,8 +229,11 @@ struct PanelSpeakerRow: View {
             }
             .buttonStyle(.plain)
             .onHover { isHoveringChevron = $0 }
-            .help(isDrawerOpen ? "Masquer le réglage des basses" : "Régler les basses de cette enceinte")
-            .accessibilityLabel("Réglage des basses de \(output.displayName)")
+            .help(
+                isDrawerOpen
+                    ? "Masquer les basses et les aigus" : "Régler les basses et les aigus de cette enceinte"
+            )
+            .accessibilityLabel("Basses et aigus de \(output.displayName)")
             .accessibilityValue(isDrawerOpen ? "déplié" : "replié")
         } else {
             Color.clear
@@ -226,6 +262,7 @@ struct PanelSpeakerRow: View {
 
     private var accessibilityStateValue: String {
         var parts = [output.isEnabled ? "cochée" : "décochée"]
+        if let muted = PanelSpeakerMute.rowStateWord(for: output) { parts.append(muted) }
         switch output.connection {
         case .streaming: parts.append("en diffusion")
         case .connecting: parts.append("connexion en cours")
@@ -294,7 +331,7 @@ struct PanelSpeakerRow: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.red)
                 .accessibilityHidden(true)
-        case .streaming where output.isEnabled && isAudible:
+        case .streaming where output.isEnabled && isAudible && !output.isMuted:
             // Elle reçoit, et un son passe : le seul cas où l'indicateur a le droit de bouger.
             Image(systemName: "waveform")
                 .font(.system(size: 12, weight: .semibold))
@@ -331,26 +368,27 @@ struct PanelSpeakerRow: View {
         .labelsHidden()
         .controlSize(.mini)
         .tint(.secondary)
-        .help("Volume de cette enceinte, en plus du volume master")
+        // Coupée, l'enceinte reste dans la diffusion : son curseur reste là, grisé. Le curseur mini est
+        // déjà gris au repos : l'opacité rend l'état lisible d'un coup d'œil.
+        .disabled(output.isMuted)
+        .opacity(output.isMuted ? PanelSpeakerMute.mutedSliderOpacity : 1)
+        .help(PanelSpeakerMute.sliderHelp(for: output))
         .accessibilityValue(PanelFormat.decibels(output.trimDB, fractionDigits: 1, signed: true))
     }
 }
 
-/// Le tiroir d'une enceinte : ses basses, de 0 à +12 dB (plateau grave à 80 Hz, limiteur compris,
-/// ADR-002).
+/// Le tiroir d'une enceinte : ses basses, de 0 à +12 dB (plateau grave à 80 Hz borné sous 30 Hz, correction
+/// dynamique comprise), puis ses aigus, de 0 à −9 dB (plateau aigu à 3 kHz). ADR-002.
 ///
-/// Une rangée en miniature, sur la même grille : le symbole sur l'axe des pastilles, le libellé et la
-/// valeur sur la ligne du nom, le curseur dessous, à la largeur de celui du volume. Il agit que la
-/// sortie soit cochée ou non : décochée, elle partira avec ce réglage.
-struct PanelBassDrawer: View {
+/// Une rangée en miniature, sur la même grille : le symbole sur l'axe des pastilles, puis, pour chaque
+/// réglage, le libellé et la valeur sur une ligne de la hauteur de celle du nom, et le curseur dessous, à la
+/// largeur de celui du volume. Les deux réglages s'empilent dans la colonne du texte, les aigus sous les
+/// basses. Il agit que la sortie soit cochée ou non : décochée, elle partira avec ces réglages.
+struct PanelToneDrawer: View {
     @Bindable var output: OutputState
 
     static let symbol = "slider.vertical.3"
     static let resetSymbol = "arrow.counterclockwise"
-
-    private var valueText: String {
-        PanelFormat.decibels(output.bassBoostDB, fractionDigits: 1, signed: true)
-    }
 
     var body: some View {
         HStack(alignment: .top, spacing: PanelMetrics.columnGap) {
@@ -359,33 +397,21 @@ struct PanelBassDrawer: View {
                 .foregroundStyle(.secondary)
                 .frame(width: PanelMetrics.pastille, height: 18)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text("Basses")
-                        .font(.system(size: 12))
-                        .accessibilityHidden(true)
-                    Spacer(minLength: 4)
-                    Text(valueText)
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                    // La flèche dit « revenir à » : sans elle, « 0 dB » à côté de la valeur se lirait
-                    // comme une seconde valeur.
-                    Button {
-                        PanelBassControl.reset(output)
-                    } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: Self.resetSymbol).font(.system(size: 9, weight: .semibold))
-                            Text("0 dB")
-                        }
-                    }
-                    .buttonStyle(PanelChipButtonStyle())
-                    .disabled(output.bassBoostDB == 0)
-                    .help("Remettre les basses à 0 dB")
-                    .accessibilityLabel("Remettre les basses de \(output.displayName) à 0 dB")
-                }
-                .frame(height: 18)
-                slider
+            VStack(alignment: .leading, spacing: 8) {
+                PanelToneSetting(
+                    title: "Basses", noun: "les basses", value: output.bassBoostDB,
+                    range: PanelBassControl.range, outputName: output.displayName,
+                    help: "Renfort des graves sous 80 Hz, pour cette enceinte seulement",
+                    set: { PanelBassControl.set($0, on: output) },
+                    reset: { PanelBassControl.reset(output) }
+                )
+                PanelToneSetting(
+                    title: "Aigus", noun: "les aigus", value: output.trebleCutDB,
+                    range: PanelTrebleControl.range, outputName: output.displayName,
+                    help: "Atténuation des aigus au-dessus de 3 kHz, pour cette enceinte seulement",
+                    set: { PanelTrebleControl.set($0, on: output) },
+                    reset: { PanelTrebleControl.reset(output) }
+                )
             }
         }
         .padding(.horizontal, PanelMetrics.margin - PanelMetrics.rowInset)
@@ -396,22 +422,62 @@ struct PanelBassDrawer: View {
         )
         .accessibilityElement(children: .contain)
     }
+}
+
+/// Un réglage du tiroir : libellé, valeur et retour à 0 dB sur la ligne du nom, curseur dessous.
+private struct PanelToneSetting: View {
+    let title: String
+    /// Le réglage dans une phrase : « Remettre les basses à 0 dB ».
+    let noun: String
+    let value: Double
+    let range: ClosedRange<Double>
+    let outputName: String
+    let help: String
+    let set: (Double) -> Void
+    let reset: () -> Void
+
+    private var valueText: String {
+        PanelFormat.decibels(value, fractionDigits: 1, signed: true)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.system(size: 12))
+                    .accessibilityHidden(true)
+                Spacer(minLength: 4)
+                Text(valueText)
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                // La flèche dit « revenir à » : sans elle, « 0 dB » à côté de la valeur se lirait comme
+                // une seconde valeur.
+                Button(action: reset) {
+                    HStack(spacing: 3) {
+                        Image(systemName: PanelToneDrawer.resetSymbol).font(.system(size: 9, weight: .semibold))
+                        Text("0 dB")
+                    }
+                }
+                .buttonStyle(PanelChipButtonStyle())
+                .disabled(value == 0)
+                .help("Remettre \(noun) à 0 dB")
+                .accessibilityLabel("Remettre \(noun) de \(outputName) à 0 dB")
+            }
+            .frame(height: 18)
+            slider
+        }
+    }
 
     /// Le même curseur que celui du volume, au même pas arrondi à la main (voir `PanelSpeakerRow`).
     private var slider: some View {
-        Slider(
-            value: Binding(
-                get: { output.bassBoostDB },
-                set: { PanelBassControl.set($0, on: output) }
-            ),
-            in: PanelBassControl.range
-        ) {
-            Text("Basses de \(output.displayName)")
+        Slider(value: Binding(get: { value }, set: set), in: range) {
+            Text("\(title) de \(outputName)")
         }
         .labelsHidden()
         .controlSize(.mini)
         .tint(.secondary)
-        .help("Renfort des graves sous 80 Hz, pour cette enceinte seulement")
+        .help(help)
         .accessibilityValue(valueText)
     }
 }
