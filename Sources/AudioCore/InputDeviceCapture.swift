@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 import Foundation
 import OSLog
 
@@ -13,7 +14,7 @@ import OSLog
 ///
 /// Invariant section 12 : comme `ProcessTapCapture`, cette classe ne connaît aucune
 /// destination et n'expose qu'un flux PCM.
-public final class InputDeviceCapture: AudioCaptureSource {
+public final class InputDeviceCapture: TimedAudioCaptureSource {
     private let engine = AVAudioEngine()
     private var isRunning = false
     private var configurationObserver: NSObjectProtocol?
@@ -44,13 +45,22 @@ public final class InputDeviceCapture: AudioCaptureSource {
     }
 
     public func start(deliveringTo consumer: @escaping CaptureBlockConsumer) throws {
+        try start(deliveringTimedBlocksTo: { list, frames, _ in consumer(list, frames) })
+    }
+
+    /// L'instant de chaque bloc est celui qu'`AVAudioEngine` donne à sa première trame : l'horodatage
+    /// d'entrée du HAL, **sans** la latence du périphérique ni sa marge de sécurité, que
+    /// ``inputLatency()`` relève à part.
+    public func start(deliveringTimedBlocksTo consumer: @escaping TimedCaptureBlockConsumer) throws {
         guard !isRunning else { return }
         let input = engine.inputNode
         let inputFormat = input.inputFormat(forBus: 0)
 
         // bufferSize est une valeur souhaitée : le système peut livrer des blocs différents.
-        input.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { buffer, _ in
-            consumer(buffer.audioBufferList, buffer.frameLength)
+        input.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { buffer, when in
+            consumer(
+                buffer.audioBufferList, buffer.frameLength, when.isHostTimeValid ? when.hostTime : 0
+            )
         }
 
         engine.prepare()
@@ -86,6 +96,55 @@ public final class InputDeviceCapture: AudioCaptureSource {
     }
 
     public func routeRequiresRebuild() -> Bool { !engine.isRunning }
+
+    /// Ce que l'entrée retient avant l'horodatage de ses blocs, pour information.
+    public struct InputLatency: Sendable, Equatable {
+        /// Nom du périphérique d'entrée par défaut.
+        public let deviceName: String?
+        /// `AVAudioInputNode.presentationLatency`, en secondes.
+        public let presentationLatencySeconds: Double
+        /// `kAudioDevicePropertyLatency`, côté entrée, en trames.
+        public let deviceLatencyFrames: UInt32?
+        /// `kAudioDevicePropertySafetyOffset`, côté entrée, en trames.
+        public let safetyOffsetFrames: UInt32?
+
+        public init(
+            deviceName: String?, presentationLatencySeconds: Double,
+            deviceLatencyFrames: UInt32?, safetyOffsetFrames: UInt32?
+        ) {
+            self.deviceName = deviceName
+            self.presentationLatencySeconds = presentationLatencySeconds
+            self.deviceLatencyFrames = deviceLatencyFrames
+            self.safetyOffsetFrames = safetyOffsetFrames
+        }
+    }
+
+    /// Relevé hors temps réel, une fois l'entrée préparée.
+    public func inputLatency() -> InputLatency {
+        var deviceID = AudioObjectID(kAudioObjectUnknown)
+        deviceID = (try? AudioObject.value(
+            AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultInputDevice,
+            defaultValue: deviceID, operation: "entrée par défaut"
+        )) ?? AudioObjectID(kAudioObjectUnknown)
+        let known = deviceID != AudioObjectID(kAudioObjectUnknown)
+        return InputLatency(
+            deviceName: known
+                ? try? AudioObject.string(deviceID, kAudioObjectPropertyName, operation: "nom")
+                : nil,
+            presentationLatencySeconds: engine.inputNode.presentationLatency,
+            deviceLatencyFrames: known
+                ? try? AudioObject.value(
+                    deviceID, kAudioDevicePropertyLatency, scope: kAudioObjectPropertyScopeInput,
+                    defaultValue: UInt32(0), operation: "latence d'entrée")
+                : nil,
+            safetyOffsetFrames: known
+                ? try? AudioObject.value(
+                    deviceID, kAudioDevicePropertySafetyOffset,
+                    scope: kAudioObjectPropertyScopeInput,
+                    defaultValue: UInt32(0), operation: "marge d'entrée")
+                : nil
+        )
+    }
 
     private func teardown() {
         if engine.isRunning { engine.stop() }

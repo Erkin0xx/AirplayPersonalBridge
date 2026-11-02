@@ -45,6 +45,13 @@ public final class WAVWriter {
     public var duration: TimeInterval {
         format.sampleRate > 0 ? Double(framesWritten) / format.sampleRate : 0
     }
+
+    /// Finalise l'en-tête du fichier. **À appeler avant `exit`** : `AVAudioFile` n'écrit la taille
+    /// des données qu'en se fermant, et un processus qui quitte ne libère pas ses objets. Sans cela
+    /// l'en-tête annonce 0 trame, ce que `wave` de Python prend au mot. Sans effet au second appel.
+    public func close() {
+        file.close()
+    }
 }
 
 /// Mesure du niveau audio d'un buffer.

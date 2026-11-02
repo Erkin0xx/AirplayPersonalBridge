@@ -8,6 +8,11 @@ import Foundation
 /// des ring buffers.
 public typealias CaptureBlockConsumer = (UnsafePointer<AudioBufferList>, UInt32) -> Void
 
+/// Consommateur de blocs datés : le troisième argument est l'instant hôte de la **première trame**
+/// du bloc, en ticks `mach_absolute_time` (`AVAudioTime.hostTime`), ou 0 si la source ne le connaît
+/// pas. Mêmes contraintes que ``CaptureBlockConsumer``.
+public typealias TimedCaptureBlockConsumer = (UnsafePointer<AudioBufferList>, UInt32, UInt64) -> Void
+
 /// Une source PCM : Process Tap, entrée physique, ou sinusoïde de test.
 ///
 /// Injectée par protocole (CDC section 13) pour que le moteur soit testable sans matériel ni
@@ -46,6 +51,15 @@ public protocol AudioCaptureSource: AnyObject {
     /// Sert à lever l'ambiguïté d'un silence strict : `true` le rend suspect (autorisation,
     /// câblage), `false` l'explique (rien ne joue), `nil` ne dit rien. Hors temps réel.
     func isAudioExpected() -> Bool?
+}
+
+/// Une source qui sait dater ses blocs sur l'horloge hôte.
+///
+/// Sert à l'enregistrement de mesure (`audiocap --record-input`), qui doit situer chaque échantillon
+/// sur la même horloge que l'instant de restitution des clics.
+public protocol TimedAudioCaptureSource: AudioCaptureSource {
+    /// Comme ``AudioCaptureSource/start(deliveringTo:)``, l'instant hôte de chaque bloc en plus.
+    func start(deliveringTimedBlocksTo consumer: @escaping TimedCaptureBlockConsumer) throws
 }
 
 extension AudioCaptureSource {

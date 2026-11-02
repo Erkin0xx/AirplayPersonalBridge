@@ -67,6 +67,45 @@ public actor BridgeEngine {
         case inputDevice
         /// Sinusoïde : diffusion de bout en bout sans capture ni autorisation.
         case tone(frequency: Double, levelDBFS: Double)
+        /// Salves de mesure du calage acoustique, aux trames de capture `k · 96 000`
+        /// (``ClickPattern``). Aucune capture ni autorisation, comme la sinusoïde.
+        case clicks(levelDBFS: Double)
+        /// Test d'écoute gauche/droite (``ChannelTestPattern``).
+        case channelTest(levelDBFS: Double)
+    }
+
+    /// L'horloge commune vue de l'extérieur : ce qu'il faut pour dater une trame de capture.
+    ///
+    /// Les instants sont en **temps Unix**, l'horloge murale de `Date` : c'est elle que les senders
+    /// traduisent en estampilles NTP (``NTPTime``, époque 1900) et sur laquelle les récepteurs se
+    /// calent par le canal de timing. Le passage à l'horloge hôte (`mach_absolute_time`, celle
+    /// d'`AVAudioTime`) se fait par ``HostClockMapping``.
+    public struct PlaybackTimeline: Sendable, Equatable {
+        public let captureSampleRate: Double
+        /// Délai commun entre la production d'une trame et sa restitution.
+        public let playoutDelaySeconds: Double
+        /// Instant de restitution attendu de la trame de capture n° 0, le même pour toutes les
+        /// sorties. La trame `F` est attendue `F / captureSampleRate` secondes plus tard, plus le
+        /// délai manuel de chaque sortie.
+        public let frameZeroPresentationUnixTime: TimeInterval
+        /// Interruptions de capture reportées sur l'horloge depuis le démarrage : un report déplace
+        /// ``frameZeroPresentationUnixTime`` d'autant.
+        public let interruptedSeconds: TimeInterval
+
+        public init(
+            captureSampleRate: Double, playoutDelaySeconds: Double,
+            frameZeroPresentationUnixTime: TimeInterval, interruptedSeconds: TimeInterval
+        ) {
+            self.captureSampleRate = captureSampleRate
+            self.playoutDelaySeconds = playoutDelaySeconds
+            self.frameZeroPresentationUnixTime = frameZeroPresentationUnixTime
+            self.interruptedSeconds = interruptedSeconds
+        }
+
+        /// Instant de restitution attendu d'une trame de capture.
+        public func presentationUnixTime(forCaptureFrame frame: Double) -> TimeInterval {
+            frameZeroPresentationUnixTime + frame / captureSampleRate
+        }
     }
 
     public struct StartOptions: Sendable {
@@ -278,6 +317,10 @@ public actor BridgeEngine {
                         return InputDeviceCapture()
                     case let .tone(frequency, levelDBFS):
                         return ToneCaptureSource(frequency: frequency, levelDBFS: levelDBFS)
+                    case let .clicks(levelDBFS):
+                        return PatternCaptureSource.clicks(levelDBFS: levelDBFS)
+                    case let .channelTest(levelDBFS):
+                        return PatternCaptureSource.channelTest(levelDBFS: levelDBFS)
                     }
                 },
                 senderFactory: LiveOutputSenderFactory(),
@@ -366,6 +409,22 @@ public actor BridgeEngine {
 
     /// Santé de la capture, rafraîchie plusieurs fois par seconde.
     public var captureHealth: CaptureHealth { health }
+
+    /// L'horloge commune de la diffusion en cours, `nil` hors diffusion.
+    ///
+    /// Relue à chaque appel : un trou de capture la reporte (``SharedPlaybackClock/shiftOrigin(bySeconds:)``),
+    /// et une relance pour une nouvelle fréquence en pose une nouvelle.
+    public var playbackTimeline: PlaybackTimeline? {
+        guard let clock, let frameZero = clock.presentationUnixTime(forCaptureFrame: 0) else {
+            return nil
+        }
+        return PlaybackTimeline(
+            captureSampleRate: clock.captureSampleRate,
+            playoutDelaySeconds: clock.playoutDelaySeconds,
+            frameZeroPresentationUnixTime: frameZero,
+            interruptedSeconds: health.interruptedSeconds
+        )
+    }
 
     /// Une reconstruction ou un changement de source est-il en cours ? Interne : uniquement lu par
     /// les tests qui avancent l'heure à la main, et l'attendent à chaque pas.

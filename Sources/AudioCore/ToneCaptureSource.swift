@@ -1,5 +1,4 @@
 import AVFoundation
-import Atomics
 import Foundation
 
 /// Sinusoïde de niveau réglable, cadencée en temps réel.
@@ -19,11 +18,8 @@ public final class ToneCaptureSource: AudioCaptureSource, @unchecked Sendable {
     private let channelCount: Int
     private let interleaved: Bool
 
-    private let running = ManagedAtomic<Bool>(false)
-    /// Signalé par le fil de génération quand il a fini : `stop` l'attend, ce qui garantit
-    /// qu'aucun bloc ne suit son retour.
-    private let finished = DispatchSemaphore(value: 0)
-    private var thread: Thread?
+    /// Le fil de génération, partagé avec les autres sources synthétiques.
+    private let pacer = SyntheticBlockPacer(threadName: "fr.baptiste.airplaymultioutput.tone")
 
     public var requiredPermission: CapturePermission.Kind? { nil }
 
@@ -53,8 +49,6 @@ public final class ToneCaptureSource: AudioCaptureSource, @unchecked Sendable {
         self.blockFrames = blockFrames
     }
 
-    deinit { stop() }
-
     public func prepare() throws -> AVAudioFormat {
         guard let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -69,68 +63,27 @@ public final class ToneCaptureSource: AudioCaptureSource, @unchecked Sendable {
     }
 
     public func start(deliveringTo consumer: @escaping CaptureBlockConsumer) throws {
-        guard running.compareExchange(
-            expected: false, desired: true, ordering: .acquiringAndReleasing
-        ).exchanged else { return }
-
+        // Un générateur neuf à chaque démarrage : la phase repart de zéro, comme avant le partage
+        // du fil avec les autres sources.
         let generator = ToneBlockGenerator(
             frequency: frequency, levelDBFS: levelDBFS, sampleRate: sampleRate,
             channelCount: channelCount, interleaved: interleaved, blockFrames: blockFrames
         )
-        let blockSeconds = Double(blockFrames) / sampleRate
-        let box = ConsumerBox(consumer)
-        let thread = Thread { [running, finished] in
-            let clock = ContinuousClock()
-            var deadline = clock.now
-            let period = Duration.seconds(blockSeconds)
-            while running.load(ordering: .acquiring) {
-                generator.renderNextBlock()
-                generator.withBufferList { box.consumer($0, UInt32(generator.blockFrames)) }
-                deadline += period
-                let now = clock.now
-                if deadline > now {
-                    Thread.sleep(forTimeInterval: Self.seconds(deadline - now))
-                } else if now - deadline > .seconds(1) {
-                    // Veille de la machine : repartir de maintenant plutôt que de rattraper
-                    // en rafale.
-                    deadline = now
-                }
-            }
-            finished.signal()
-        }
-        thread.name = "fr.baptiste.airplaymultioutput.tone"
-        thread.qualityOfService = .userInteractive
-        self.thread = thread
-        thread.start()
+        pacer.start(generator, sampleRate: sampleRate, deliveringTo: consumer)
     }
 
     public func stop() {
-        guard running.compareExchange(
-            expected: true, desired: false, ordering: .acquiringAndReleasing
-        ).exchanged else { return }
-        finished.wait()
-        thread = nil
+        pacer.stop()
     }
 
     public func isAudioExpected() -> Bool? { true }
-
-    private static func seconds(_ duration: Duration) -> TimeInterval {
-        let (seconds, attoseconds) = duration.components
-        return Double(seconds) + Double(attoseconds) / 1e18
-    }
-}
-
-/// Une référence à ce bloc de code ne fait que traverser la frontière de création du fil.
-private final class ConsumerBox: @unchecked Sendable {
-    let consumer: CaptureBlockConsumer
-    init(_ consumer: @escaping CaptureBlockConsumer) { self.consumer = consumer }
 }
 
 /// Génère les blocs de la sinusoïde dans une mémoire allouée une fois pour toutes.
 ///
 /// Séparé de `ToneCaptureSource` pour être vérifiable à l'unité : la phase doit rester continue
 /// d'un bloc à l'autre, faute de quoi un clic reviendrait à chaque bloc.
-final class ToneBlockGenerator: @unchecked Sendable {
+final class ToneBlockGenerator: SyntheticBlockGenerator, @unchecked Sendable {
     let blockFrames: Int
     private let amplitude: Float
     private let phaseStep: Double
