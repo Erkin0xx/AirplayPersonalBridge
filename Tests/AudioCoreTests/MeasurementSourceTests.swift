@@ -346,6 +346,30 @@ struct TimedInputRecorderTests {
         #expect(recorder.anchors == [TimedInputRecorder.Anchor(frame: 0, hostTicks: 42)])
     }
 
+    /// Le processus du CLI quitte par `exit`, qui ne libère pas le fichier : sans `close`, l'en-tête
+    /// annonçait 0 trame et `wave` de Python lisait un fichier vide.
+    @Test("Le fichier écrit annonce toutes ses trames une fois fermé")
+    func writtenFileIsFinalized() throws {
+        let recorder = try TimedInputRecorder(sourceFormat: monoPlanarFormat())
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("enregistrement-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let writer = try WAVWriter(url: url, format: recorder.recordingFormat)
+        feed(recorder, channels: 1, frames: 30_000, start: 0, ticks: 1)
+        try recorder.drain(into: writer)
+        writer.close()
+
+        let data = try Data(contentsOf: url)
+        // En-tête RIFF : la taille du bloc `data` suit son identifiant.
+        let marker = try #require(data.range(of: Data("data".utf8)))
+        let size = data[marker.upperBound..<(marker.upperBound + 4)]
+            .enumerated().reduce(0) { $0 | Int($1.element) << (8 * $1.offset) }
+        #expect(size == 30_000 * 2)
+        let file = try AVAudioFile(forReading: url)
+        #expect(file.length == 30_000)
+        #expect(file.fileFormat.channelCount == 1)
+    }
+
     /// Un bloc refusé faute de place n'a aucune trame dans le fichier : l'ancrer daterait une trame
     /// qui n'est pas la sienne.
     @Test("Un bloc refusé en entier n'est pas ancré, et la perte est comptée")

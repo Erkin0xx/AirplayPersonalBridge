@@ -66,6 +66,7 @@ var recordInputPath: String?
 func defaultLevel(for mode: Mode) -> Double {
     mode == .tone ? -50 : -20
 }
+
 /// Coupe le son du Mac pendant la capture, pour ne pas l'entendre en double avec les enceintes.
 var muteLocalOutput = false
 
