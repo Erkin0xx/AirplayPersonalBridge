@@ -442,9 +442,10 @@ struct BridgeSettingsSpeakerMuteTests {
     @Test("Aller-retour JSON")
     func roundTrip() throws {
         var settings = BridgeSettings()
-        settings.outputs["airplay2/Salon (2)"] = BridgeSettings.Output(
-            trimDB: -11.5, isMuted: true, tightSyncIdentifier: PairDevices.tsid
-        )
+        var output = BridgeSettings.Output(trimDB: -11.5)
+        output.isMuted = true
+        output.tightSyncIdentifier = PairDevices.tsid
+        settings.outputs["airplay2/Salon (2)"] = output
         let data = try JSONEncoder().encode(settings)
         #expect(try JSONDecoder().decode(BridgeSettings.self, from: data) == settings)
     }

@@ -106,6 +106,11 @@ final class OutputState: Identifiable {
         didSet { if oldValue != bassBoostDB { onSettingsChange?() } }
     }
 
+    var connection: OutputConnectionState = .idle
+    fileprivate(set) var presence: OutputPresence
+    /// Pourquoi elle ne jouera pas sans intervention, d'après ce qu'elle annonce.
+    fileprivate(set) var unavailability: OutputUnavailability?
+
     /// Silence de cette seule enceinte, **numérique** (`VolumeGroups`) : elle reste cochée et en
     /// session, son flux continue de partir. Indépendant du silence général.
     var isMuted = false {
@@ -115,11 +120,6 @@ final class OutputState: Identifiable {
     /// `tsid` annoncé par le récepteur : commun aux membres d'une paire stéréo, qui n'ont qu'un seul
     /// volume (`VolumeGroups`). `nil` sans paire, et pour toute sortie RAOP.
     fileprivate(set) var tightSyncIdentifier: String?
-
-    var connection: OutputConnectionState = .idle
-    fileprivate(set) var presence: OutputPresence
-    /// Pourquoi elle ne jouera pas sans intervention, d'après ce qu'elle annonce.
-    fileprivate(set) var unavailability: OutputUnavailability?
 
     /// Compteurs du sender, reflet fidèle. Une grandeur qu'un protocole ne mesure pas reste `nil`.
     var statistics = OutputStatistics()
@@ -209,9 +209,10 @@ final class BridgeState {
     /// Ce qu'une sortie a reçu en dernier, pour ne pousser que sur changement.
     private struct PushedSettings {
         var volume: Float
+        /// Le niveau propre de la sortie (`VolumeGroups`).
+        var level = OutputLevel.unity
         var delay: TimeInterval
         var bass: Float
-        var level: OutputLevel
     }
 
     static let silenceDB: Double = -60
@@ -261,11 +262,12 @@ final class BridgeState {
         didSet { if oldValue != isMuted { scheduleSettingsSave() } }
     }
 
-    /// Gain effectif d'une sortie, master, trim et silences confondus : ce qu'elle restitue. La vue
-    /// n'en calcule aucune autre.
+    /// Gain effectif d'une sortie, master et trim confondus. C'est cette valeur, et elle
+    /// seule, que le moteur appliquera — la vue n'en calcule aucune autre.
     ///
-    /// Le moteur l'obtient par deux chemins, le volume AirPlay de son groupe et son gain numérique
-    /// (`VolumeGroups`) : seule dans son groupe, c'est tout entier son volume AirPlay.
+    /// Silences compris : le général, et celui de l'enceinte. Le moteur l'obtient par deux chemins, le
+    /// volume AirPlay de son groupe et son gain numérique (`VolumeGroups`) : seule dans son groupe,
+    /// c'est tout entier son volume AirPlay.
     ///
     /// Un master au minimum vaut silence, quel que soit le trim : un trim positif le ferait repartir
     /// au-dessus du seuil, et −29 dB sur le fil pour un bouton tourné à fond vers la gauche.
@@ -470,10 +472,10 @@ final class BridgeState {
     private func restore(_ record: BridgeSettings.Output, on output: OutputState) {
         output.isEnabled = record.isEnabled
         output.trimDB = record.trimDB
-        output.delayMS = record.delayMS
-        output.bassBoostDB = record.bassBoostDB
         output.isMuted = record.isMuted
         output.tightSyncIdentifier = record.tightSyncIdentifier
+        output.delayMS = record.delayMS
+        output.bassBoostDB = record.bassBoostDB
         output.onSettingsChange = { [weak self] in self?.scheduleSettingsSave() }
     }
 
@@ -760,7 +762,7 @@ final class BridgeState {
         let requests = selected.map { makeRequest(for: $0, plan: plan) }
         activeOutputIDs = Set(selected.map(\.id))
         pushed = Dictionary(
-            uniqueKeysWithValues: requests.map { ($0.id, Self.pushedSettings(for: $0)) }
+            uniqueKeysWithValues: requests.map { ($0.id, Self.pushedState(for: $0)) }
         )
         for output in selected { output.connection = .connecting }
 
@@ -849,16 +851,22 @@ final class BridgeState {
             deviceName: output.serviceInstanceName,
             nameMatching: .exact,
             volumeDB: volume.volumeDB,
+            outputLevel: volume.level,
             manualDelaySeconds: effectiveDelayMS(for: output) / 1000,
-            bassBoostDB: Float(output.supportsBassBoost ? output.bassBoostDB : 0),
-            outputLevel: volume.level
+            bassBoostDB: Float(output.supportsBassBoost ? output.bassBoostDB : 0)
         )
+    }
+
+    /// `pushedSettings(for:)`, niveau propre compris : c'est ce que les poussées comparent.
+    private static func pushedState(for request: BridgeEngine.OutputRequest) -> PushedSettings {
+        var state = pushedSettings(for: request)
+        state.level = request.outputLevel
+        return state
     }
 
     private static func pushedSettings(for request: BridgeEngine.OutputRequest) -> PushedSettings {
         PushedSettings(
-            volume: request.volumeDB, delay: request.manualDelaySeconds, bass: request.bassBoostDB,
-            level: request.outputLevel
+            volume: request.volumeDB, delay: request.manualDelaySeconds, bass: request.bassBoostDB
         )
     }
 
@@ -991,7 +999,7 @@ final class BridgeState {
     private func addToSession(_ output: OutputState, plan: [String: VolumeGroups.Setting]) {
         let request = makeRequest(for: output, plan: plan)
         activeOutputIDs.insert(output.id)
-        pushed[output.id] = Self.pushedSettings(for: request)
+        pushed[output.id] = Self.pushedState(for: request)
         output.connection = .connecting
         let engine = self.engine
         let generation = sessionGeneration
@@ -1020,11 +1028,11 @@ final class BridgeState {
 
     private func pushChanges(of output: OutputState, plan: [String: VolumeGroups.Setting]) {
         guard let last = pushed[output.id] else { return }
-        let target = Self.pushedSettings(for: makeRequest(for: output, plan: plan))
+        let target = Self.pushedState(for: makeRequest(for: output, plan: plan))
+        let level = target.level != last.level ? target.level : nil
         let volume = target.volume != last.volume ? target.volume : nil
         let delay = target.delay != last.delay ? target.delay : nil
         let bass = target.bass != last.bass ? target.bass : nil
-        let level = target.level != last.level ? target.level : nil
         guard volume != nil || delay != nil || bass != nil || level != nil else { return }
 
         pushed[output.id] = target
@@ -1191,9 +1199,10 @@ final class BridgeState {
         for output in outputs {
             result.outputs[output.id] = BridgeSettings.Output(
                 isEnabled: output.isEnabled, trimDB: output.trimDB, delayMS: output.delayMS,
-                bassBoostDB: output.bassBoostDB, displayName: output.displayName,
-                isMuted: output.isMuted, tightSyncIdentifier: output.tightSyncIdentifier
+                bassBoostDB: output.bassBoostDB, displayName: output.displayName
             )
+            result.outputs[output.id]?.isMuted = output.isMuted
+            result.outputs[output.id]?.tightSyncIdentifier = output.tightSyncIdentifier
         }
         return result
     }

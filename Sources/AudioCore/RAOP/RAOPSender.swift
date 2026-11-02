@@ -116,8 +116,6 @@ public actor RAOPSender {
     private let retransmitter = RAOPRetransmitResponder()
     /// Renfort de basses (ADR-002), appliqué à la copie propre à ce sender. Transparent à 0 dB.
     private var bassBoost: LowShelfFilter
-    /// Gain numérique et silence de cette sortie (``OutputGainStage``), en bout de chaîne DSP.
-    private var outputGain: OutputGainStage
     /// Avance à chaque `stop()`. Une négociation qui se termine sous une autre valeur que celle
     /// de son départ a été rendue caduque, et ne doit surtout pas démarrer le flux.
     private var sessionGeneration = 0
@@ -161,6 +159,8 @@ public actor RAOPSender {
     private var pendingSamples: [Int16] = []
     /// Tampon de lecture du ring buffer, alloué une fois.
     private var readScratch: [Float]
+    /// Gain numérique et silence de cette sortie (``OutputGainStage``), en bout de chaîne DSP.
+    private var outputGain: OutputGainStage
 
     private var counters = RAOPStatistics()
 
@@ -248,17 +248,17 @@ public actor RAOPSender {
         counters.bassBoostDecibels = Float(bassBoost.gainDecibels)
     }
 
+    /// Voir ``simulatedLossInterval``. Interne : uniquement accessible aux tests.
+    func simulateLoss(everyNthPacket interval: Int) {
+        simulatedLossInterval = interval
+    }
+
     /// Gain numérique et silence de cette sortie (``OutputGainStage``), en bout de chaîne DSP.
     ///
     /// Applicable à tout moment, conservé d'une reconnexion à l'autre, et sans effet sur la
     /// session : le flux continue de partir, silence compris. Le changement glisse sans clic.
     public func setOutputLevel(_ level: OutputLevel) {
         outputGain.setLevel(level)
-    }
-
-    /// Voir ``simulatedLossInterval``. Interne : uniquement accessible aux tests.
-    func simulateLoss(everyNthPacket interval: Int) {
-        simulatedLossInterval = interval
     }
 
     /// Négociation en cours ou dernière en date. Interne : uniquement lu par les tests, pour
@@ -324,11 +324,12 @@ public actor RAOPSender {
             log.info("Arriéré de \(staleFrames) trames écarté avant le début de la diffusion")
         }
         pendingSamples.removeAll(keepingCapacity: true)
+        // La reprise part de la consigne de niveau, sans glissement : rien n'est plus à fondre.
+        outputGain.reset()
         // Rien de ce qui a précédé ne sera plus joué : ni la queue du filtre, ni les paquets de
         // la session d'avant. La numérotation continuant d'une session à l'autre, un paquet resté
         // dans l'historique répondrait à une demande sur un numéro qui n'est plus le sien.
         bassBoost.reset()
-        outputGain.reset()
         retransmitter.clear()
         if firstSession {
             // Photographie du compteur de refus au moment précis où la diffusion démarre.

@@ -135,16 +135,16 @@ actor StubSender: OutputSender {
     nonisolated let context: OutputSenderContext
 
     private(set) var state = OutputSenderState.idle
+    /// Niveaux reçus par `setOutputLevel`, celui d'avant `start` compris : le moteur le règle
+    /// toujours juste avant.
+    private(set) var pushedLevels: [OutputLevel] = []
+    private(set) var startedLevel: OutputLevel?
     private(set) var startedVolume: Float?
     private(set) var startedDelay: TimeInterval?
     private(set) var startedBass: Float?
     private(set) var pushedVolumes: [Float] = []
     private(set) var pushedDelays: [TimeInterval] = []
     private(set) var pushedBass: [Float] = []
-    /// Niveaux reçus par `setOutputLevel`, celui d'avant `start` compris : le moteur le règle
-    /// toujours juste avant.
-    private(set) var pushedLevels: [OutputLevel] = []
-    private(set) var startedLevel: OutputLevel?
     private(set) var stopCount = 0
     private var errorMessage: String?
     private var statistics = OutputStatistics()
@@ -166,9 +166,9 @@ actor StubSender: OutputSender {
 
     func start(volume: Float) async throws {
         startedVolume = volume
+        startedLevel = pushedLevels.last
         startedDelay = synchronizer.manualOffsetSeconds
         startedBass = pushedBass.last
-        startedLevel = pushedLevels.last
         if case let .fail(error) = behaviour {
             state = .failed
             throw error
@@ -189,13 +189,13 @@ actor StubSender: OutputSender {
     }
 
     func setVolume(_ volume: Float) async throws { pushedVolumes.append(volume) }
+    func setOutputLevel(_ level: OutputLevel) { pushedLevels.append(level) }
     /// Le moteur règle le délai juste avant `start` : seul ce qui suit est une poussée.
     func setManualDelay(seconds: TimeInterval) {
         if startedVolume != nil { pushedDelays.append(seconds) }
         synchronizer.manualOffsetSeconds = seconds
     }
     func setBassBoost(decibels: Float) { pushedBass.append(decibels) }
-    func setOutputLevel(_ level: OutputLevel) { pushedLevels.append(level) }
 
     func currentOutputState() -> OutputSenderState { state }
     func currentOutputStatistics() -> OutputStatistics { statistics }

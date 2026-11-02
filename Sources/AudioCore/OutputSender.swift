@@ -24,12 +24,12 @@ public protocol OutputSender: Actor {
     /// Arrête la diffusion et libère la session. Idempotent.
     func stop() async
     func setVolume(_ volume: Float) async throws
-    func setManualDelay(seconds: TimeInterval)
-    /// Renfort de basses, en dB. Applicable à tout moment, et conservé d'une reconnexion à l'autre.
-    func setBassBoost(decibels: Float)
     /// Gain numérique et silence de cette sortie, sur sa copie du flux (``OutputGainStage``).
     /// Applicable à tout moment, et conservé d'une reconnexion à l'autre.
     func setOutputLevel(_ level: OutputLevel)
+    func setManualDelay(seconds: TimeInterval)
+    /// Renfort de basses, en dB. Applicable à tout moment, et conservé d'une reconnexion à l'autre.
+    func setBassBoost(decibels: Float)
 
     /// État courant. Lu périodiquement : c'est ce qui fait remonter une reconnexion.
     func currentOutputState() -> OutputSenderState

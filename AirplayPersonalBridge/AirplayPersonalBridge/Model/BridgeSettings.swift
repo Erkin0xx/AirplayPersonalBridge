@@ -46,16 +46,13 @@ struct BridgeSettings: Codable, Equatable {
 
         init(
             isEnabled: Bool = true, trimDB: Double = 0, delayMS: Double = 0,
-            bassBoostDB: Double = 0, displayName: String? = nil, isMuted: Bool = false,
-            tightSyncIdentifier: String? = nil
+            bassBoostDB: Double = 0, displayName: String? = nil
         ) {
             self.isEnabled = isEnabled
             self.trimDB = trimDB
             self.delayMS = delayMS
             self.bassBoostDB = bassBoostDB
             self.displayName = displayName
-            self.isMuted = isMuted
-            self.tightSyncIdentifier = tightSyncIdentifier
         }
 
         init(from decoder: Decoder) throws {
