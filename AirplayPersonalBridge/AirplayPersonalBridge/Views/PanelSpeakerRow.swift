@@ -340,8 +340,10 @@ struct PanelSpeakerRow: View {
         .labelsHidden()
         .controlSize(.mini)
         .tint(.secondary)
-        // Coupée, l'enceinte reste dans la diffusion : son curseur reste là, grisé.
+        // Coupée, l'enceinte reste dans la diffusion : son curseur reste là, grisé. Le curseur mini est
+        // déjà gris au repos : l'opacité rend l'état lisible d'un coup d'œil.
         .disabled(output.isMuted)
+        .opacity(output.isMuted ? PanelSpeakerMute.mutedSliderOpacity : 1)
         .help(PanelSpeakerMute.sliderHelp(for: output))
         .accessibilityValue(PanelFormat.decibels(output.trimDB, fractionDigits: 1, signed: true))
     }

@@ -67,6 +67,9 @@ struct PanelSpeakerMuteButton: View {
 /// Ce que le bouton fait, et ce que le bouton et la rangée disent du silence d'une enceinte : hors des
 /// vues pour être testé.
 enum PanelSpeakerMute {
+    /// L'opacité du curseur d'une enceinte coupée.
+    static let mutedSliderOpacity = 0.4
+
     /// Le geste du bouton. Il n'écrit que dans `OutputState.isMuted` : c'est la boucle de `BridgeState`
     /// qui le fait suivre au moteur, sans jamais décocher l'enceinte.
     static func toggle(_ output: OutputState) {

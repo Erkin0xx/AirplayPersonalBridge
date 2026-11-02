@@ -390,7 +390,11 @@ struct BridgeSettingsSpeakerMuteTests {
         #expect(saved.outputs[Devices.leftID]?.tightSyncIdentifier == PairDevices.tsid)
 
         // Relancée, l'app retrouve l'enceinte coupée et sa paire avant même la première découverte.
-        let reopened = BridgeHarness(settings: saved)
+        // Par le JSON, comme `settings.json`.
+        let reloaded = try JSONDecoder().decode(
+            BridgeSettings.self, from: try JSONEncoder().encode(saved)
+        )
+        let reopened = BridgeHarness(settings: reloaded)
         let restored = try #require(reopened.output(Devices.leftID))
         #expect(restored.isMuted)
         #expect(restored.tightSyncIdentifier == PairDevices.tsid)
