@@ -105,6 +105,45 @@ struct MenuBarPanelExport {
                 }, scheme: scheme,
                 to: directory.appending(path: "panneau-son-coupe-\(suffix).png")
             )
+
+            // Le tiroir des basses de la Geneva, en diffusion puis décochée : il agit dans les deux cas.
+            let genevaID = "raop/AABBCCDDEEFF@Geneva"
+            try writeHosted(
+                SimulatedGlass(scheme: scheme) {
+                    MenuBarPanelContent(
+                        state: .preview(.streaming),
+                        loginItem: LoginItemController(service: PreviewLoginItemService()),
+                        preview: PanelPreviewOptions(openDrawerSpeakerID: genevaID)
+                    )
+                }, scheme: scheme,
+                to: directory.appending(path: "panneau-basses-ouvert-\(suffix).png")
+            )
+
+            let unchecked = BridgeState.preview(.idle)
+            unchecked.outputs.first { $0.id == genevaID }?.isEnabled = false
+            try writeHosted(
+                SimulatedGlass(scheme: scheme) {
+                    MenuBarPanelContent(
+                        state: unchecked,
+                        loginItem: LoginItemController(service: PreviewLoginItemService()),
+                        preview: PanelPreviewOptions(openDrawerSpeakerID: genevaID)
+                    )
+                }, scheme: scheme,
+                to: directory.appending(path: "panneau-basses-decochee-\(suffix).png")
+            )
+
+            let mutedWithDrawer = BridgeState.preview(.streaming)
+            mutedWithDrawer.isMuted = true
+            try writeHosted(
+                SimulatedGlass(scheme: scheme) {
+                    MenuBarPanelContent(
+                        state: mutedWithDrawer,
+                        loginItem: LoginItemController(service: PreviewLoginItemService()),
+                        preview: PanelPreviewOptions(expandsOptions: true, openDrawerSpeakerID: genevaID)
+                    )
+                }, scheme: scheme,
+                to: directory.appending(path: "panneau-son-coupe-basses-options-\(suffix).png")
+            )
         }
 
         try MenuBarGlyphSheet.write(to: directory)
