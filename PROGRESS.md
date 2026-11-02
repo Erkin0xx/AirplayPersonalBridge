@@ -14,21 +14,22 @@ jamais joué. Les sections des jalons 1 à 4 décrivent leur état à leur date,
 
 | | |
 |---|---|
-| **Dernier jalon terminé** | Jalon 4 — synchronisation et dérive (validé **contre mock** le 2026-08-07) |
-| **Jalon en cours** | **Jalon 5 — intégration et interface : code complet, non clos** |
-| **Étape suivante** | **`docs/prompt_tests_materiel.md`** : tests sur le vrai matériel, puis clôture du jalon 5 |
+| **Dernier jalon terminé** | **Jalon 5 — intégration et interface, clos le 2026-11-02 sur le vrai matériel** |
+| **Jalon en cours** | Aucun : le projet atteint son objectif. Points ouverts listés en fin de jalon 5 |
+| **Étape suivante** | À décider avec Baptiste : paire stéréo présentée comme une seule enceinte, pannes de la phase 5, écoute au canapé |
 | **Dépôt** | `github.com/Erkin0xx/AirplayPersonalBridge`, branche `main` |
 
 **L'app diffuse depuis la barre de menus vers N enceintes en parallèle**, ce qui est l'objectif
-fonctionnel du projet (CDC section 2). Installation et lancement :
+fonctionnel du projet (CDC section 2). **Le 2026-11-02, la Geneva et les deux HomePod ont joué ensemble, en vraie
+stéréo, sans écho à l'oreille et à moins de 17 ms au micro.** Installation et lancement :
 
 ```
 scripts/setup-signing.sh       # une fois : identité de signature stable
 scripts/install-app.sh --open  # compile en Release, installe dans /Applications, lance
 ```
 
-Le CLI reste l'outil de validation. Il prend au plus une sortie de chaque protocole : trois
-enceintes à la fois ne passent que par l'app. `--tone` s'y passe de toute autorisation :
+Le CLI reste l'outil de validation, et de mesure (`--clicks`, `--record-input`, `--channel-test`,
+`scripts/measure-clicks.py`). `--airplay2` se répète. `--tone` s'y passe de toute autorisation :
 
 ```
 ./audiocap --airplay Geneva --airplay2 Salon 30
@@ -968,15 +969,15 @@ annoncée par la Geneva. Le message de ce commit ne rapporte aucune écoute apr�
 
 ---
 
-## Jalon 5 : intégration et interface — EN COURS, NON CLOS
+## Jalon 5 : intégration et interface — TERMINÉ le 2026-11-02 (validé CONTRE MATÉRIEL RÉEL, avec points ouverts)
 
 Dates : 2026-08-11 pour le début, 2026-11-01 et 02 pour cette passe complète sur tout le projet.
 
-> **Portée de la validation.** Baptiste n'avait pas accès au matériel pendant cette passe : **aucun
-> son qu'elle a produit n'a été entendu**. L'app a seulement été lancée au repos sur son Mac, où il a
-> regardé le rendu du panneau et du plan. La Geneva, éteinte, n'est jamais apparue. La clôture et le
-> verdict sur chaque critère de la section 8 du CDC appartiennent à la session de test matériel :
-> **`docs/prompt_tests_materiel.md`**.
+> **Portée de la validation.** Toutes les sous-sections, de « Ce qui a été fait » jusqu'à « Essai de bout en bout
+> contre mocks », décrivent la passe du 2026-11-01 et 02, **faite sans matériel** : rien de ce qu'elle a produit n'y avait
+> été entendu, et ses « à revalider » y sont restés tels quels. **La validation contre le matériel réel, et le verdict sur
+> chaque critère de la section 8 du CDC, sont dans la dernière sous-section**, « Session de test sur le matériel réel
+> (2026-11-02) — clôture », qui distingue entendu, mesuré et capture.
 >
 > Niveaux de preuve ci-dessous : **test** (`swift test`, faux senders ou faux récepteurs en boucle
 > locale), **mock** (contre `shairport-sync` ou `airplay2-receiver`), **rendu** (image regardée),
@@ -1114,3 +1115,83 @@ passe à SIGKILL ; messages au tutoiement partout ; `--browse` dit ce qui sera v
 - Ancrage RAOP 250 ms avant AirPlay 2 contre les mocks : c'était l'`Audio-Latency` de shairport, retranchée de l'ancrage. Tranché
   par la mesure au micro de la session matérielle (`2ba1336`), qui retire cette soustraction.
 - Pas d'`OPTIONS` avant `ANNOUNCE`, contrairement à macOS : la Geneva a joué sans.
+
+### Session de test sur le matériel réel (2026-11-02) — clôture
+
+Baptiste sur place une partie de la soirée : Geneva « Erki’s geneva », HomePod « Salon » et « Salon (2) » (paire stéréo),
+Apple TV « Apple TV Salon ». Déroulé : `docs/prompt_tests_materiel.md`. Niveaux de preuve : **entendu** (par Baptiste),
+**mesuré** (micro du Mac ou compteurs), **capture** (tshark sur `en0`, dans `captures/`), **non testé**.
+
+#### Ce qui a été validé sur le matériel réel
+
+| Point | Résultat | Niveau |
+|---|---|---|
+| **Trois enceintes ensemble, sans écho** | Geneva + Salon + Salon (2) depuis l'app, musique : « ça run bien, sans délai, c'est niquel » | **entendu** |
+| Calage entre enceintes | Son direct à table : Geneva +298 ms, Salon +290 ms, Salon (2) ~+307 ms, mesurés un par un. Écart ≤ 17 ms, sous le seuil de 20 à 30 ms | **mesuré** (clics, `scripts/measure-clicks.py`) |
+| Ancrage indépendant de la négociation | Trois sorties parties à 11,6 s d'écart : avance annoncée HomePod/HomePod à 0,1 ms près | **capture** |
+| Endurance 1 h | 1 h 02 (21:03 → 22:05), trois enceintes. **HomePod** : 465 269 paquets chacun, 0 erreur, 0 reconnexion, 0 trame refusée en diffusion, dérive résiduelle ±0,03 ms sans aucune correction, 2 510 et 2 554 demandes de retransmission toutes servies (`0xD5`/`0xD6`). **Geneva** : éteinte par sa propre veille à 21:18 (signal d'essai trop faible, −60 dBFS), rallumée par Baptiste : session **rétablie seule** à 21:53:17, 1 060 retransmissions servies, 0 erreur. Les HomePod n'ont rien vu de cette panne | **mesuré**, sinusoïde inaudible, pas d'écoute |
+| Geneva : RTSP complet | `ANNOUNCE`, `SETUP`, `/feedback` avant `RECORD` puis toutes les 25 s, `TEARDOWN` avec `Session`, tous en 200 ; `Audio-Latency: 4096` ; keepalive TCP toutes les 5 s, acquitté ; deux sessions de suite sans blocage | **capture** |
+| Geneva : synchro | `0xD4` : NTP − émission ≈ −0,10 s, champ 3 − champ 1 = 88 200, ΔNTP = Δrtp/44 100 à 0,000 ms près sur 59 paires ; décalage d'horloge mesuré 2,8 à 3,1 ms | **capture** |
+| Geneva : SDP sans `a=fmtp` | Elle annonce maintenant `cn=0,1` : L16 sans `fmtp`, décodé proprement (bips du test de canaux) | **entendu** |
+| HomePod : session | Après le correctif du 403 : `RECORD` 200, `/feedback` toutes les 2 s avec réponse, `0xD4` à NTP − émission ≈ 0, aucune `Audio-Latency` | **capture**, journaux |
+| Paire stéréo | Un membre seul ne joue que son canal ; deux sessions démarrées ensemble donnent la vraie stéréo | **entendu** |
+| Apple TV : `pair-verify` | Abouti avec les credentials pyatv, `X-Apple-HKP: 3` confirmé ; session et `TEARDOWN` acceptés | journaux, **capture** |
+| Retransmissions | Endurance : 2 510, 2 554 et 1 060 demandes `0xD5`, autant de réponses `0xD6` | **capture** |
+| Reprise après disparition d'une enceinte | Geneva hors réseau 35 min : 80 tentatives, puis session rétablie seule 2 s après son retour | **mesuré**, journaux |
+| Découverte sans connexion | `--browse` et `--browse2` : aucun SYN vers les appareils | **capture** |
+| Autorisations après recompilation | « Sons du système » et micro conservés après `make-cli-bundle.sh` (identité stable) | **mesuré** (tap à −30,6 dBFS) |
+| Capture par le tap, `--mute-local` | Voix jouée par `afplay`, capturée et diffusée, Mac muet | **entendu** |
+| Geneva éveillée | Session RAOP à −50 dBFS 60 Hz relancée en boucle : éveillée toute la soirée, ping 60/60 | **mesuré** |
+
+#### Défauts trouvés, et corrigés le jour même
+
+1. **403 sur tous les HomePod** (a0a706d). Le volume, envoyé avant `RECORD`, partait sans l'identité de contrôleur
+   des `SETUP` (`DACP-ID`, `Active-Remote`, `Client-Instance`, `User-Agent`) : pour le HomePod, un autre appareil.
+   Trouvé en comparant avec pyatv en `--debug`, qui pose les quatre en-têtes partout. Le sender présentait ce refus
+   comme un « appairage à faire », fausse piste à l'affichage, corrigée aussi.
+2. **Écho de la Geneva** (2ba1336) : la soustraction de son `Audio-Latency` (0cf8a31) la faisait jouer 84 ms trop tôt.
+   Mesuré au micro, confirmé à l'oreille avant et après.
+3. **Pair-setups simultanés vers les deux membres de la paire** (258e8e2) : l'un échouait à M3, et l'échec était
+   **définitif** (classé ainsi depuis 14b5adc), la sortie restait muette toute la session. Un seul pairing à la fois par
+   moteur (`PairingGate`), refus transitoire passager et réessayé.
+4. **Fermeture du HomePod au premier essai** (23ade13) : parade par une renégociation immédiate (cause non trouvée).
+5. **L'app ne s'arrêtait pas sur SIGTERM pendant une diffusion** (acee4c7, b24030c) : `terminate:` appelé dans un bloc de
+   la file principale, boucle imbriquée qui ne la vide plus, réponse `.terminateLater` jamais donnée. `kill -9` nécessaire,
+   donc sans `TEARDOWN`. Reproduit puis corrigé dans un vrai process AppKit (`Tests/TerminationProbe`).
+6. **Demande de Baptiste à l'usage** (213cf2c) : bouton de silence des enceintes, sans déconnexion, et tiroir « Basses »
+   sous la Geneva dans le widget. Livré et testé (rendus), **non vu dans l'app réelle**.
+
+**Tests** : suite complète **775 tests, tous verts** au moment de la clôture ; chaque correctif ci-dessus arrive avec un test qui échoue sans lui.
+
+Outils ajoutés pour la mesure (eab3a27 à 7bd7bb6) : `--clicks`, `--channel-test`, `--airplay2` répétable, `--bass`,
+`--record-input`, `scripts/measure-clicks.py`.
+
+#### Ce qui reste ouvert
+
+- **Paire stéréo, démarrage décalé** : deux sessions ouvertes à des moments différents s'expulsent en boucle. L'app les
+  démarre ensemble, mais **cocher un HomePod pendant que l'autre joue** relève du même cas (non essayé dans l'app). Suite
+  naturelle : présenter la paire comme une seule enceinte qui ouvre et relance ses deux sessions ensemble (ADR 009).
+- **Fermeture au premier essai** des HomePod après une session terminée : cause inconnue, parade en place.
+- **Apple TV** : aucun son, ni avec notre flux ni avec pyatv. Chemin écarté (ADR 009), pas expliqué.
+- **Non testé faute de temps ou de présence** : mesure au canapé et effet du changement de lieu ; ordre de lancement et
+  ajout à chaud mesurés au micro ; pannes provoquées de la phase 5 (453, Wi-Fi du Mac coupé, enceinte absente au
+  démarrage ; la disparition de la Geneva a eu lieu, mais non provoquée) ; tour complet de l'app de la phase 4 (veille, ouverture de session, liens des Réglages, entrée physique,
+  changement de sortie audio du Mac) ; basses à l'oreille ; bouton de silence et tiroir des basses dans l'app réelle.
+- **Fausse alerte de silence** quand rien ne joue, due à des processus `python` aux flux ouverts : le critère « une
+  application joue » est trop large.
+- Vérification manuelle de l'arrêt sur SIGTERM en pleine diffusion dans l'app réelle : faite par test, pas sur l'app.
+
+#### Critères de la section 8 du CDC
+
+| Critère | Verdict |
+|---|---|
+| Diffusion simultanée sans coupure vers la Geneva et les HomePod pendant plus d'une heure, sans désynchronisation audible | **Validé pour les HomePod, partiellement pour la Geneva** : 1 h 02 sans coupure ni perte sur la paire, dérive ±0,03 ms ; la Geneva s'est mise en veille à 15 min, faute d'un signal d'essai assez fort, et a repris seule à son retour. Pas de désynchronisation audible jugée sur l'heure (sinusoïde inaudible), mais aucun écho entendu à trois en début de soirée |
+| Volume réglable indépendamment par sortie | **Validé par test**, et utilisé dans l'app (master et trims) ; pas d'essai d'écoute dédié |
+| Reprise automatique après une perte de connexion temporaire | **Validé en conditions réelles, non provoqué** : Geneva disparue 35 min du réseau, session rétablie seule 2 s après son retour, les HomePod intacts ; expulsions mutuelles des HomePod reprises sans relance de l'app. Les pannes provoquées de la phase 5 (Wi-Fi coupé, 453) n'ont pas été faites |
+| Décalage résiduel sous 20 à 30 ms, automatique en priorité, manuel en secours | **Validé** : écart ≤ 17 ms mesuré enceinte par enceinte, aucun écho entendu à trois, sans aucun réglage manuel |
+
+#### Jalon 0 (OwnTone) : abandonné
+
+Il devait vérifier, avant d'écrire une ligne, que l'objectif était atteignable (CDC section 7). L'app native l'atteint
+aujourd'hui sur le vrai matériel : le test a perdu son objet. Comme référence de comportement, pyatv a suffi, et c'est lui
+qui a résolu le 403. Décision tracée en ADR 010.
