@@ -446,6 +446,19 @@ struct MenuBarPanelContent: View {
                 .help("Pendant une diffusion, changer de source la relance.")
             }
 
+            if let awaited = state.awaitedSourceName {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Passera sur \(awaited) dès que cette application jouera.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Button("Annuler", action: state.forgetAwaitedSource)
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 11))
+                }
+            }
+
             PanelOptionToggle(title: "Couper le son du Mac", isOn: $state.muteLocalOutput)
                 .disabled(state.selectedSource.tapMode == nil)
                 .help(

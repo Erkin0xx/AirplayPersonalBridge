@@ -78,6 +78,14 @@ struct ContentView: View {
                     .help("Rafraîchir la liste des applications qui jouent du son")
                 }
 
+                if let awaited = state.awaitedSourceName {
+                    HStack(spacing: 6) {
+                        Text("Passera sur \(awaited) dès que cette application jouera.").shadMuted()
+                        Button("Annuler", action: state.forgetAwaitedSource)
+                            .shadButton(.outline, size: .small)
+                    }
+                }
+
                 HStack(spacing: 6) {
                     ShadSwitch(isOn: $state.muteLocalOutput)
                     Text("Couper le son du Mac").shadMuted()

@@ -218,7 +218,7 @@ final class BridgeState {
     private(set) var selectedSource: CaptureSource = .systemWide
     /// Le dernier choix de l'utilisateur. Une application ne figure dans la liste que quand elle
     /// joue : ce choix attend son retour, et ne se confond pas avec le repli sur le mode global.
-    @ObservationIgnored private var preferredSourceID = CaptureSource.systemWide.id
+    private var preferredSourceID = CaptureSource.systemWide.id
 
     /// Coupe le son du Mac pendant la capture (Process Tap seulement). Option de démarrage du
     /// moteur : la changer pendant une diffusion demande donc de la relancer.
@@ -619,13 +619,31 @@ final class BridgeState {
     /// Choix explicite d'une source. Pendant une diffusion, la relance : un sélecteur sans effet
     /// serait un mensonge, et la capture ne se change pas à chaud (une seule capture à la fois).
     func selectSource(id: String) {
-        guard id != selectedSource.id, let source = sources.first(where: { $0.id == id }) else {
+        guard id != selectedSource.id else {
+            forgetAwaitedSource()
             return
         }
+        guard let source = sources.first(where: { $0.id == id }) else { return }
         preferredSourceID = id
         selectedSource = source
         scheduleSettingsSave()
         restartIfLive()
+    }
+
+    /// L'application choisie que la capture attend, `nil` si rien n'est attendu.
+    ///
+    /// Elle ne figure pas au sélecteur tant qu'elle ne joue pas. Sans ceci, rien ne disait que la
+    /// capture passerait sur elle à son premier son, en pleine diffusion d'autre chose.
+    var awaitedSourceName: String? {
+        guard preferredSourceID != selectedSource.id else { return nil }
+        return CaptureSource.applicationName(forID: preferredSourceID)
+    }
+
+    /// Renonce à l'application attendue : la source en cours devient le choix.
+    func forgetAwaitedSource() {
+        guard awaitedSourceName != nil else { return }
+        preferredSourceID = selectedSource.id
+        scheduleSettingsSave()
     }
 
     // MARK: - Diffusion

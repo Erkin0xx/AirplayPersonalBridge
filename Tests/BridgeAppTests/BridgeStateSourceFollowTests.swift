@@ -213,6 +213,55 @@ struct BridgeStateSourceFollowTests {
         await harness.stopStreaming()
     }
 
+    /// Une application choisie la veille et qui ne joue pas : le sélecteur montre le mode global, et
+    /// rien ne disait que la capture passerait sur elle à son premier son.
+    @Test("L'application attendue est dite, et y renoncer tient quand elle se remet à jouer")
+    func awaitedSourceCanBeForgotten() async throws {
+        let harness = BridgeHarness()
+        let music = CaptureSource.application(
+            pids: [42], name: "Music", bundleID: "com.apple.Music"
+        )
+        harness.sources = [.systemWide, music, .inputDevice]
+        harness.state.refreshSources()
+        harness.state.selectSource(id: music.id)
+        #expect(harness.state.awaitedSourceName == nil)
+
+        harness.sources = [.systemWide, .inputDevice]
+        harness.state.refreshSources()
+        #expect(harness.state.selectedSource == .systemWide)
+        #expect(harness.state.awaitedSourceName == "Music")
+
+        harness.state.forgetAwaitedSource()
+        #expect(harness.state.awaitedSourceName == nil)
+
+        harness.sources = [.systemWide, music, .inputDevice]
+        harness.state.refreshSources()
+        #expect(harness.state.selectedSource == .systemWide)
+    }
+
+    @Test("Rechoisir la source affichée renonce aussi à l'application attendue")
+    func reselectingForgets() {
+        let harness = BridgeHarness()
+        let music = CaptureSource.application(
+            pids: [42], name: "Music", bundleID: "com.apple.Music"
+        )
+        harness.sources = [.systemWide, music, .inputDevice]
+        harness.state.refreshSources()
+        harness.state.selectSource(id: music.id)
+        harness.sources = [.systemWide, .inputDevice]
+        harness.state.refreshSources()
+
+        harness.state.selectSource(id: CaptureSource.systemWide.id)
+        #expect(harness.state.awaitedSourceName == nil)
+    }
+
+    @Test("Un identifiant d'application donne un nom, même sans application installée")
+    func applicationNames() {
+        #expect(CaptureSource.applicationName(forID: CaptureSource.systemWide.id) == nil)
+        #expect(CaptureSource.applicationName(forID: CaptureSource.inputDevice.id) == nil)
+        #expect(CaptureSource.applicationName(forID: "app-com.example.Lecteur") == "Lecteur")
+    }
+
     @Test("Un choix de l'utilisateur prime sur le suivi en cours")
     func userChoiceWins() async throws {
         let harness = await streamingMusic()

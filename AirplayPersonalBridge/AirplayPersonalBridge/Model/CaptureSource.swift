@@ -31,7 +31,7 @@ enum CaptureSource: Hashable, Identifiable, Sendable {
     var id: String {
         switch self {
         case .systemWide: "system"
-        case let .application(_, _, bundleID): "app-\(bundleID)"
+        case let .application(_, _, bundleID): "\(Self.applicationIDPrefix)\(bundleID)"
         case .inputDevice: "input"
         }
     }
@@ -132,6 +132,19 @@ extension CaptureSource {
         else { return nil }
         let kept = captured.filter(isProcessAlive)
         return .application(pids: Set(kept + found).sorted(), name: name, bundleID: bundleID)
+    }
+
+    private static let applicationIDPrefix = "app-"
+
+    /// Le nom de l'application que désigne cet identifiant, `nil` s'il n'en désigne pas une. Elle peut
+    /// ne figurer dans aucune liste : seules y sont celles qui jouent.
+    static func applicationName(forID id: String) -> String? {
+        guard id.hasPrefix(applicationIDPrefix) else { return nil }
+        let bundleID = String(id.dropFirst(applicationIDPrefix.count))
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            return url.deletingPathExtension().lastPathComponent
+        }
+        return displayName(forBundleID: bundleID)
     }
 
     /// Le processus existe-t-il encore ? `EPERM` veut dire oui : il appartient à un autre utilisateur.
