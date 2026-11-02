@@ -68,10 +68,14 @@ struct BridgeSettings: Codable, Equatable {
     /// Option « Couper le son du Mac ». Désactivée par défaut, comme le veut le moteur : le son
     /// local reste un filet si les enceintes ne répondent pas.
     var muteLocalOutput = false
+    /// Option « Touches de volume du Mac → enceintes ». Activée par défaut, y compris pour un fichier
+    /// d'avant l'option, qui n'a pas ce champ.
+    var followsSystemVolume = true
     var outputs: [String: Output] = [:]
 
     private enum CodingKeys: String, CodingKey {
         case masterVolumeDB, isMuted, sourceID, muteLocalOutput, outputs
+        case followsSystemVolume
     }
 
     init() {}
@@ -87,6 +91,7 @@ struct BridgeSettings: Codable, Equatable {
         isMuted = fields.value(.isMuted, default: false)
         sourceID = fields.value(.sourceID, default: CaptureSource.systemWide.id)
         muteLocalOutput = fields.value(.muteLocalOutput, default: false)
+        followsSystemVolume = fields.value(.followsSystemVolume, default: true)
         // Entrée par entrée : une sortie abîmée ne doit pas coûter les réglages des autres.
         let entries = fields.value(.outputs, default: [String: TolerantOutput]())
         outputs = entries.compactMapValues(\.output)

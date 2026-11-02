@@ -354,17 +354,21 @@ final class BridgeHarness {
     private let timing: BridgeEnvironment.Timing
     private let permissions: StubPermissions
     private let tuning: BridgeEngine.Tuning
+    /// Le volume du Mac : aucune sortie par défaut, donc rien de lié (`SystemVolumeLinkTests`).
+    private let systemVolume: any SystemVolumeControlling
 
     init(
         settings: BridgeSettings = BridgeSettings(),
         timing: BridgeEnvironment.Timing = .fast,
         permissions: StubPermissions = StubPermissions(),
-        tuning: BridgeEngine.Tuning? = nil
+        tuning: BridgeEngine.Tuning? = nil,
+        systemVolume: any SystemVolumeControlling = NoSystemVolumeControl()
     ) {
         self.store = InMemorySettingsStore(settings)
         self.timing = timing
         self.permissions = permissions
         self.tuning = tuning ?? Self.fastTuning
+        self.systemVolume = systemVolume
     }
 
     static var fastTuning: BridgeEngine.Tuning {
@@ -399,7 +403,8 @@ final class BridgeHarness {
                 availableSources: { [weak self] in self?.sources ?? [.systemWide, .inputDevice] },
                 streamingActivity: activity,
                 timing: timing,
-                isProcessAlive: { [weak self] pid in !(self?.deadPIDs.contains(pid) ?? false) }
+                isProcessAlive: { [weak self] pid in !(self?.deadPIDs.contains(pid) ?? false) },
+                systemVolume: systemVolume
             )
         )
     }

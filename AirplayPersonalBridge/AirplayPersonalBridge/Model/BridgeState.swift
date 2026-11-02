@@ -243,12 +243,33 @@ final class BridgeState {
     /// Master logiciel, en dB (décision du jalon 5 : gain appliqué au signal, plus un trim
     /// par sortie). `-60` fait office de silence.
     var masterVolumeDB: Double = BridgeState.defaultMasterVolumeDB {
-        didSet { if oldValue != masterVolumeDB { scheduleSettingsSave() } }
+        didSet {
+            guard oldValue != masterVolumeDB else { return }
+            scheduleSettingsSave()
+            systemVolume.appDidChange(masterDB: masterVolumeDB)
+        }
     }
 
     var isMuted = false {
-        didSet { if oldValue != isMuted { scheduleSettingsSave() } }
+        didSet {
+            guard oldValue != isMuted else { return }
+            scheduleSettingsSave()
+            systemVolume.appDidChange(isMuted: isMuted)
+        }
     }
+
+    /// Option « Touches de volume du Mac → enceintes » : le volume et le silence du Mac règlent le
+    /// master et le silence des enceintes, et inversement (`SystemVolumeLink`).
+    var followsSystemVolume = true {
+        didSet {
+            guard oldValue != followsSystemVolume else { return }
+            scheduleSettingsSave()
+            systemVolume.isEnabled = followsSystemVolume
+        }
+    }
+
+    /// Le lien avec le volume du Mac (`BridgeState+SystemVolume.swift`).
+    @ObservationIgnored let systemVolume: SystemVolumeLink
 
     /// Gain effectif d'une sortie, master et trim confondus. C'est cette valeur, et elle
     /// seule, que le moteur appliquera — la vue n'en calcule aucune autre.
@@ -407,6 +428,9 @@ final class BridgeState {
     init(environment: BridgeEnvironment = .inert) {
         self.environment = environment
         self.engine = BridgeEngine(dependencies: environment.engineDependencies)
+        self.systemVolume = SystemVolumeLink(
+            control: environment.systemVolume, writeInterval: environment.timing.pollInterval
+        )
         self.sourceFollowPacer = SourceFollowPacer(
             minimum: environment.timing.sourceFollowMinimumSpacing,
             maximum: environment.timing.sourceFollowMaximumSpacing
@@ -418,6 +442,7 @@ final class BridgeState {
         self.masterVolumeDB = settings.masterVolumeDB
         self.isMuted = settings.isMuted
         self.muteLocalOutput = settings.muteLocalOutput
+        self.followsSystemVolume = settings.followsSystemVolume
         self.preferredSourceID = settings.sourceID
         if settings.sourceID == CaptureSource.inputDevice.id { selectedSource = .inputDevice }
 
@@ -438,6 +463,8 @@ final class BridgeState {
             .sorted {
                 $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
             }
+        systemVolume.isEnabled = settings.followsSystemVolume
+        systemVolume.onUpdate = { [weak self] in self?.applySystemVolume($0) }
     }
 
     private static func displayName(fromOutputID id: String) -> String {
@@ -457,6 +484,7 @@ final class BridgeState {
     /// sources et la recherche périodique. Idempotent.
     func startBackgroundWork() {
         guard discoveryLoop == nil else { return }
+        startFollowingSystemVolume()
         refreshSources()
         let interval = environment.timing.discoveryInterval
         discoveryLoop = Task { [weak self] in
@@ -1130,6 +1158,7 @@ final class BridgeState {
         result.isMuted = isMuted
         result.sourceID = preferredSourceID
         result.muteLocalOutput = muteLocalOutput
+        result.followsSystemVolume = followsSystemVolume
         for output in outputs {
             result.outputs[output.id] = BridgeSettings.Output(
                 isEnabled: output.isEnabled, trimDB: output.trimDB, delayMS: output.delayMS,

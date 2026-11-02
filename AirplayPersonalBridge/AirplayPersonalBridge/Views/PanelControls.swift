@@ -370,6 +370,8 @@ struct PanelOptionToggle: View {
     let title: String
     /// Une précision sous le libellé, quand il pourrait se confondre avec une autre commande.
     var detail: String?
+    /// Ce que VoiceOver annonce, quand le libellé visible se lit mal à voix haute.
+    var accessibilityTitle: String?
     @Binding var isOn: Bool
     @Environment(\.isEnabled) private var isEnabled
 
@@ -388,7 +390,7 @@ struct PanelOptionToggle: View {
             }
             .accessibilityHidden(true)
             Spacer(minLength: 4)
-            Toggle(title, isOn: $isOn)
+            Toggle(accessibilityTitle ?? title, isOn: $isOn)
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.mini)
