@@ -402,7 +402,9 @@ public actor RAOPSender {
     private func refreshAddress() async {
         guard let rediscover else { return }
         let found = try? await untilCancelled { await rediscover() }
-        guard let found, found.host != device.host || found.port != device.port else { return }
+        guard let found, found.host != device.host || found.port != device.port,
+            BonjourAddressResolver.canReplace(known: device.host, with: found.host)
+        else { return }
         log.info(
             "\(self.device.displayName, privacy: .public) : nouvelle adresse \(found.host, privacy: .public):\(found.port)"
         )

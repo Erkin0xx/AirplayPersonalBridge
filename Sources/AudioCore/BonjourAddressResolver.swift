@@ -176,6 +176,15 @@ enum BonjourAddressResolver {
             .address
     }
 
+    /// Une relecture peut-elle remplacer l'adresse connue ?
+    ///
+    /// Pas une IPv4 par une IPv6. A et AAAA reviennent séparément quand un appareil redémarre, et
+    /// l'IPv6 retenue en repli n'est alors qu'un état passager : RAOP ne sait pas la viser, le HomePod
+    /// y refuse le `SETUP`, et l'IPv4 connue redeviendrait valable entre-temps.
+    static func canReplace(known: String, with found: String) -> Bool {
+        IPv4Address(known) == nil || IPv6Address(found) == nil
+    }
+
     /// Rang d'une adresse littérale, `nil` si elle est illisible. `0` est le meilleur.
     private static func preference(of literal: String) -> Int? {
         if let address = IPv4Address(literal) { return address.isLinkLocal ? 1 : 0 }

@@ -525,3 +525,19 @@ private final class OneShotRelease: @unchecked Sendable {
         }
     }
 }
+
+@Suite("Adresse relue : ce qui peut remplacer l'adresse connue")
+struct AddressReplacementTests {
+    @Test("Une IPv4 n'est remplacée que par une IPv4")
+    func ipv4StaysIPv4() {
+        #expect(BonjourAddressResolver.canReplace(known: "192.168.1.20", with: "192.168.1.42"))
+        #expect(!BonjourAddressResolver.canReplace(known: "192.168.1.20", with: "fe80::1"))
+        #expect(!BonjourAddressResolver.canReplace(known: "192.168.1.20", with: "2a01:db8::1"))
+    }
+
+    @Test("Une IPv6 cède à tout, un récepteur sans IPv4 reste suivi")
+    func ipv6GivesWay() {
+        #expect(BonjourAddressResolver.canReplace(known: "fe80::1", with: "192.168.1.42"))
+        #expect(BonjourAddressResolver.canReplace(known: "fe80::1", with: "fe80::2"))
+    }
+}

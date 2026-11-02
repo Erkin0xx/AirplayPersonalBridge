@@ -17,8 +17,12 @@ private final class LoopbackRAOPReceiver: @unchecked Sendable {
     init() throws {}
 
     /// Démarre l'écoute et rend le port attribué.
-    func start() async throws -> UInt16 {
-        let opened = try await startLoopbackListener(on: queue) { [weak self] connection in
+    ///
+    /// - Parameter port: un numéro à reprendre, celui d'un récepteur qui revient au même endroit.
+    func start(on port: UInt16? = nil) async throws -> UInt16 {
+        let opened = try await startLoopbackListener(
+            on: queue, firstPort: port, reusingAddress: port != nil
+        ) { [weak self] connection in
             self?.accept(connection)
         }
         listener = opened.listener
@@ -154,10 +158,13 @@ private final class LookupLog: @unchecked Sendable {
     private let lock = NSLock()
     private var entries: [(name: String, matching: ReceiverNameMatching, passes: Int?)] = []
     private var currentPort: UInt16
+    private var currentHost = "127.0.0.1"
 
     init(port: UInt16) { currentPort = port }
 
     func move(to port: UInt16) { lock.withLock { currentPort = port } }
+
+    func answer(host: String) { lock.withLock { currentHost = host } }
 
     var lookups: [(name: String, matching: ReceiverNameMatching, passes: Int?)] {
         lock.withLock { entries }
@@ -169,10 +176,54 @@ private final class LookupLog: @unchecked Sendable {
         lock.withLock {
             entries.append((name, matching, passes))
             return RAOPDevice(
-                serviceName: "000000000000@Boucle", host: "127.0.0.1", port: currentPort,
+                serviceName: "000000000000@Boucle", host: currentHost, port: currentPort,
                 txt: ["et": "0", "cn": "0", "sr": "44100", "ss": "16", "ch": "2"]
             )
         }
+    }
+}
+
+@Suite("Relecture d'adresse : l'IPv4 connue n'est pas remplacée par une IPv6")
+struct RAOPAddressRefreshTests {
+    /// A et AAAA reviennent séparément quand un appareil redémarre. Adopter l'IPv6 du moment faisait
+    /// échouer chaque tentative en `ipv4Required`, sans même se connecter.
+    @Test("Une relecture qui ne rend qu'une IPv6 laisse la reconnexion viser l'IPv4")
+    func ipv6OnlyLookupKeepsIPv4() async throws {
+        let first = try LoopbackRAOPReceiver()
+        let port = try await first.start()
+        defer { first.stop() }
+        let back = try LoopbackRAOPReceiver()
+        defer { back.stop() }
+
+        let log = LookupLog(port: port)
+        var dependencies = BridgeEngine.Dependencies.live
+        dependencies.senderFactory = LiveOutputSenderFactory(
+            findRAOP: { name, matching, passes in
+                log.find(name: name, matching: matching, passes: passes)
+            },
+            findAirPlay2: { name, _, _ in
+                throw AirPlay2DiscoveryError.notFound(name: name, seen: [])
+            },
+            rediscoveryInterval: 1
+        )
+        dependencies.tuning.monitorInterval = .milliseconds(20)
+        let engine = BridgeEngine(dependencies: dependencies)
+        let output = BridgeEngine.OutputRequest(
+            id: "boucle", proto: .raop, deviceName: "Boucle", volumeDB: -30
+        )
+        try await engine.start(source: .tone(frequency: 440, levelDBFS: -50), outputs: [output])
+        #expect(await eventually { await engine.phase(of: "boucle") == .streaming })
+
+        let lookupsBefore = log.lookups.count
+        log.answer(host: "fe80::1")
+        first.stop()
+        #expect(await eventually(timeout: .seconds(15)) { log.lookups.count > lookupsBefore })
+
+        #expect(try await back.start(on: port) == port)
+        #expect(await eventually(timeout: .seconds(15)) {
+            await engine.phase(of: "boucle") == .streaming
+        })
+        await engine.stop()
     }
 }
 

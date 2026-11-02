@@ -592,7 +592,9 @@ public actor AirPlay2Sender {
     private func refreshAddress() async {
         guard let rediscover else { return }
         let found = try? await untilCancelled { await rediscover() }
-        guard let found, found.host != device.host || found.port != device.port else { return }
+        guard let found, found.host != device.host || found.port != device.port,
+            BonjourAddressResolver.canReplace(known: device.host, with: found.host)
+        else { return }
         let known = device.deviceIdentifier.lowercased()
         let announced = found.deviceIdentifier.lowercased()
         guard known.isEmpty || announced.isEmpty || known == announced else {
