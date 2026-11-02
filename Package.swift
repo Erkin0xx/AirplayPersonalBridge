@@ -133,6 +133,14 @@ let package = Package(
             path: "Tests/BridgeAppTests",
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
+        // Ce que le CLI décide seul, sans moteur ni réseau : la répartition des options répétées
+        // sur les sorties, et le JSON de mesure. Un exécutable se teste par `@testable import`,
+        // sans que sa logique migre dans le cœur, qui n'a pas à connaître la ligne de commande.
+        .testTarget(
+            name: "audiocapTests",
+            dependencies: ["audiocap", "AudioCore"],
+            path: "Tests/audiocapTests"
+        ),
         .testTarget(
             name: "AudioCoreTests",
             // CSRP est en dépendance directe des tests : ils implémentent le **côté

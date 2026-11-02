@@ -164,6 +164,11 @@ struct DiagnosticsView: View {
                 if let unanswered = statistics.feedbackUnanswered {
                     metric("Feedback sans réponse", unanswered)
                 }
+                // La parade au défaut de début de session des HomePod : la voir jouer sur le matériel
+                // dit si le défaut est toujours là.
+                if let renegotiations = statistics.earlyCloseRenegotiations {
+                    metric("Relances après fermeture précoce", renegotiations)
+                }
                 if let connected = statistics.eventChannelConnected {
                     metricText(
                         "Canal d'événements",

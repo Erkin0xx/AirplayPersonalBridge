@@ -12,8 +12,8 @@ import Testing
 ///
 /// La règle « sans allocation dans le callback » est un invariant de la section 12, et rien dans
 /// le langage ne le garantit : un `Array` temporaire ou une fermeture capturante s'y glisse sans
-/// bruit. Cette sonde en fait une assertion.
-private enum AllocationProbe {
+/// bruit. Cette sonde en fait une assertion. Partagée avec `MeasurementSourceTests`.
+enum AllocationProbe {
     private typealias Logger = @convention(c) (UInt32, UInt, UInt, UInt, UInt, UInt32) -> Void
 
     /// Identifiant du thread observé, zéro si aucun. Atomique, seul de ces champs à l'être : le

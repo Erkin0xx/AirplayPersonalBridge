@@ -29,7 +29,8 @@ un projet d'intégration protocolaire.
 
 ## Écarts par rapport à l'amont
 
-Aucune modification du code cryptographique lui-même. Quatre écarts de packaging seulement :
+Quatre écarts de packaging, sans toucher au code cryptographique. La seule modification de ce
+code est celle de `CSRP/srp.c`, décrite plus bas :
 
 1. **`CEd25519` : `seed.c` retiré.** Il tire son entropie de `/dev/urandom` en C ; le projet
    sème depuis Swift. La macro `ED25519_NO_SEED` (déclarée dans `Package.swift`) neutralise
