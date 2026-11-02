@@ -1,6 +1,8 @@
 import Foundation
 import Testing
 
+@testable import BridgeApp
+
 /// Repère le dossier des produits de compilation : la sonde y est compilée à côté du bundle de test.
 private final class ProductsLocator: NSObject {}
 
@@ -55,11 +57,12 @@ struct TerminationSignalTests {
 
     /// Le défaut constaté sur l'app réelle : appelé depuis le gestionnaire de la source, `terminate`
     /// attendait sa réponse dans une boucle qui ne drainait plus la file principale. L'arrêt ne
-    /// s'achevait jamais, AppKit n'avait jamais sa réponse, et la sonde finissait par `BLOQUE`.
+    /// s'achevait jamais : la sonde finissait par `BLOQUE`, et depuis `TerminationReply`, par une
+    /// réponse de secours sans `ARRET-TERMINE`, c'est-à-dire sans `TEARDOWN`.
     @Test("SIGTERM pendant un arrêt différé : l'arrêt s'achève, AppKit a sa réponse, l'app quitte")
     func sigtermLetsShutdownFinish() async throws {
         let outcome = try await runProbe(mode: "sigterm")
-        #expect(outcome.steps == ["PRET", "DEMANDE", "ARRET-TERMINE", "FIN"])
+        #expect(outcome.steps == ["PRET", "DEMANDE", "ARRET-TERMINE", "REPONSE", "FIN"])
         #expect(outcome.reason == .exit)
         #expect(outcome.status == 0)
     }
@@ -68,8 +71,55 @@ struct TerminationSignalTests {
     @Test("Un second SIGTERM pendant l'arrêt ne l'écourte pas")
     func repeatedSigtermIsIgnored() async throws {
         let outcome = try await runProbe(mode: "sigterm-repete")
-        #expect(outcome.steps == ["PRET", "DEMANDE", "SECOND-SIGTERM", "ARRET-TERMINE", "FIN"])
+        #expect(
+            outcome.steps == ["PRET", "DEMANDE", "SECOND-SIGTERM", "ARRET-TERMINE", "REPONSE", "FIN"]
+        )
         #expect(outcome.reason == .exit)
         #expect(outcome.status == 0)
+    }
+
+    /// Le même interblocage, pour tout autre appelant de `terminate` depuis la file principale : une
+    /// tâche `@MainActor` en est un. L'arrêt ne peut pas tourner, le filet de secours répond.
+    @Test("Appelé depuis la file principale, `terminate` a quand même sa réponse")
+    func fallbackAnswersWhenMainActorIsStuck() async throws {
+        let outcome = try await runProbe(mode: "file-principale")
+        #expect(outcome.steps == ["PRET", "DEMANDE", "REPONSE", "FIN"])
+        #expect(outcome.reason == .exit)
+        #expect(outcome.status == 0)
+    }
+}
+
+/// `TerminationReply` dans le process de test, dont la boucle principale ne tourne que si on la fait
+/// tourner : d'où `pumpMainRunLoop`.
+@Suite("Coquille — réponse à AppKit")
+struct TerminationReplyTests {
+    /// Fait tourner la boucle principale, où vit le minuteur de secours, jusqu'à la condition.
+    private func pumpMainRunLoop(for duration: Duration, until condition: () -> Bool = { false }) {
+        let deadline = ContinuousClock.now + duration
+        while !condition(), ContinuousClock.now < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+    }
+
+    @Test("Sans réponse de l'arrêt, le filet de secours répond, une seule fois")
+    func fallbackAnswersOnce() {
+        var replies = 0
+        let answer = TerminationReply(fallbackAfter: .milliseconds(20)) { replies += 1 }
+        pumpMainRunLoop(for: .seconds(5)) { replies > 0 }
+        #expect(replies == 1)
+        answer.send()
+        #expect(replies == 1)
+    }
+
+    /// Sans cela, AppKit recevrait une seconde réponse, après celle de l'arrêt.
+    @Test("Une fois l'arrêt achevé, le filet de secours ne répond plus")
+    func sendDisarmsFallback() {
+        var replies = 0
+        let answer = TerminationReply(fallbackAfter: .milliseconds(20)) { replies += 1 }
+        answer.send()
+        answer.send()
+        #expect(replies == 1)
+        pumpMainRunLoop(for: .milliseconds(150))
+        #expect(replies == 1)
     }
 }

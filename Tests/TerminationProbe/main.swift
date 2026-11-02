@@ -3,14 +3,16 @@ import BridgeApp
 
 // Sonde lancée par `TerminationSignalTests` : un vrai process AppKit qui reçoit SIGTERM pendant un
 // arrêt différé, comme l'app quand `scripts/install-app.sh` l'arrête en pleine diffusion. Sans
-// moteur ni réseau : le délégué tient le rôle d'`AppLifecycle`, répond `.terminateLater` et ne
-// répond qu'une fois achevé un arrêt qui repasse par le MainActor, comme l'arrêt des sorties.
+// moteur ni réseau : le délégué tient le rôle d'`AppLifecycle`. Il répond `.terminateLater`, puis
+// répond par `TerminationReply` une fois achevé un arrêt qui repasse par le MainActor, comme
+// l'arrêt des sorties.
 //
 // Chaque étape s'écrit sur une ligne de la sortie standard, le test en vérifie la suite :
 //   PRET            l'app tourne, `TerminationSignal` est installé
 //   DEMANDE         AppKit demande au délégué s'il peut quitter
 //   SECOND-SIGTERM  (mode `sigterm-repete`) le second signal est arrivé
-//   ARRET-TERMINE   l'arrêt a pu s'achever sur le MainActor, la réponse part
+//   ARRET-TERMINE   l'arrêt a pu s'achever sur le MainActor
+//   REPONSE         AppKit reçoit sa réponse : après ARRET-TERMINE, ou du filet de secours sans lui
 //   FIN             `applicationWillTerminate` : AppKit quitte, code 0
 //   BLOQUE          rien de tout cela à temps : le garde-fou quitte, code 3
 
@@ -19,6 +21,14 @@ enum Mode: String {
     case sigterm
     /// Un second SIGTERM pendant l'arrêt, qui ne doit pas l'écourter.
     case sigtermRepete = "sigterm-repete"
+    /// `terminate` appelé depuis un bloc de la file principale, sans `TerminationSignal` : le
+    /// MainActor ne tourne plus pendant l'attente, seul le filet de secours peut répondre.
+    case mainQueue = "file-principale"
+
+    /// Celui d'un arrêt qui tourne ne doit jamais se déclencher : bien au-delà de `shutdownDuration`.
+    var fallbackDelay: Duration {
+        self == .mainQueue ? .seconds(1) : .seconds(5)
+    }
 }
 
 /// Hors du MainActor : le garde-fou écrit depuis une autre file.
@@ -42,17 +52,26 @@ final class ProbeDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         if mode == .sigtermRepete { observeSecondSignal() }
         report("PRET")
-        kill(getpid(), SIGTERM)
+        switch mode {
+        case .sigterm, .sigtermRepete:
+            kill(getpid(), SIGTERM)
+        case .mainQueue:
+            DispatchQueue.main.async { NSApplication.shared.terminate(nil) }
+        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         report("DEMANDE")
         if mode == .sigtermRepete { kill(getpid(), SIGTERM) }
+        let answer = TerminationReply(fallbackAfter: mode.fallbackDelay) {
+            report("REPONSE")
+            sender.reply(toApplicationShouldTerminate: true)
+        }
         Task {
             if mode == .sigtermRepete { await waitForSecondSignal() }
             try? await Task.sleep(for: shutdownDuration)
             report("ARRET-TERMINE")
-            sender.reply(toApplicationShouldTerminate: true)
+            answer.send()
         }
         return .terminateLater
     }
@@ -104,5 +123,5 @@ let app = NSApplication.shared
 app.setActivationPolicy(.prohibited)
 let delegate = ProbeDelegate(mode: mode)
 app.delegate = delegate
-TerminationSignal.install()
+if mode != .mainQueue { TerminationSignal.install() }
 app.run()
