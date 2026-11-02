@@ -75,6 +75,9 @@ public struct OutputStatistics: Sendable, Equatable {
     public var feedbackUnanswered: Int?
     /// AirPlay 2 : canal d'événements ouvert.
     public var eventChannelConnected: Bool?
+    /// AirPlay 2 : négociations refaites aussitôt après une fermeture du récepteur en tout début de
+    /// session, le défaut relevé sur les HomePod au premier essai qui suit une session terminée.
+    public var earlyCloseRenegotiations: Int?
 
     public init() {}
 }
@@ -152,6 +155,7 @@ extension AirPlay2Sender: OutputSender {
         result.eventChannelConnected = source.eventChannelConnected
         result.reportedLatencyFrames = source.reportedLatencyFrames
         result.feedbackUnanswered = source.feedbackUnanswered
+        result.earlyCloseRenegotiations = source.earlyCloseRenegotiations
         return result
     }
 }

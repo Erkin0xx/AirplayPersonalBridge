@@ -58,6 +58,10 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         case silent
         /// Ferme la connexion de contrôle sans répondre.
         case close
+        /// Répond normalement, puis ferme aussitôt la connexion de contrôle (FIN). C'est ce que
+        /// font les HomePod au premier essai qui suit une session terminée : réponse au `SETUP` du
+        /// flux, puis `FIN` dans la même milliseconde.
+        case respondThenClose
         /// Répond normalement, mais plus tard.
         case delayed(TimeInterval)
     }
@@ -130,6 +134,11 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         var connection: NWConnection?
         /// `Client-Instance` et `DACP-ID` du premier `SETUP` : l'identité du contrôleur de la session.
         var controllerIdentity: (clientInstance: String?, dacpID: String?)?
+        /// La prochaine réponse est suivie de la fermeture de la connexion.
+        var closeAfterNextResponse = false
+        /// Arrivée de la connexion, et fermeture provoquée par `respondThenClose`.
+        var acceptedAt = ContinuousClock.now
+        var closedAt: ContinuousClock.Instant?
         /// Requêtes refusées pour une identité de contrôleur étrangère à la session.
         var forbiddenRequests: [Request] = []
     }
@@ -191,6 +200,14 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
     // MARK: - Observation
 
     var sessionCount: Int { queue.sync { sessions.count } }
+
+    func acceptedAt(session index: Int) -> ContinuousClock.Instant? {
+        queue.sync { index < sessions.count ? sessions[index].acceptedAt : nil }
+    }
+
+    func closedAt(session index: Int) -> ContinuousClock.Instant? {
+        queue.sync { index < sessions.count ? sessions[index].closedAt : nil }
+    }
 
     func requests(inSession index: Int? = nil) -> [Request] {
         queue.sync {
@@ -394,6 +411,9 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         case .close:
             session.connection?.cancel()
             session.connection = nil
+        case .respondThenClose:
+            session.closeAfterNextResponse = true
+            route(request, session: session)
         case let .delayed(delay):
             queue.asyncAfter(deadline: .now() + delay) { [weak self] in
                 self?.route(request, session: session)
@@ -473,7 +493,17 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         if let outbound = session.outbound, let sealed = try? outbound.seal(message) {
             message = sealed
         }
-        session.connection?.send(content: message, completion: .contentProcessed { _ in })
+        if session.closeAfterNextResponse, let connection = session.connection {
+            // Réponse puis FIN, dans le même envoi : le sender reçoit l'une et voit l'autre aussitôt.
+            session.closeAfterNextResponse = false
+            session.closedAt = .now
+            session.connection = nil
+            connection.send(
+                content: message, contentContext: .finalMessage, isComplete: true,
+                completion: .contentProcessed { _ in connection.cancel() })
+        } else {
+            session.connection?.send(content: message, completion: .contentProcessed { _ in })
+        }
 
         if let secret = enableEncryptionAfterwards {
             session.sharedSecret = secret

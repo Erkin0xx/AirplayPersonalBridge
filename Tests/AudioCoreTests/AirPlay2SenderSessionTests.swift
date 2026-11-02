@@ -239,6 +239,176 @@ struct AirPlay2SenderSessionTests {
         await client.disconnect()
     }
 
+    // MARK: - Fermeture du récepteur en début de session
+
+    /// Ferme la première connexion de contrôle juste après la réponse à `method` — `occurrence` 1
+    /// d'un `SETUP` est celui du flux, l'URI de session changeant à chaque connexion.
+    private func closingOnce(
+        after method: String, occurrence wanted: Int = 0, every: Bool = false
+    ) -> @Sendable (FakeAirPlay2Receiver.Request, Int) -> FakeAirPlay2Receiver.Action {
+        let closed = LockedFlag()
+        return { request, occurrence in
+            guard request.method == method, occurrence == wanted, every || !closed.value else {
+                return .normal
+            }
+            closed.set()
+            return .respondThenClose
+        }
+    }
+
+    /// Le défaut relevé sur les HomePod : la première connexion après une session terminée reçoit
+    /// un `FIN` dans la milliseconde qui suit la réponse au `SETUP` du flux. Le moteur relançait 7 s
+    /// plus tard ; le sender renégocie lui-même, aussitôt.
+    @Test("Une fermeture juste après le SETUP du flux est rattrapée aussitôt, dans start()")
+    func fermetureApresSetupFlux() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        receiver.script = closingOnce(after: "SETUP", occurrence: 1)
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        // `start()` aboutit : la relance a eu lieu en lui, sans repasser par le moteur.
+        try await harness.sender.start(volume: -20)
+        let finished = ContinuousClock.now
+
+        #expect(await harness.sender.state == .streaming)
+        #expect(receiver.sessionCount == 2)
+        // Le délai qui compte est celui de la relance, du FIN à la connexion suivante : 500 ms, là où
+        // le moteur attendait au moins 2 s plus la résolution. La durée totale de `start()` ajoute
+        // deux pair-setup SRP, de 0,1 à 4 s chacun en debug sur une machine chargée ; depuis le FIN,
+        // il n'en reste qu'un.
+        let closed = try #require(receiver.closedAt(session: 0))
+        let reopened = try #require(receiver.acceptedAt(session: 1))
+        #expect(reopened - closed >= .milliseconds(450))
+        #expect(reopened - closed < .milliseconds(1_200), "\(reopened - closed)")
+        #expect(finished - closed < .seconds(2), "\(finished - closed)")
+        #expect(await waitUntil { receiver.audioPackets(inSession: 1).count >= 5 })
+        #expect(receiver.volumes(inSession: 1) == ["volume: -20.0\r\n"])
+        // Pair-setup refait : une nouvelle connexion, une négociation complète.
+        #expect(receiver.requests(inSession: 1).filter { $0.uri == "/pair-setup" }.count == 2)
+        let statistics = await harness.sender.statistics
+        #expect(statistics.earlyCloseRenegotiations == 1)
+        // Aucune session n'avait tenu : ce n'est pas une reconnexion.
+        #expect(statistics.reconnections == 0)
+        #expect(statistics.lastFailure == nil)
+        #expect(await harness.sender.currentOutputStatistics().earlyCloseRenegotiations == 1)
+        await harness.sender.stop()
+    }
+
+    /// L'autre forme du même défaut, une fois sur trois : le `FIN` suit de 6 à 200 ms un `RECORD`
+    /// accepté. La supervision attendait 2 s avant de reconnecter.
+    @Test("Une fermeture juste après le RECORD est rattrapée aussitôt, par la supervision")
+    func fermetureApresRecord() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        receiver.script = closingOnce(after: "RECORD")
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        try await harness.sender.start(volume: -20)
+        #expect(
+            await waitUntil(timeout: .milliseconds(1_500)) {
+                receiver.audioPackets(inSession: 1).count >= 5
+            })
+        #expect(await harness.sender.state == .streaming)
+        #expect(receiver.sessionCount == 2)
+        let statistics = await harness.sender.statistics
+        #expect(statistics.earlyCloseRenegotiations == 1)
+        #expect(statistics.reconnections == 1)
+        await harness.sender.stop()
+    }
+
+    /// Passé la première seconde, une fermeture est une perte ordinaire : le repli d'avant, pas de
+    /// relance rapide. Sans cette borne, la parade masquerait de vraies pertes en régime établi.
+    @Test("Une fermeture en régime établi garde le repli ordinaire")
+    func fermetureEnRegimeEtabli() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        await harness.sender.setKeepAlivePolicy(.init(interval: .milliseconds(100)))
+        try await harness.sender.start(volume: -20)
+        try await Task.sleep(for: .milliseconds(1_200))
+        receiver.dropControlConnection(inSession: 0)
+
+        // Le repli ordinaire attend au moins 2 s : rien dans la seconde.
+        try await Task.sleep(for: .seconds(1))
+        #expect(receiver.sessionCount == 1)
+        #expect(await waitUntil { receiver.audioPackets(inSession: 1).count >= 5 })
+        let statistics = await harness.sender.statistics
+        #expect(statistics.earlyCloseRenegotiations == 0)
+        #expect(statistics.reconnections == 1)
+        await harness.sender.stop()
+    }
+
+    /// Une session née d'une relance rapide qui tombe à son tour aussitôt ne vaut pas une seconde
+    /// relance rapide : le repli ordinaire reprend.
+    @Test("Une session née d'une relance rapide n'en obtient pas une seconde")
+    func pasDeSecondeRelanceRapide() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        receiver.script = closingOnce(after: "SETUP", occurrence: 1)
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        try await harness.sender.start(volume: -20)
+        #expect(await harness.sender.statistics.earlyCloseRenegotiations == 1)
+        // La session de la relance tombe à son tour, juste après le `RECORD`.
+        receiver.dropControlConnection(inSession: 1)
+
+        try await Task.sleep(for: .seconds(1))
+        #expect(receiver.sessionCount == 2)
+        #expect(await waitUntil { receiver.audioPackets(inSession: 2).count >= 5 })
+        let statistics = await harness.sender.statistics
+        #expect(statistics.earlyCloseRenegotiations == 1)
+        #expect(statistics.reconnections == 1)
+        await harness.sender.stop()
+    }
+
+    /// Une seule relance rapide : un récepteur qui ferme à chaque fois retombe sur le comportement
+    /// d'avant, l'échec rendu au moteur.
+    @Test("La relance rapide est unique, puis l'échec est rendu au moteur")
+    func relanceRapideBornee() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        receiver.script = closingOnce(after: "SETUP", occurrence: 1, every: true)
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        await #expect(throws: AirPlay2SenderError.connectionLost(receiver: "Récepteur simulé")) {
+            try await harness.sender.start(volume: -20)
+        }
+        #expect(receiver.sessionCount == 2)
+        #expect(await harness.sender.state == .failed)
+        #expect(await harness.sender.statistics.earlyCloseRenegotiations == 1)
+    }
+
+    /// `stop()` pendant l'attente de la relance : rien ne doit repartir, et `start()` rend la main.
+    @Test("stop() pendant la relance rapide rend la main aussitôt")
+    func stopPendantRelanceRapide() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        receiver.script = closingOnce(after: "SETUP", occurrence: 1)
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        let sender = harness.sender
+        let task = Task { try await sender.start(volume: -20) }
+        // La première connexion est fermée et la seconde pas encore ouverte : la relance attend.
+        // Le compteur avance juste avant l'attente, sans suspension entre les deux.
+        #expect(await waitUntil { await sender.statistics.earlyCloseRenegotiations == 1 })
+        #expect(receiver.sessionCount == 1)
+        let start = ContinuousClock.now
+        await sender.stop()
+        let result = await task.result
+        #expect(ContinuousClock.now - start < .milliseconds(400))
+        #expect(throws: CancellationError.self) { try result.get() }
+        #expect(await sender.state == .idle)
+        try await Task.sleep(for: .milliseconds(700))
+        #expect(receiver.sessionCount == 1)
+    }
+
     // MARK: - Retransmission
 
     /// Le cœur du point 1 : ce que le récepteur reçoit doit être le paquet d'origine, à l'octet
