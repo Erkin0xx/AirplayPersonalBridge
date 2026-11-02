@@ -82,6 +82,8 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         /// Port de données annoncé à la place du vrai : `0` fait échouer chaque `sendto`, le seul
         /// moyen de provoquer une erreur d'émission sans toucher au réseau.
         var announcedDataPort: Int?
+        /// `Audio-Latency` rendue au `RECORD`. `nil` : aucun en-tête, comme le mock.
+        var announcedAudioLatency: Int?
     }
 
     /// Tout ce qui concerne une session, c'est-à-dire une connexion de contrôle.
@@ -395,7 +397,12 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
                 session.volumes.append(text)
             }
             respond(to: request, session: session)
-        case ("RECORD", _), ("TEARDOWN", _):
+        case ("RECORD", _):
+            respond(
+                to: request, session: session,
+                extraHeaders: options.announcedAudioLatency.map { "Audio-Latency: \($0)\r\n" } ?? ""
+            )
+        case ("TEARDOWN", _):
             respond(to: request, session: session)
         default:
             respond(to: request, session: session, status: 404, reason: "Not Found")
@@ -409,6 +416,7 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         reason: String = "OK",
         body: Data = Data(),
         contentType: String? = nil,
+        extraHeaders: String = "",
         enableEncryptionAfterwards: Data? = nil
     ) {
         requestInProgress[ObjectIdentifier(session)] = false
@@ -416,6 +424,7 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         text += "Server: AirTunes/366.0\r\n"
         if let cseq = request.headers["cseq"] { text += "CSeq: \(cseq)\r\n" }
         if let contentType { text += "Content-Type: \(contentType)\r\n" }
+        text += extraHeaders
         text += "Content-Length: \(body.count)\r\n\r\n"
         var message = Data(text.utf8)
         message.append(body)

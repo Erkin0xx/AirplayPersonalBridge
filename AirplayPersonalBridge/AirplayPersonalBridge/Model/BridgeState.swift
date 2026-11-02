@@ -126,6 +126,8 @@ final class OutputState: Identifiable {
 
     /// Recherches consécutives qui ne l'ont pas vue.
     @ObservationIgnored fileprivate var missedRounds = 0
+    /// Vue au moins une fois avec le bit 48 : voir `OutputCatalog.reconcile`.
+    @ObservationIgnored fileprivate var confirmsTransientPairing = false
     @ObservationIgnored fileprivate var onSettingsChange: (() -> Void)?
 
     init(
@@ -139,6 +141,15 @@ final class OutputState: Identifiable {
         self.proto = proto
         self.presence = presence
         self.unavailability = unavailability
+    }
+
+    /// Le nom sous lequel le moteur doit chercher ce récepteur : l'instance Bonjour complète, tirée
+    /// de l'identifiant.
+    ///
+    /// Pas `displayName` : deux HomePod baptisés « Salon » sont `<MAC>@Salon` tous les deux en
+    /// `_raop._tcp`, et seul le préfixe matériel les distingue.
+    var serviceInstanceName: String {
+        id.split(separator: "/", maxSplits: 1).last.map(String.init) ?? id
     }
 
     /// La ligne de message sous le nom, ou `nil` s'il n'y a rien à dire.
@@ -241,8 +252,12 @@ final class BridgeState {
 
     /// Gain effectif d'une sortie, master et trim confondus. C'est cette valeur, et elle
     /// seule, que le moteur appliquera — la vue n'en calcule aucune autre.
+    ///
+    /// Un master au minimum vaut silence, quel que soit le trim : un trim positif le ferait repartir
+    /// au-dessus du seuil, et −29 dB sur le fil pour un bouton tourné à fond vers la gauche.
     func effectiveGainDB(for output: OutputState) -> Double {
-        isMuted ? Self.silenceDB : min(max(masterVolumeDB + output.trimDB, Self.silenceDB), 0)
+        guard !isMuted, masterVolumeDB > Self.silenceDB else { return Self.silenceDB }
+        return min(max(masterVolumeDB + output.trimDB, Self.silenceDB), 0)
     }
 
     // MARK: - Diffusion
@@ -259,6 +274,10 @@ final class BridgeState {
     private(set) var captureAlert: CaptureAlert?
     /// Un changement de source ou d'option relance la diffusion.
     private(set) var isRestarting = false
+
+    /// Les sorties dont le plan trace le trait vers le lieu d'écoute : celles qui sont cochées. Le
+    /// plan montre ainsi ce qui va réellement jouer, et non tout ce qui est visible sur le réseau.
+    var outputIDsDrawnOnPlan: [String] { outputs.filter(\.isEnabled).map(\.id) }
 
     /// Le bouton Diffuser/Arrêter répond-il ? Pas en pleine transition : il n'y a rien à annuler
     /// de plus, et un second clic ne doit rien démarrer en double.
@@ -301,6 +320,11 @@ final class BridgeState {
     /// parte, et un récepteur lent ne retarde jamais les réglages des autres.
     @ObservationIgnored private var outputWork: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var emptySelectionTask: Task<Void, Never>?
+    /// Dernier relevé des processus de l'application captée.
+    @ObservationIgnored private var lastSourceCheck: ContinuousClock.Instant?
+    /// Un changement de capture attend son tour ou s'exécute : pas de second par-dessus.
+    @ObservationIgnored private var isFollowingSource = false
+    @ObservationIgnored private var sourceFollowPacer: SourceFollowPacer
 
     // MARK: - Veille
 
@@ -383,6 +407,10 @@ final class BridgeState {
     init(environment: BridgeEnvironment = .inert) {
         self.environment = environment
         self.engine = BridgeEngine(dependencies: environment.engineDependencies)
+        self.sourceFollowPacer = SourceFollowPacer(
+            minimum: environment.timing.sourceFollowMinimumSpacing,
+            maximum: environment.timing.sourceFollowMaximumSpacing
+        )
         let settings = environment.settingsStore.load()
         self.settings = settings
         self.lastSavedSettings = settings
@@ -493,7 +521,8 @@ final class BridgeState {
                     proto: output.proto, presence: output.presence,
                     missedRounds: output.missedRounds,
                     isRetained: output.isEnabled || activeOutputIDs.contains(output.id),
-                    isInSession: activeOutputIDs.contains(output.id)
+                    isInSession: activeOutputIDs.contains(output.id),
+                    confirmsTransientPairing: output.confirmsTransientPairing
                 )
             },
             discovered: discovered
@@ -514,6 +543,7 @@ final class BridgeState {
             if output.unavailability != found.unavailability {
                 output.unavailability = found.unavailability
             }
+            if found.confirmsTransientPairing { output.confirmsTransientPairing = true }
         }
         for (id, presence) in reconciliation.presence {
             guard let output = byID[id], output.presence != presence else { continue }
@@ -565,6 +595,7 @@ final class BridgeState {
             isEnabled: isFirstEverDiscovery && found.unavailability == nil && !isLive
         )
         restore(settings.outputs[found.id] ?? fallback, on: output)
+        output.confirmsTransientPairing = found.confirmsTransientPairing
         return output
     }
 
@@ -573,9 +604,13 @@ final class BridgeState {
     }
 
     private func updateSources(isCaptureLive: Bool) {
+        updateSources(available: environment.availableSources(), isCaptureLive: isCaptureLive)
+    }
+
+    private func updateSources(available: [CaptureSource], isCaptureLive: Bool) {
         let resolved = CaptureSource.resolve(
             preferredID: preferredSourceID, current: selectedSource,
-            available: environment.availableSources(), isLive: isCaptureLive
+            available: available, isLive: isCaptureLive
         )
         if resolved.sources != sources { sources = resolved.sources }
         if resolved.selected != selectedSource { selectedSource = resolved.selected }
@@ -725,6 +760,12 @@ final class BridgeState {
         activeOutputIDs = []
         pushed = [:]
         streamingSince = nil
+        lastSourceCheck = nil
+        isFollowingSource = false
+        sourceFollowPacer = SourceFollowPacer(
+            minimum: environment.timing.sourceFollowMinimumSpacing,
+            maximum: environment.timing.sourceFollowMaximumSpacing
+        )
         captureHealth = BridgeEngine.CaptureHealth()
         captureAlert = nil
         for output in outputs where output.connection != .idle { output.connection = .idle }
@@ -736,7 +777,8 @@ final class BridgeState {
         BridgeEngine.OutputRequest(
             id: output.id,
             proto: output.proto == .raop ? .raop : .airplay2,
-            deviceName: output.displayName,
+            deviceName: output.serviceInstanceName,
+            nameMatching: .exact,
             volumeDB: Self.receiverVolume(forGainDB: effectiveGainDB(for: output)),
             manualDelaySeconds: effectiveDelayMS(for: output) / 1000,
             bassBoostDB: Float(output.supportsBassBoost ? output.bassBoostDB : 0)
@@ -801,6 +843,57 @@ final class BridgeState {
         if captureAlert != alert { captureAlert = alert }
 
         syncOutputsWithEngine()
+        followCaptureSource()
+    }
+
+    /// Suit les processus de l'application captée pendant la diffusion.
+    ///
+    /// Sans toucher aux sorties : leur session continue, et seul le tap change. Une seule application
+    /// est concernée à la fois, celle que l'utilisateur a choisie : sur le mode global ou l'entrée
+    /// physique, il n'y a rien à relire.
+    private func followCaptureSource() {
+        guard !isRestarting, !isFollowingSource,
+            preferredSourceID != CaptureSource.systemWide.id,
+            preferredSourceID != CaptureSource.inputDevice.id
+        else { return }
+        let now = ContinuousClock.now
+        if let lastSourceCheck,
+            lastSourceCheck.duration(to: now) < environment.timing.sourceCheckInterval
+        {
+            return
+        }
+        lastSourceCheck = now
+
+        let available = environment.availableSources()
+        updateSources(available: available, isCaptureLive: true)
+        guard
+            let target = CaptureSource.followTarget(
+                preferredID: preferredSourceID, current: selectedSource, available: available,
+                isProcessAlive: environment.isProcessAlive
+            ),
+            let mode = target.tapMode,
+            sourceFollowPacer.allows(at: now)
+        else { return }
+
+        sourceFollowPacer.noteChange(at: now)
+        isFollowingSource = true
+        let previous = selectedSource
+        let generation = sessionGeneration
+        stateLog.info("Source \(target.label, privacy: .public) : la capture suit ses processus")
+        enqueueLifecycle { [weak self] in
+            guard let self else { return }
+            // Un arrêt ou un autre choix a pu passer : il a alors le dernier mot.
+            guard generation == self.sessionGeneration, self.streamingPhase == .running,
+                !self.isRestarting, self.selectedSource == previous
+            else {
+                if generation == self.sessionGeneration { self.isFollowingSource = false }
+                return
+            }
+            let replaced = await self.engine.replaceCapture(with: .processTap(mode))
+            guard generation == self.sessionGeneration else { return }
+            self.isFollowingSource = false
+            if replaced, self.selectedSource == previous { self.selectedSource = target }
+        }
     }
 
     /// Fait suivre au moteur ce que l'utilisateur a changé depuis le dernier tour.
@@ -1175,8 +1268,10 @@ extension BridgeState {
                     + "attend peut-être un autre format ; redémarrer l'appareil peut aussi lever "
                     + "un blocage."
             )
+            var lostPermission = previewHealth(.silentWhilePlaying)
+            lostPermission.permission = .unknown
             state.captureAlert = CaptureAlert.evaluate(
-                health: previewHealth(.silentWhilePlaying), source: .systemWide, runningFor: 60
+                health: lostPermission, source: .systemWide, runningFor: 60
             )
         case .nothingPlaying:
             state.outputs = speakers

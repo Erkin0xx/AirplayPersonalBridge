@@ -243,7 +243,11 @@ public actor AirPlay2Session {
     ///
     /// `RTP-Info` porte le premier numéro de séquence et l'horodatage initial, comme en
     /// RAOP : c'est le point d'ancrage temporel du flux.
-    public func record(startSequence: UInt16, startTimestamp: UInt32) async throws {
+    ///
+    /// - Returns: `Audio-Latency` annoncée par le récepteur, en trames, ou `nil` s'il n'annonce rien.
+    ///   Journalisée dans les deux cas : c'est ce qui établira si les HomePod en donnent une.
+    @discardableResult
+    public func record(startSequence: UInt16, startTimestamp: UInt32) async throws -> Int? {
         let request = RTSPRequest(
             method: "RECORD",
             uri: sessionURI,
@@ -252,8 +256,14 @@ public actor AirPlay2Session {
                 ("Content-Length", "0"),
             ]
         )
-        _ = try await client.send(request)
+        let response = try await client.send(request)
         log.info("RECORD accepté (seq=\(startSequence) rtptime=\(startTimestamp))")
+        guard let announced = response.headers["audio-latency"] else {
+            log.info("RECORD : pas d'Audio-Latency annoncée")
+            return nil
+        }
+        log.info("RECORD : Audio-Latency annoncée \(announced, privacy: .public) trames")
+        return Int(announced.trimmingCharacters(in: .whitespaces))
     }
 
     /// Maintien de session : `POST /feedback`, sans corps.
@@ -263,9 +273,9 @@ public actor AirPlay2Session {
     /// aussi la cadence d'iOS. Sur le fil c'est sa requête à l'identique : RTSP/1.0, `CSeq`, et les
     /// trois en-têtes d'identification du contrôleur, sans `Content-Length`.
     ///
-    /// - Parameter timeout: court, car ce n'est pas seulement une politesse. C'est le seul
-    ///   échange régulier sur la connexion RTSP : il révèle une connexion fermée côté récepteur,
-    ///   que rien d'autre ne lirait, et l'absence de réponse d'un récepteur éteint sans adieu.
+    /// - Parameter timeout: court, pour ne pas retenir les autres requêtes, qui passent après lui sur
+    ///   la même connexion. Une réponse qui ne vient pas n'a pas d'autre conséquence : voir
+    ///   `AirPlay2Sender.runKeepAlive`.
     public func sendFeedback(timeout: Duration = .seconds(4)) async throws {
         let request = RTSPRequest(
             method: "POST",

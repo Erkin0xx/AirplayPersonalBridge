@@ -61,7 +61,8 @@ public struct OutputStatistics: Sendable, Equatable {
 
     /// RAOP : réponses aux requêtes d'horloge du récepteur.
     public var timingResponsesSent: Int?
-    /// RAOP : `Audio-Latency` annoncée par le récepteur, en trames. `nil` s'il n'annonce rien.
+    /// `Audio-Latency` annoncée par le récepteur au `RECORD`, en trames. `nil` s'il n'annonce rien.
+    /// Lue sur les deux protocoles, mais seul RAOP s'en sert pour le calage.
     public var reportedLatencyFrames: Int?
     /// RAOP : dernier volume accepté par le récepteur, en dB.
     public var volumeDB: Float?
@@ -69,6 +70,9 @@ public struct OutputStatistics: Sendable, Equatable {
     public var retransmitRequests: Int?
     /// AirPlay 2 : `audioBufferSize` brut, unité non établie (voir `AirPlay2Statistics`).
     public var receiverBufferSize: Int?
+    /// AirPlay 2 : `POST /feedback` restés sans réponse dans leur délai. Sans conséquence, c'est un
+    /// simple relevé.
+    public var feedbackUnanswered: Int?
     /// AirPlay 2 : canal d'événements ouvert.
     public var eventChannelConnected: Bool?
 
@@ -146,6 +150,8 @@ extension AirPlay2Sender: OutputSender {
         result.retransmitRequests = source.retransmitRequests
         result.receiverBufferSize = source.receiverBufferSize
         result.eventChannelConnected = source.eventChannelConnected
+        result.reportedLatencyFrames = source.reportedLatencyFrames
+        result.feedbackUnanswered = source.feedbackUnanswered
         return result
     }
 }
@@ -177,7 +183,49 @@ public protocol OutputSenderFactory: Sendable {
 
 /// Fabrique réelle : découverte Bonjour, puis `RAOPSender` ou `AirPlay2Sender`.
 public struct LiveOutputSenderFactory: OutputSenderFactory {
-    public init() {}
+    /// Cherche un récepteur : nom, façon de le comparer, nombre de parcours (`nil` : le défaut de la
+    /// découverte). Injecté : aucun test ne doit interroger le réseau, où se trouve le vrai matériel.
+    typealias RAOPFinder =
+        @Sendable (String, ReceiverNameMatching, Int?) async throws -> RAOPDevice
+    typealias AirPlay2Finder =
+        @Sendable (String, ReceiverNameMatching, Int?) async throws -> AirPlay2Device
+
+    /// Une relecture d'adresse se contente d'un parcours : elle revient de toute façon plus tard, et
+    /// la reconnexion attend pendant ce temps.
+    private static let rediscoveryPasses = 1
+
+    private let findRAOP: RAOPFinder
+    private let findAirPlay2: AirPlay2Finder
+    /// Échecs de reconnexion entre deux relectures d'adresse.
+    private let rediscoveryInterval: Int
+
+    public init() {
+        self.init(
+            findRAOP: { name, matching, passes in
+                guard let passes else {
+                    return try await RAOPDiscovery().find(named: name, matching: matching)
+                }
+                return try await RAOPDiscovery().find(
+                    named: name, matching: matching, attempts: passes)
+            },
+            findAirPlay2: { name, matching, passes in
+                guard let passes else {
+                    return try await AirPlay2Discovery().find(named: name, matching: matching)
+                }
+                return try await AirPlay2Discovery().find(
+                    named: name, matching: matching, attempts: passes)
+            }
+        )
+    }
+
+    init(
+        findRAOP: @escaping RAOPFinder, findAirPlay2: @escaping AirPlay2Finder,
+        rediscoveryInterval: Int = 3
+    ) {
+        self.findRAOP = findRAOP
+        self.findAirPlay2 = findAirPlay2
+        self.rediscoveryInterval = rediscoveryInterval
+    }
 
     public func makeSender(
         for request: BridgeEngine.OutputRequest,
@@ -186,22 +234,34 @@ public struct LiveOutputSenderFactory: OutputSenderFactory {
         // La découverte s'écoule toujours jusqu'au bout de son délai, annulation ou non. Elle
         // part donc à côté : une sortie retirée pendant le parcours rend la main aussitôt, et
         // le parcours se termine de lui-même sans rien retenir.
+        //
+        // La relecture d'adresse d'un sender en perte de session vise le service qu'il sert déjà,
+        // par son nom complet et en exact, même si la ligne de commande l'a trouvé par une partie
+        // du nom : elle ne doit jamais l'envoyer vers un autre appareil.
         switch request.proto {
         case .raop:
-            let device = try await untilCancelled {
-                try await RAOPDiscovery().find(named: request.deviceName)
+            let device = try await untilCancelled { [findRAOP] in
+                try await findRAOP(request.deviceName, request.nameMatching, nil)
             }
             return RAOPSender(
                 device: device, ring: context.ring, captureFormat: context.captureFormat,
-                clock: context.clock
+                clock: context.clock,
+                rediscover: { [findRAOP, serviceName = device.serviceName] in
+                    try? await findRAOP(serviceName, .exact, Self.rediscoveryPasses)
+                },
+                rediscoveryInterval: rediscoveryInterval
             )
         case .airplay2:
-            let device = try await untilCancelled {
-                try await AirPlay2Discovery().find(named: request.deviceName)
+            let device = try await untilCancelled { [findAirPlay2] in
+                try await findAirPlay2(request.deviceName, request.nameMatching, nil)
             }
             return AirPlay2Sender(
                 device: device, ring: context.ring, captureFormat: context.captureFormat,
-                clock: context.clock, credentials: request.credentials
+                clock: context.clock, credentials: request.credentials,
+                rediscover: { [findAirPlay2, serviceName = device.serviceName] in
+                    try? await findAirPlay2(serviceName, .exact, Self.rediscoveryPasses)
+                },
+                rediscoveryInterval: rediscoveryInterval
             )
         }
     }
@@ -278,8 +338,8 @@ final class OnceThrowingResumer<T: Sendable>: @unchecked Sendable {
 /// d'authentification.
 func isPermanentOutputFailure(_ error: Error) -> Bool {
     switch error {
-    case is RAOPSenderError:
-        return true
+    case let raop as RAOPSenderError:
+        return raop.isPermanent
     case let airplay2 as AirPlay2SenderError:
         // Le sender traduit ses erreurs pour l'affichage : sans ce cas, un Apple TV qui répond
         // 470 serait relancé sans fin, chaque tentative refaisant une négociation pour rien.

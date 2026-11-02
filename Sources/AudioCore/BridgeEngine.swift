@@ -90,8 +90,11 @@ public actor BridgeEngine {
     public struct OutputRequest: Sendable, Identifiable {
         public let id: String
         public let proto: OutputProtocol
-        /// Nom du récepteur, en correspondance partielle comme dans la découverte.
+        /// Nom du récepteur.
         public let deviceName: String
+        /// Comment ce nom désigne un appareil. Exact par défaut : l'application connaît le nom de
+        /// ses sorties, seule la ligne de commande demande une partie du nom.
+        public let nameMatching: ReceiverNameMatching
         public var volumeDB: Float
         public var manualDelaySeconds: TimeInterval
         /// Renfort de basses, en dB (ADR-002). Ignoré hors RAOP : le CDC ne le prévoit que pour la
@@ -105,6 +108,7 @@ public actor BridgeEngine {
             id: String,
             proto: OutputProtocol,
             deviceName: String,
+            nameMatching: ReceiverNameMatching = .exact,
             volumeDB: Float,
             manualDelaySeconds: TimeInterval = 0,
             bassBoostDB: Float = 0,
@@ -113,6 +117,7 @@ public actor BridgeEngine {
             self.id = id
             self.proto = proto
             self.deviceName = deviceName
+            self.nameMatching = nameMatching
             self.volumeDB = volumeDB
             self.manualDelaySeconds = manualDelaySeconds
             self.bassBoostDB = bassBoostDB
@@ -175,13 +180,15 @@ public actor BridgeEngine {
             /// c'est l'attente normale, pas une panne.
             case waitingForFirstBlock
             case healthy
-            /// Les blocs ont cessé d'arriver (périphérique perdu, reconstruction en échec).
+            /// Les blocs ont cessé d'arriver alors que quelque chose joue, ou sans qu'on puisse dire
+            /// si quelque chose joue (périphérique perdu, reconstruction en échec).
             case stalled
-            /// Silence strict alors qu'une application captée joue : **autorisation perdue ou
-            /// tap mal câblé**. Typiquement juste après un rebuild, qui révoque l'autorisation
-            /// sans la moindre erreur (`CLAUDE.md`).
+            /// Silence strict alors qu'une application captée a un flux ouvert. Soit elle garde un
+            /// flux muet, et il n'y a rien d'anormal, soit **autorisation perdue ou tap mal câblé**,
+            /// typiquement juste après un rebuild, qui révoque l'autorisation sans la moindre erreur
+            /// (`CLAUDE.md`). C'est `permission` qui permet de pencher pour l'un ou l'autre.
             case silentWhilePlaying
-            /// Silence strict et rien ne joue : rien d'anormal.
+            /// Silence strict, ou plus aucun bloc, et rien ne joue : rien d'anormal.
             case silentNothingPlaying
             /// Silence strict, et la source ne sait pas dire si quelque chose devrait jouer.
             case silentUnknown
@@ -201,6 +208,9 @@ public actor BridgeEngine {
         public var rebuilds = 0
         /// Dernière erreur de reconstruction, tant qu'aucune n'a abouti depuis.
         public var lastRebuildError: String?
+        /// Prochaine reconstruction prévue d'une capture bloquée. `nil` si aucune ne l'est : c'est
+        /// ce qui permet de dire « nouvel essai en cours » sans mentir.
+        public var nextStallRebuild: Date?
         /// Durée cumulée des interruptions reportées sur l'horloge commune, en secondes.
         public var interruptedSeconds: TimeInterval = 0
 
@@ -221,6 +231,13 @@ public actor BridgeEngine {
         public var silenceThresholdSeconds: TimeInterval = 3
         /// Immobilité de la graduation au-delà de laquelle la capture est dite interrompue.
         public var stallThresholdSeconds: TimeInterval = 1
+        /// Retard de la graduation à partir duquel un trou est reporté sur l'horloge commune, une
+        /// fois confirmé au relevé suivant (voir ``trackInterruption(deficit:clock:)``).
+        public var interruptionThresholdSeconds: TimeInterval = 0.2
+        /// Capture bloquée pendant qu'une application joue : délai avant de la reconstruire, doublé
+        /// à chaque essai resté sans effet, jusqu'au maximum.
+        public var stallRebuildDelaySeconds: TimeInterval = 5
+        public var stallRebuildMaximumDelaySeconds: TimeInterval = 60
         /// Regroupe la rafale de notifications d'un changement de périphérique.
         public var routeChangeDebounce: Duration = .milliseconds(300)
         public var rebuildRetryInitialDelay: Duration = .milliseconds(500)
@@ -309,6 +326,13 @@ public actor BridgeEngine {
     /// Reconstruction en cours. Une notification ne l'annule pas : elle relit la route en
     /// terminant, et deux reconstructions simultanées lanceraient deux IO sur le même tampon.
     private var rebuildTask: Task<Void, Never>?
+    /// Options de la session, pour une source qui en remplace une autre en cours de route.
+    private var startOptions = StartOptions()
+    /// Les sorties ont été arrêtées pour une nouvelle fréquence, et attendent d'être relancées.
+    /// Tant que c'est vrai, une sortie cochée entre dans la liste sans démarrer : c'est la relance
+    /// qui la lancera, sur le bon tampon. Vrai aussi après une relance ratée, tant qu'aucune
+    /// reconstruction n'a abouti.
+    private var outputsAwaitingRelaunch = false
 
     private var entries: [String: OutputEntry] = [:]
     private var snapshots: [String: OutputSnapshot] = [:]
@@ -318,7 +342,13 @@ public actor BridgeEngine {
     private var lastHealthDate = Date()
     private var lastHealthFrames = 0
     private var lastFlowDate = Date()
-    private var stallAccumulator: TimeInterval = 0
+    /// Retard de la graduation pas encore reporté sur l'horloge : un doute, jusqu'à confirmation.
+    private var pendingInterruption: TimeInterval = 0
+    /// Le trou en cours est avéré : tant qu'il dure, chaque relevé le reporte sans attendre.
+    private var interruptionConfirmed = false
+    /// Délai avant la prochaine reconstruction d'une capture bloquée, s'il faut y revenir.
+    private var stallRebuildDelay: TimeInterval = 0
+    private var nextStallRebuild: Date?
     private var lastExpectationCheck: Date?
     private var lastExpectation: Bool?
 
@@ -336,6 +366,10 @@ public actor BridgeEngine {
 
     /// Santé de la capture, rafraîchie plusieurs fois par seconde.
     public var captureHealth: CaptureHealth { health }
+
+    /// Une reconstruction ou un changement de source est-il en cours ? Interne : uniquement lu par
+    /// les tests qui avancent l'heure à la main, et l'attendent à chaque pas.
+    var isRebuildingCapture: Bool { rebuildTask != nil }
 
     // MARK: - Démarrage
 
@@ -405,16 +439,17 @@ public actor BridgeEngine {
         }
 
         lifecycle = .running
+        startOptions = options
+        outputsAwaitingRelaunch = false
         health = CaptureHealth()
         health.diagnosis = .waitingForFirstBlock
         resetHealthReferences(frames: fanout?.framesCaptured ?? 0, now: Date())
+        resetStallRecovery()
         outputOrder = []
         snapshots = [:]
         entries = [:]
 
-        source.setRouteChangeHandler { [weak self] in
-            Task { await self?.noteRouteChange() }
-        }
+        watchRoute(of: source)
         healthTask = Task { [weak self, interval = tuning.healthInterval] in
             while !Task.isCancelled {
                 await self?.tickHealth()
@@ -429,6 +464,12 @@ public actor BridgeEngine {
             }
         }
         log.info("Moteur démarré : \(requests.count) sortie(s)")
+    }
+
+    private func watchRoute(of source: any AudioCaptureSource) {
+        source.setRouteChangeHandler { [weak self] in
+            Task { await self?.noteRouteChange() }
+        }
     }
 
     /// Crée fanout, adaptateur et horloge pour un format de source, puis lance l'IO.
@@ -513,6 +554,7 @@ public actor BridgeEngine {
         adapter = nil
         clock = nil
         entries = [:]
+        outputsAwaitingRelaunch = false
         for id in outputOrder {
             snapshots[id]?.phase = .idle
             snapshots[id]?.nextAttemptAt = nil
@@ -565,6 +607,16 @@ public actor BridgeEngine {
                 throw Failure.duplicateOutput(request.id)
             }
             entries[request.id] = nil
+        }
+        guard !outputsAwaitingRelaunch else {
+            // Lancée maintenant, elle s'alimenterait à un tampon sur le point de disparaître.
+            guard entries.count < tuning.maximumOutputs else {
+                throw Failure.tooManyOutputs(limit: tuning.maximumOutputs)
+            }
+            entries[request.id] = OutputEntry(request: request, token: makeToken())
+            snapshots[request.id] = OutputSnapshot(id: request.id, phase: .connecting)
+            if !outputOrder.contains(request.id) { outputOrder.append(request.id) }
+            return
         }
         try launch(request)
     }
@@ -895,36 +947,17 @@ public actor BridgeEngine {
     }
 
     private func rebuildCapture(_ source: any AudioCaptureSource) async {
-        log.info("Périphérique de sortie changé — reconstruction de la capture")
-
-        let stoppedAt = Date()
+        log.info("Reconstruction de la capture")
+        let stoppedAt = captureWillStop()
         let compensatedBefore = health.interruptedSeconds
         source.stop()
 
         var delay = tuning.rebuildRetryInitialDelay
         while lifecycle == .running, !Task.isCancelled {
             do {
-                let nativeFormat = try source.prepare()
-                let format = try CaptureBlockAdapter.normalizedFormat(for: nativeFormat)
-                if let fanout, format.sampleRate == fanout.format.sampleRate {
-                    let adapter = try CaptureBlockAdapter(
-                        sourceFormat: nativeFormat, fanout: fanout
-                    )
-                    try source.start(deliveringTo: adapter.makeConsumer())
-                    self.adapter = adapter
-                    // Le trou de capture ne doit pas entamer la marge de restitution.
-                    let elapsed = Date().timeIntervalSince(stoppedAt)
-                    let remaining = elapsed - (health.interruptedSeconds - compensatedBefore)
-                    if remaining > 0 {
-                        clock?.shiftOrigin(bySeconds: remaining)
-                        health.interruptedSeconds += remaining
-                    }
-                } else {
-                    try await restartOutputs(source, nativeFormat: nativeFormat)
-                }
-                resetHealthReferences(frames: fanout?.framesCaptured ?? 0, now: Date())
-                health.rebuilds += 1
-                health.lastRebuildError = nil
+                try await reopenCapture(
+                    source, stoppedAt: stoppedAt, compensatedBefore: compensatedBefore
+                )
                 log.info("Capture reconstruite")
                 return
             } catch {
@@ -937,23 +970,191 @@ public actor BridgeEngine {
         }
     }
 
+    /// Repart de la source, déjà arrêtée. Les sorties ne sont touchées que si la fréquence change.
+    private func reopenCapture(
+        _ source: any AudioCaptureSource, stoppedAt: Date, compensatedBefore: TimeInterval
+    ) async throws {
+        let nativeFormat = try source.prepare()
+        let format = try CaptureBlockAdapter.normalizedFormat(for: nativeFormat)
+        if let fanout, format.sampleRate == fanout.format.sampleRate {
+            let adapter = try CaptureBlockAdapter(sourceFormat: nativeFormat, fanout: fanout)
+            try source.start(deliveringTo: adapter.makeConsumer())
+            self.adapter = adapter
+            // Le trou de capture ne doit pas entamer la marge de restitution.
+            let elapsed = Date().timeIntervalSince(stoppedAt)
+            let remaining = elapsed - (health.interruptedSeconds - compensatedBefore)
+            if remaining > 0 {
+                clock?.shiftOrigin(bySeconds: remaining)
+                health.interruptedSeconds += remaining
+            }
+            // Une relance a pu échouer sur une autre fréquence avant de revenir à celle-ci : les
+            // sorties qu'elle a arrêtées resteraient sinon au repos jusqu'à la fin de la diffusion.
+            if outputsAwaitingRelaunch { relaunchOutputs() }
+        } else {
+            try await restartOutputs(source, nativeFormat: nativeFormat)
+        }
+        resetHealthReferences(frames: fanout?.framesCaptured ?? 0, now: Date())
+        health.rebuilds += 1
+        health.lastRebuildError = nil
+    }
+
     /// Relance capture et sorties pour une nouvelle fréquence d'échantillonnage.
+    ///
+    /// L'attente qui suit peut durer jusqu'à `stopTimeout`, et rien n'interdit de décocher une
+    /// sortie, d'en cocher une autre ou de bouger un volume pendant ce temps. C'est donc `entries`
+    /// **relu après l'attente** qui fait foi, jamais une photographie d'avant.
     private func restartOutputs(
         _ source: any AudioCaptureSource, nativeFormat: AVAudioFormat
     ) async throws {
         log.info("Fréquence de capture changée : relance des sorties")
-        let previous = outputOrder.compactMap { entries[$0] }
-        for entry in previous { entry.task?.cancel() }
-        _ = await Self.waitForCompletion(
-            of: previous.compactMap(\.task), timeout: tuning.stopTimeout
-        )
+        outputsAwaitingRelaunch = true
+        let running = outputOrder.compactMap { entries[$0]?.task }
+        for task in running { task.cancel() }
+        _ = await Self.waitForCompletion(of: running, timeout: tuning.stopTimeout)
         guard lifecycle == .running else { return }
 
         try openCapture(source, nativeFormat: nativeFormat)
-        entries = [:]
-        for entry in previous {
-            try launch(entry.request)
+        relaunchOutputs()
+    }
+
+    /// Relance les sorties qui attendent, dans leur état du moment.
+    private func relaunchOutputs() {
+        outputsAwaitingRelaunch = false
+        for id in outputOrder {
+            guard let request = entries[id]?.request else { continue }
+            do { try launch(request) } catch {
+                // Plus de tampon libre, ceux des sorties en retard n'étant pas encore rendus. Cette
+                // sortie seule en pâtit, et la décocher puis la recocher est une nouvelle tentative.
+                log.error("Sortie \(id, privacy: .public) non relancée : \(error)")
+                snapshots[id]?.phase = .failed("\(error)")
+                snapshots[id]?.lastError = "\(error)"
+            }
         }
+    }
+
+    // MARK: - Changement de source
+
+    /// Remplace ce qui est capté, sans toucher aux sessions des sorties.
+    ///
+    /// Le moteur sait déjà arrêter une source et en redémarrer l'IO sur le même tampon : c'est ce que
+    /// fait une reconstruction. Ici la source qui repart est une autre, et les sorties n'ont pas à le
+    /// savoir (invariant section 12). L'ancienne est arrêtée avant que la nouvelle ne démarre : une
+    /// seule capture à la fois.
+    ///
+    /// Rend la main rapidement, sans attendre une capture qui refuserait de repartir : l'appelant est
+    /// la file des transitions de l'interface, et un arrêt demandé doit pouvoir y passer.
+    ///
+    /// - Returns: faux s'il n'a pas eu lieu, à réessayer plus tard : reconstruction déjà en cours,
+    ///   nouvelle source qui ne démarre pas, ou qui exigerait une autre autorisation. L'ancienne
+    ///   continue alors, reconstruite au besoin en arrière-plan.
+    public func replaceCapture(with request: Source) async -> Bool {
+        // Elle pilote la source : le changement la laisse finir, plutôt que de l'attendre.
+        guard lifecycle == .running, rebuildTask == nil else { return false }
+
+        let task = Task { [weak self] in await self?.swapCapture(for: request) ?? .kept }
+        rebuildTask = Task { _ = await task.value }
+        let outcome = await task.value
+        rebuildTask = nil
+
+        switch outcome {
+        case .replaced:
+            // Une notification de route arrivée entre-temps n'a pas pu lancer sa reconstruction.
+            beginRebuildIfNeeded()
+            return true
+        case .previousStopped:
+            if lifecycle == .running { beginCurrentCaptureRebuild() }
+            return false
+        case .kept:
+            return false
+        }
+    }
+
+    private enum SwapOutcome {
+        case replaced
+        /// L'ancienne source a été arrêtée pour rien : elle reste à relancer.
+        case previousStopped
+        case kept
+    }
+
+    private func swapCapture(for request: Source) async -> SwapOutcome {
+        guard lifecycle == .running, let current = source else { return .kept }
+        let replacement = dependencies.makeSource(request, startOptions)
+        guard replacement.requiredPermission == current.requiredPermission else { return .kept }
+
+        log.info("Changement de source, sorties conservées")
+        let stoppedAt = captureWillStop()
+        let compensatedBefore = health.interruptedSeconds
+        current.setRouteChangeHandler(nil)
+        current.stop()
+        do {
+            try await reopenCapture(
+                replacement, stoppedAt: stoppedAt, compensatedBefore: compensatedBefore
+            )
+            source = replacement
+            watchRoute(of: replacement)
+            lastExpectationCheck = nil
+            return .replaced
+        } catch {
+            replacement.stop()
+            log.error("Changement de source en échec : \(error)")
+            watchRoute(of: current)
+            return .previousStopped
+        }
+    }
+
+    // MARK: - Capture bloquée
+
+    /// Reconstruit une capture dont les blocs ont cessé d'arriver alors qu'une application joue.
+    ///
+    /// Sans notification de route, rien d'autre ne le fait, et l'application dirait diffuser vers des
+    /// enceintes muettes indéfiniment. Seule une capture qui ne livre déjà plus rien est touchée : le
+    /// tap ne livrant rien tant que rien ne joue, ce cas-là reste une attente normale.
+    ///
+    /// Si reconstruire n'y change rien, le délai double à chaque essai : au pire une tentative par
+    /// minute, sans effet sur les sessions des sorties, qui attendent leur tampon.
+    private func recoverStalledCapture(
+        _ source: any AudioCaptureSource, framesMoved: Bool, now: Date
+    ) {
+        if framesMoved { resetStallRecovery() }
+        guard health.diagnosis == .stalled, silenceExpectation(source, now: now) == true else {
+            nextStallRebuild = nil
+            health.nextStallRebuild = nil
+            return
+        }
+        let due = nextStallRebuild ?? lastFlowDate.addingTimeInterval(stallRebuildDelay)
+        if now >= due, rebuildTask == nil {
+            log.error("Capture bloquée alors qu'une application joue : reconstruction")
+            stallRebuildDelay = min(stallRebuildDelay * 2, tuning.stallRebuildMaximumDelaySeconds)
+            nextStallRebuild = now.addingTimeInterval(stallRebuildDelay)
+            beginCurrentCaptureRebuild()
+        } else {
+            nextStallRebuild = due
+        }
+        health.nextStallRebuild = nextStallRebuild
+    }
+
+    private func resetStallRecovery() {
+        stallRebuildDelay = tuning.stallRebuildDelaySeconds
+        nextStallRebuild = nil
+        health.nextStallRebuild = nil
+    }
+
+    /// Reconstruit la capture en cours, même sans changement de route.
+    private func beginCurrentCaptureRebuild() {
+        rebuildTask = Task { [weak self] in
+            await self?.rebuildCurrentCapture()
+            await self?.rebuildDidFinish()
+        }
+    }
+
+    private func rebuildCurrentCapture() async {
+        guard let source else { return }
+        // Reconstruire ne fait pas revenir les blocs par magie : la capture reste dite bloquée
+        // depuis le même instant, tant qu'aucun n'est arrivé.
+        let lastFlow = lastFlowDate
+        await rebuildCapture(source)
+        lastFlowDate = lastFlow
+        await rebuildCaptureIfNeeded()
     }
 
     // MARK: - Santé de la capture
@@ -962,8 +1163,67 @@ public actor BridgeEngine {
         lastHealthDate = now
         lastHealthFrames = frames
         lastFlowDate = now
-        stallAccumulator = 0
+        pendingInterruption = 0
+        interruptionConfirmed = false
     }
+
+    /// La capture va s'arrêter pour de bon : ce qui n'était qu'un doute sur un trou n'en est plus
+    /// un. Sans cela chaque reconstruction le perdrait, et le retard s'accumulerait d'une capture
+    /// bloquée à l'autre jusqu'à manger la marge de restitution.
+    private func captureWillStop() -> Date {
+        if let clock, pendingInterruption >= tuning.interruptionThresholdSeconds {
+            reportInterruption(pendingInterruption, clock: clock)
+        }
+        pendingInterruption = 0
+        return Date()
+    }
+
+    private func reportInterruption(_ seconds: TimeInterval, clock: SharedPlaybackClock) {
+        clock.shiftOrigin(bySeconds: seconds)
+        health.interruptedSeconds += seconds
+        log.info("Interruption de capture : \(seconds) s reportées sur l'horloge commune")
+    }
+
+    /// Décide si un retard de la graduation sur l'heure est un vrai trou de capture.
+    ///
+    /// Un vrai trou se reporte sur l'horloge commune (voir `shiftOrigin`) : le tap ne livre rien
+    /// tant que rien ne joue, et les instants annoncés prendraient autant de retard sur le réel.
+    /// Mais ce report est **définitif**, et la réaction des récepteurs à un instant qui saute reste
+    /// inconnue. Il n'a donc pas lieu sur un simple doute :
+    ///
+    /// - un écart en deçà de `captureJitterTolerance` remet tout à zéro. Un gros bloc d'IO à cheval
+    ///   sur deux relevés en produit, et la dérive d'horloge, de plusieurs ordres de grandeur plus
+    ///   faible, se trouve écartée du même coup ;
+    /// - un retard qui passe le seuil **attend le relevé suivant**. Une rafale tardive le rattrape
+    ///   aussitôt, et rien n'a eu lieu ; sinon, qu'il s'aggrave ou que les blocs aient repris sans
+    ///   le rattraper, le trou est avéré ;
+    /// - tant qu'un trou avéré dure, chaque relevé le reporte sans autre attente.
+    private func trackInterruption(deficit: TimeInterval, clock: SharedPlaybackClock) {
+        let tolerance = Self.captureJitterTolerance
+        if interruptionConfirmed {
+            if deficit > tolerance {
+                reportInterruption(deficit, clock: clock)
+            } else {
+                interruptionConfirmed = false
+            }
+            return
+        }
+        if pendingInterruption >= tuning.interruptionThresholdSeconds {
+            let remaining = pendingInterruption + deficit
+            pendingInterruption = 0
+            if remaining >= tuning.interruptionThresholdSeconds {
+                reportInterruption(remaining, clock: clock)
+                interruptionConfirmed = deficit > tolerance
+            }
+        } else if deficit > tolerance {
+            pendingInterruption += deficit
+        } else {
+            pendingInterruption = 0
+        }
+    }
+
+    /// Écart entre l'heure et la graduation qu'un relevé tolère sans le compter.
+    private static let captureJitterTolerance: TimeInterval = 0.05
 
     /// Mesure la capture : interruption, silence strict, arrêt des blocs.
     ///
@@ -974,26 +1234,13 @@ public actor BridgeEngine {
         let frames = fanout.framesCaptured
         let rate = fanout.format.sampleRate
 
-        // Interruption : la graduation prend du retard sur l'heure. L'écart est reporté sur
-        // l'horloge commune (voir `shiftOrigin`), à partir de 200 ms cumulées. Un écart plus
-        // petit peut venir d'un gros bloc d'IO à cheval sur deux relevés, et le relevé suivant
-        // le rattrape : c'est pourquoi le cumul repart de zéro dès qu'un relevé est normal, ce
-        // qui écarte aussi la dérive d'horloge, de plusieurs ordres de grandeur plus faible.
+        // Interruption : la graduation prend du retard sur l'heure.
         let elapsed = now.timeIntervalSince(lastHealthDate)
         let advanced = Double(frames - lastHealthFrames) / rate
-        let deficit = elapsed - advanced
-        if deficit > 0.05 {
-            stallAccumulator += deficit
-            if stallAccumulator >= 0.2 {
-                clock.shiftOrigin(bySeconds: stallAccumulator)
-                health.interruptedSeconds += stallAccumulator
-                stallAccumulator = 0
-            }
-        } else {
-            stallAccumulator = 0
-        }
+        trackInterruption(deficit: elapsed - advanced, clock: clock)
 
-        if frames != lastHealthFrames { lastFlowDate = now }
+        let framesMoved = frames != lastHealthFrames
+        if framesMoved { lastFlowDate = now }
         lastHealthDate = now
         lastHealthFrames = frames
 
@@ -1016,7 +1263,11 @@ public actor BridgeEngine {
         if frames == 0 {
             health.diagnosis = .waitingForFirstBlock
         } else if health.stalledSince != nil {
-            health.diagnosis = .stalled
+            // Le tap ne livre plus rien quand plus rien ne joue : ce n'est pas une panne, sauf si une
+            // reconstruction échoue, ce que l'interface doit dire.
+            let nothingPlaying =
+                silenceExpectation(source, now: now) == false && health.lastRebuildError == nil
+            health.diagnosis = nothingPlaying ? .silentNothingPlaying : .stalled
         } else if isSilent {
             switch silenceExpectation(source, now: now) {
             case true?: health.diagnosis = .silentWhilePlaying
@@ -1026,6 +1277,8 @@ public actor BridgeEngine {
         } else {
             health.diagnosis = .healthy
         }
+
+        recoverStalledCapture(source, framesMoved: framesMoved, now: now)
     }
 
     /// Demande à la source si quelque chose devrait jouer, au plus une fois par seconde : la

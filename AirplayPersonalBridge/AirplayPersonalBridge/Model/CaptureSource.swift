@@ -91,8 +91,9 @@ extension CaptureSource {
     ///
     /// Une application qui cesse de jouer disparaît de la liste. Hors diffusion, la sélection
     /// retombe sur le mode global plutôt que de désigner un process mort, et le choix de
-    /// l'utilisateur attend son retour. Pendant une diffusion, rien ne bouge : une simple pause
-    /// ne doit pas relancer la capture sur tout le son du Mac.
+    /// l'utilisateur attend son retour. Pendant une diffusion, rien ne bouge ici : une simple pause
+    /// ne doit pas relancer la capture sur tout le son du Mac, et c'est ``followTarget`` qui dit
+    /// quand la capture doit changer.
     static func resolve(
         preferredID: String, current: CaptureSource, available: [CaptureSource], isLive: Bool
     ) -> (sources: [CaptureSource], selected: CaptureSource) {
@@ -106,6 +107,36 @@ extension CaptureSource {
         let position = sources.firstIndex(of: .inputDevice) ?? sources.endIndex
         sources.insert(current, at: position)
         return (sources, current)
+    }
+
+    /// Ce que la capture doit prendre maintenant, si ce n'est plus ce qu'elle prend.
+    ///
+    /// Un tap capte des processus désignés à sa création, jamais ceux qui apparaissent après. Sans ce
+    /// suivi, un navigateur qui joue depuis un nouveau processus de rendu laissait le tap sur l'ancien
+    /// PID, et les enceintes muettes. De même, une application en pause au démarrage faisait retomber
+    /// la diffusion sur le mode global, où elle restait quand l'application reprenait.
+    ///
+    /// **Un processus qui s'arrête ne compte pas** : le tap continue de le suivre, sans rien coûter.
+    /// Et un processus déjà capté, toujours vivant, reste dans la liste même s'il ne joue plus à
+    /// l'instant du relevé. La liste ne fait donc que grandir : c'est ce qui empêche deux processus
+    /// qui jouent à tour de rôle, ou un seul qui clignote, de relancer la capture à chaque fois.
+    static func followTarget(
+        preferredID: String, current: CaptureSource, available: [CaptureSource],
+        isProcessAlive: (pid_t) -> Bool
+    ) -> CaptureSource? {
+        guard let wanted = available.first(where: { $0.id == preferredID }) else { return nil }
+        guard wanted.id == current.id else { return wanted }
+        guard case let .application(found, name, bundleID) = wanted,
+            case let .application(captured, _, _) = current,
+            !Set(found).isSubset(of: captured)
+        else { return nil }
+        let kept = captured.filter(isProcessAlive)
+        return .application(pids: Set(kept + found).sorted(), name: name, bundleID: bundleID)
+    }
+
+    /// Le processus existe-t-il encore ? `EPERM` veut dire oui : il appartient à un autre utilisateur.
+    nonisolated static func isProcessAlive(_ pid: pid_t) -> Bool {
+        kill(pid, 0) == 0 || errno == EPERM
     }
 
     /// Remonte la chaîne des parents jusqu'à une application connue d'AppKit.
@@ -139,5 +170,37 @@ extension CaptureSource {
 
     private static func displayName(forBundleID bundleID: String) -> String {
         bundleID.split(separator: ".").last.map(String.init) ?? bundleID
+    }
+}
+
+/// Espace les changements de capture qui suivent les processus d'une application.
+///
+/// La liste qui ne fait que grandir (``CaptureSource/followTarget``) règle le cas d'un processus
+/// connu. Celui-ci couvre le reste : une application qui crée sans arrêt de nouveaux processus. Le
+/// délai double tant que les changements s'enchaînent, et revient au minimum après un moment calme.
+struct SourceFollowPacer {
+    let minimum: Duration
+    let maximum: Duration
+    private var last: ContinuousClock.Instant?
+    private var spacing: Duration
+
+    init(minimum: Duration, maximum: Duration) {
+        self.minimum = minimum
+        self.maximum = maximum
+        self.spacing = minimum
+    }
+
+    func allows(at now: ContinuousClock.Instant) -> Bool {
+        guard let last else { return true }
+        return last.duration(to: now) >= spacing
+    }
+
+    mutating func noteChange(at now: ContinuousClock.Instant) {
+        if let last, last.duration(to: now) < spacing * 4 {
+            spacing = min(spacing * 2, maximum)
+        } else {
+            spacing = minimum
+        }
+        last = now
     }
 }

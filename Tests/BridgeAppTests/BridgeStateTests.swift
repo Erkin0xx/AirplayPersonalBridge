@@ -40,6 +40,25 @@ struct BridgeStateVolumeTests {
     }
 }
 
+@Suite("État — volume au minimum")
+struct BridgeStateMasterMinimumTests {
+    @Test("Master au minimum : silence, même avec un trim positif")
+    func masterMinimumIsSilence() async throws {
+        let harness = BridgeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.left, Devices.right])
+        let right = try #require(harness.output(Devices.rightID))
+        right.trimDB = 1.5
+        harness.state.masterVolumeDB = -60
+
+        let wire = BridgeState.receiverVolume(forGainDB: harness.state.effectiveGainDB(for: right))
+        #expect(wire == -144)
+
+        // Juste au-dessus, le trim compte de nouveau : seul le minimum absolu vaut silence.
+        harness.state.masterVolumeDB = -59
+        #expect(harness.state.effectiveGainDB(for: right) == -57.5)
+    }
+}
+
 @Suite("État — sélection des enceintes")
 struct BridgeStateSelectionTests {
     @Test("Hors diffusion, cocher ne fait que retenir la sélection")
@@ -186,6 +205,27 @@ struct BridgeStateSelectionTests {
     }
 }
 
+@Suite("État — sortie visée")
+struct BridgeStateReceiverNameTests {
+    /// L'application connaît le nom exact de chacune de ses sorties, y compris le préfixe matériel qui
+    /// distingue en RAOP deux HomePod baptisés « Salon ».
+    @Test("Le moteur reçoit le nom complet de l'instance, à prendre exactement")
+    func requestsExactInstance() async throws {
+        let harness = BridgeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.left, Devices.right])
+        await harness.startStreaming(expecting: [Devices.genevaID, Devices.leftID, Devices.rightID])
+
+        let geneva = try #require(harness.factory.lastRequest(Devices.genevaID))
+        #expect(geneva.deviceName == "AABBCCDDEEFF@Geneva")
+        #expect(geneva.nameMatching == .exact)
+        let left = try #require(harness.factory.lastRequest(Devices.leftID))
+        #expect(left.deviceName == "Salon")
+        #expect(left.nameMatching == .exact)
+        #expect(harness.factory.lastRequest(Devices.rightID)?.deviceName == "Salon (2)")
+        await harness.stopStreaming()
+    }
+}
+
 @Suite("État — réglages poussés")
 struct BridgeStatePushTests {
     @Test("Basses : valeur de départ, puis sur changement seulement")
@@ -306,6 +346,17 @@ struct BridgeStateListeningPlaceTests {
         let harness = BridgeHarness()
         harness.layout = plan
         return harness
+    }
+
+    @Test("Le plan ne trace de trait que pour les sorties cochées")
+    func planDrawsCheckedOutputsOnly() async throws {
+        let harness = makeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.left])
+        #expect(Set(harness.state.outputIDsDrawnOnPlan) == [Devices.genevaID, Devices.leftID])
+
+        let geneva = try #require(harness.state.outputs.first { $0.id == Devices.genevaID })
+        geneva.isEnabled = false
+        #expect(harness.state.outputIDsDrawnOnPlan == [Devices.leftID])
     }
 
     @Test("La compensation part dès le démarrage, sans geste de l'utilisateur")
@@ -723,6 +774,69 @@ struct BridgeStateLifecycleTests {
         #expect(await sender.startedVolume == -15)
         #expect(await staysFalse { await !sender.pushedVolumes.isEmpty })
         await harness.stopStreaming()
+    }
+}
+
+@Suite("État — réglages d'une enceinte AirPlay 1", .serialized)
+struct BridgeStateUnconfirmedAnnouncementTests {
+    private let blankGeneva = AirPlay2Device(
+        serviceName: "Geneva", host: "192.168.1.42", port: 7000, txt: [:]
+    )
+
+    @Test("Une recherche creuse ne coûte ni la coche ni les réglages de la Geneva")
+    func singleBadRoundKeepsSettings() async throws {
+        let harness = BridgeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.genevaAirPlay2])
+        let geneva = try #require(harness.output(Devices.genevaID))
+        geneva.trimDB = 3
+        geneva.delayMS = 25
+        geneva.bassBoostDB = 6
+        harness.state.flushSettings()
+
+        await harness.discover(raop: [], airplay2: [blankGeneva])
+        #expect(harness.output(Devices.genevaID) === geneva)
+        #expect(harness.output("airplay2/Geneva") == nil)
+        #expect(geneva.presence == .online)
+        harness.state.flushSettings()
+        #expect(harness.store.stored.outputs[Devices.genevaID]?.bassBoostDB == 6)
+
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.genevaAirPlay2])
+        #expect(harness.output(Devices.genevaID) === geneva)
+        #expect(geneva.isEnabled)
+        #expect(geneva.trimDB == 3)
+        #expect(geneva.delayMS == 25)
+    }
+
+    @Test("La Geneva allumée ne finit pas hors ligne après une annonce AirPlay 2 sans TXT")
+    func blankAnnouncementLeavesNoGhost() async throws {
+        let harness = BridgeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.genevaAirPlay2])
+
+        await harness.discover(raop: [], airplay2: [blankGeneva])
+        for _ in 0..<4 {
+            await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.genevaAirPlay2])
+        }
+
+        #expect(harness.output(Devices.genevaID)?.presence == .online)
+        #expect(harness.output("airplay2/Geneva") == nil)
+    }
+
+    /// Le cas que la règle ne doit pas casser : un HomePod déjà vu avec le bit 48 dont le TXT se perd
+    /// le temps d'une recherche reste une seule ligne, sur le bon protocole.
+    @Test("Un HomePod confirmé garde sa ligne quand son TXT se perd")
+    func confirmedHomePodStillAbsorbs() async throws {
+        let harness = BridgeHarness()
+        await harness.discover(raop: [Devices.leftRAOP], airplay2: [Devices.left])
+        let left = try #require(harness.output(Devices.leftID))
+
+        let blank = AirPlay2Device(
+            serviceName: "Salon", host: Devices.left.host, port: 7000, txt: [:]
+        )
+        await harness.discover(raop: [Devices.leftRAOP], airplay2: [blank])
+
+        #expect(harness.state.outputs.map(\.id) == [Devices.leftID])
+        #expect(harness.output(Devices.leftID) === left)
+        #expect(left.presence == .online)
     }
 }
 

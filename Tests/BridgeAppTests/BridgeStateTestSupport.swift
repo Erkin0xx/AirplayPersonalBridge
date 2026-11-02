@@ -331,6 +331,7 @@ extension BridgeEnvironment.Timing {
         timing.wakeResumeDelay = .milliseconds(5)
         timing.emptySelectionGrace = .milliseconds(30)
         timing.minimumToggleInterval = .zero
+        timing.sourceCheckInterval = .zero
         return timing
     }
 }
@@ -344,6 +345,8 @@ final class BridgeHarness {
     let activity = StubActivity()
     var sources: [CaptureSource] = [.systemWide, .inputDevice]
     var layout = RoomLayout()
+    /// Processus partis. Les autres sont réputés vivants : un test n'en a que des fictifs.
+    var deadPIDs: Set<pid_t> = []
     private(set) var layoutSaveCount = 0
 
     private(set) lazy var state = makeState()
@@ -395,7 +398,8 @@ final class BridgeHarness {
                 },
                 availableSources: { [weak self] in self?.sources ?? [.systemWide, .inputDevice] },
                 streamingActivity: activity,
-                timing: timing
+                timing: timing,
+                isProcessAlive: { [weak self] pid in !(self?.deadPIDs.contains(pid) ?? false) }
             )
         )
     }

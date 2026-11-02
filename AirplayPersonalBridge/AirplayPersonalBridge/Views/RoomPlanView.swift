@@ -106,7 +106,7 @@ struct RoomPlanView: View {
 
     private var renderer: PlanRenderer {
         PlanRenderer(
-            layout: state.roomLayout, transform: transform, outputIDs: state.outputs.map(\.id),
+            layout: state.roomLayout, transform: transform, outputIDs: state.outputIDsDrawnOnPlan,
             selection: selection, hoveredObject: hoveredObject, hoveredVertex: hoveredVertex,
             showsAllLabels: showsAllLabels, showsVertexHandles: tool == .select,
             backgroundImage: backgroundImage

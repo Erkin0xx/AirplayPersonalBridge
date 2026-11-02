@@ -343,6 +343,9 @@ struct BridgeEngineRetryTests {
     @Test("Les refus d'authentification et de capacité sont définitifs, l'absence non")
     func failureClassification() {
         #expect(isPermanentOutputFailure(RAOPSenderError.alacUnsupported("x")))
+        #expect(isPermanentOutputFailure(RAOPSenderError.encryptionUnsupported("x")))
+        // Une réponse DNS tardive décrit un instant, pas l'appareil.
+        #expect(!isPermanentOutputFailure(RAOPSenderError.ipv4Required("fe80::1")))
         #expect(isPermanentOutputFailure(
             RTSPError.unexpectedStatus(method: "POST", code: 470, reason: "")))
         #expect(!isPermanentOutputFailure(
@@ -357,6 +360,20 @@ struct BridgeEngineRetryTests {
         #expect(isPermanentOutputFailure(
             AirPlay2SenderError.pairingRequired(receiver: "x", status: 470)))
         #expect(!isPermanentOutputFailure(AirPlay2SenderError.receiverBusy(receiver: "x")))
+    }
+
+    /// Un AAAA arrivé seul dans les 3 s de la résolution, et la sortie était abandonnée pour de bon
+    /// alors que le A n'avait fait que tarder.
+    @Test("Une adresse sans IPv4 est réessayée, pas définitive")
+    func missingIPv4IsRetried() async throws {
+        let factory = FakeSenderFactory()
+        factory.script("a", [.failWith(RAOPSenderError.ipv4Required("fe80::1")), .succeed])
+        let engine = makeEngine(source: ManualCaptureSource(), factory: factory)
+        try await engine.start(source: source0, outputs: [request("a")])
+
+        #expect(await eventually { await engine.phase(of: "a") == .streaming })
+        #expect(factory.senders("a").count == 2)
+        await engine.stop()
     }
 
     @Test("La reconnexion d'un sender se lit dans la phase")
@@ -1158,8 +1175,12 @@ struct BridgeEngineHealthTests {
         let interruptedBefore = await engine.captureHealth.interruptedSeconds
         #expect(interruptedBefore > 0)
 
-        // 3 s sans le moindre bloc, puis la reprise.
+        // 3 s sans le moindre bloc : rien tant que le relevé suivant ne l'a pas confirmé.
         await engine.tickHealth(now: start.addingTimeInterval(3.01))
+        #expect(clock.presentationUnixTime(forCaptureFrame: 0) == before)
+
+        source.push(frames: 12_000)
+        await engine.tickHealth(now: start.addingTimeInterval(3.26))
         let after = try #require(clock.presentationUnixTime(forCaptureFrame: 0))
         #expect(abs((after - before) - 3) < 0.001)
         #expect(abs(await engine.captureHealth.interruptedSeconds - interruptedBefore - 3) < 0.001)
@@ -1169,6 +1190,83 @@ struct BridgeEngineHealthTests {
             other.presentationUnixTime(forCaptureFrame: 0)
                 == clock.presentationUnixTime(forCaptureFrame: 0))
         await engine.stop()
+    }
+
+    /// Le report est définitif, et la réaction des récepteurs à un instant qui saute reste inconnue :
+    /// 250 ms sans bloc suivies de leur rattrapage ne sont pas une interruption.
+    @Test("Une rafale tardive ne décale pas l'horloge commune")
+    func lateBurstLeavesClockAlone() async throws {
+        let (engine, source, clock, start) = try await settledEngine()
+        let before = try #require(clock.presentationUnixTime(forCaptureFrame: 0))
+
+        await engine.tickHealth(now: start.addingTimeInterval(0.26))
+        source.push(frames: 24_000)
+        await engine.tickHealth(now: start.addingTimeInterval(0.51))
+        source.push(frames: 12_000)
+        await engine.tickHealth(now: start.addingTimeInterval(0.76))
+
+        #expect(clock.presentationUnixTime(forCaptureFrame: 0) == before)
+        #expect(await engine.captureHealth.interruptedSeconds == 0)
+        await engine.stop()
+    }
+
+    @Test("Un vrai arrêt décale l'horloge au relevé suivant, puis à chaque relevé tant qu'il dure")
+    func realStopShiftsClock() async throws {
+        let (engine, source, clock, start) = try await settledEngine()
+        let before = try #require(clock.presentationUnixTime(forCaptureFrame: 0))
+        func shift() throws -> Double {
+            try #require(clock.presentationUnixTime(forCaptureFrame: 0)) - before
+        }
+
+        await engine.tickHealth(now: start.addingTimeInterval(0.26))
+        #expect(try shift() == 0)
+
+        await engine.tickHealth(now: start.addingTimeInterval(0.51))
+        #expect(abs(try shift() - 0.5) < 0.001)
+
+        await engine.tickHealth(now: start.addingTimeInterval(0.76))
+        #expect(abs(try shift() - 0.75) < 0.001)
+
+        // Les blocs reprennent au rythme normal : plus rien à reporter.
+        source.push(frames: 12_000)
+        await engine.tickHealth(now: start.addingTimeInterval(1.01))
+        #expect(abs(try shift() - 0.75) < 0.001)
+        #expect(abs(await engine.captureHealth.interruptedSeconds - 0.75) < 0.001)
+        await engine.stop()
+    }
+
+    /// Le trou s'est arrêté avant d'être confirmé, mais personne ne l'a rattrapé : la marge de
+    /// restitution l'aurait perdu pour de bon.
+    @Test("Un trou court, sans rattrapage, est reporté quand les blocs reprennent")
+    func shortGapWithoutCatchUpIsReported() async throws {
+        let (engine, source, clock, start) = try await settledEngine()
+        let before = try #require(clock.presentationUnixTime(forCaptureFrame: 0))
+
+        await engine.tickHealth(now: start.addingTimeInterval(0.26))
+        source.push(frames: 12_000)
+        await engine.tickHealth(now: start.addingTimeInterval(0.51))
+
+        let after = try #require(clock.presentationUnixTime(forCaptureFrame: 0))
+        #expect(abs((after - before) - 0.25) < 0.001)
+        await engine.stop()
+    }
+
+    /// Un moteur dont la capture coule au rythme normal, et la date du dernier relevé.
+    private func settledEngine() async throws -> (
+        BridgeEngine, ManualCaptureSource, any PlaybackClockProtocol, Date
+    ) {
+        let source = ManualCaptureSource()
+        let factory = FakeSenderFactory()
+        let engine = makeEngine(source: source, factory: factory)
+        try await engine.start(source: source0, outputs: [request("a")])
+        #expect(await eventually { factory.latest("a") != nil })
+        let clock = try #require(factory.latest("a")).context.clock
+        source.push(frames: 480)
+        let start = Date()
+        await engine.tickHealth(now: start)
+        source.push(frames: 480)
+        await engine.tickHealth(now: start.addingTimeInterval(0.01))
+        return (engine, source, clock, start)
     }
 
     /// Un gros bloc d'IO peut tomber à cheval sur deux relevés, et la dérive d'horloge s'accumule

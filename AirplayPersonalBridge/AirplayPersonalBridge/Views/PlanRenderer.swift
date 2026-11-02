@@ -31,8 +31,18 @@ enum PlanPalette {
     static let sage = fixed(0x7B9A80)
     static let foliage = fixed(0x7FA46B)
     static let amber = fixed(0xF0B64D)
-    static let geneva = fixed(0x7FC241)
-    static let homePod = fixed(0xFFF23A)
+
+    /// L'unique accent des enceintes, le même pour tous les modèles : c'est le sujet du plan, il doit
+    /// se repérer en premier, mais par un trait fin plutôt que par une couleur criarde. Un bleu-vert,
+    /// parce que le reste est déjà pris : l'ambre aux lampes et aux distances, le bleu à la sélection,
+    /// le vert aux plantes.
+    static let speakerAccent = dynamic(dark: 0x63D8C8, light: 0x0B8F82)
+    /// Le tissu maillé, vu du dessus : le flanc qui fuit vers le bord s'assombrit.
+    static let meshLight = fixed(0x5C625E)
+    static let meshDark = fixed(0x2A2E2C)
+    /// Le disque tactile du HomePod : du verre sombre, plus lisse que le tissu qui l'entoure.
+    static let touchLight = fixed(0x3C4240)
+    static let touchDark = fixed(0x151817)
 
     private static func fixed(_ hex: UInt32) -> Color {
         Color(nsColor: color(hex))
@@ -858,43 +868,113 @@ struct PlanRenderer {
         }
     }
 
-    /// Ce sont les trois objets dont tout dépend : ils doivent se trouver sans chercher, quel
-    /// que soit le zoom. Le disque reste à l'échelle pour juger d'un dégagement ; la croix des
-    /// HomePod, elle, ne descend pas sous une taille lisible, Ø 15 cm ne faisant que dix
-    /// points sur une pièce entière.
+    /// Ce sont les objets dont tout dépend : ils doivent se trouver sans chercher, quel que soit le
+    /// zoom. Le corps reste à l'échelle, pour juger d'un dégagement ; l'accent autour de lui reste
+    /// en points, Ø 15 cm ne faisant que dix points sur une pièce entière.
     private func drawSpeaker(_ object: RoomObject, in rect: CGRect, on layer: inout GraphicsContext) {
-        let disc = Path(ellipseIn: rect)
+        drawSpeakerAccent(around: rect, on: &layer)
+        // L'ombre de contact : c'est elle qui pose l'enceinte sur le meuble au lieu de la coller
+        // dessus, et qui la détache d'un plateau de bois de même valeur.
+        layer.fill(
+            Path(ellipseIn: rect.insetBy(dx: -0.75, dy: -0.75).offsetBy(dx: 0, dy: 0.75)),
+            with: .color(.black.opacity(0.45))
+        )
         switch SpeakerFamily(name: object.name) {
-        case .geneva:
-            layer.fill(disc, with: .color(PlanPalette.geneva))
-            layer.stroke(disc, with: .color(.black.opacity(0.45)), lineWidth: 1.5)
-            layer.stroke(
-                Path(ellipseIn: rect.insetBy(dx: rect.width * 0.3, dy: rect.height * 0.3)),
-                with: .color(.black.opacity(0.3)), lineWidth: 1.25
-            )
-        case .homePod:
-            layer.fill(disc, with: .color(PlanPalette.charcoal))
-            layer.stroke(disc, with: .color(PlanPalette.homePod), lineWidth: 1)
-            let reach = max(rect.width * 0.9, 10)
-            var cross = Path()
-            cross.move(to: CGPoint(x: -reach, y: -reach))
-            cross.addLine(to: CGPoint(x: reach, y: reach))
-            cross.move(to: CGPoint(x: -reach, y: reach))
-            cross.addLine(to: CGPoint(x: reach, y: -reach))
-            // Le liseré sombre : le jaune seul se perd sur un plateau de bois clair.
-            let width = max(rect.width * 0.34, 4.5)
-            layer.stroke(
-                cross, with: .color(.black.opacity(0.65)),
-                style: .init(lineWidth: width + 2, lineCap: .round)
-            )
-            layer.stroke(
-                cross, with: .color(PlanPalette.homePod),
-                style: .init(lineWidth: width, lineCap: .round)
-            )
-        case .other:
-            layer.fill(disc, with: .color(Theme.info.opacity(0.75)))
-            layer.stroke(disc, with: .color(Theme.info), lineWidth: 1.5)
+        case .geneva: drawSphere(in: rect, on: &layer)
+        case .homePod: drawHomePod(in: rect, on: &layer)
+        case .other: drawGenericSpeaker(in: rect, on: &layer)
         }
+    }
+
+    /// Un anneau fin et, plus loin, son écho : le son qui part, sans une seule couleur criarde.
+    private func drawSpeakerAccent(around rect: CGRect, on layer: inout GraphicsContext) {
+        let accent = PlanPalette.speakerAccent
+        let ring = rect.insetBy(dx: -Self.speakerRingGap, dy: -Self.speakerRingGap)
+        let echo = rect.insetBy(dx: -Self.speakerEchoGap, dy: -Self.speakerEchoGap)
+        layer.fill(Path(ellipseIn: echo), with: .color(accent.opacity(0.1)))
+        layer.stroke(Path(ellipseIn: echo), with: .color(accent.opacity(0.32)), lineWidth: 0.75)
+        layer.stroke(Path(ellipseIn: ring), with: .color(accent), lineWidth: 1.25)
+    }
+
+    private static let speakerRingGap = 2.5
+    private static let speakerEchoGap = 6.5
+
+    /// HomePod : un cylindre aux bords arrondis, maillé sur le flanc, un disque tactile sur le dessus.
+    private func drawHomePod(in rect: CGRect, on layer: inout GraphicsContext) {
+        let radius = rect.width / 2
+        layer.fill(
+            Path(ellipseIn: rect),
+            with: .radialGradient(
+                Gradient(colors: [PlanPalette.meshLight, PlanPalette.meshDark]),
+                center: .zero, startRadius: radius * 0.55, endRadius: radius
+            )
+        )
+        // Le maillage : des points en anneaux, seulement là où ils ont la place d'exister. Sous six
+        // points de rayon, ils ne feraient qu'une bouillie grise.
+        if radius >= 6 {
+            for ratio in [0.78, 0.9] {
+                layer.stroke(
+                    Path(ellipseIn: rect.insetBy(dx: radius * (1 - ratio), dy: radius * (1 - ratio))),
+                    with: .color(.white.opacity(0.28)),
+                    style: StrokeStyle(lineWidth: 0.6, lineCap: .round, dash: [0.1, 1.5])
+                )
+            }
+        }
+        let touch = rect.insetBy(dx: radius * 0.34, dy: radius * 0.34)
+        layer.fill(
+            Path(ellipseIn: touch),
+            with: .linearGradient(
+                Gradient(colors: [PlanPalette.touchLight, PlanPalette.touchDark]),
+                startPoint: CGPoint(x: touch.minX, y: touch.minY),
+                endPoint: CGPoint(x: touch.maxX, y: touch.maxY)
+            )
+        )
+        layer.stroke(Path(ellipseIn: touch), with: .color(.white.opacity(0.22)), lineWidth: 0.5)
+    }
+
+    /// Geneva AeroSphere : une sphère de tissu. Les parallèles se resserrent vers le bord, comme sur
+    /// un globe vu du pôle : c'est ce qui la fait lire comme une boule plutôt que comme un disque.
+    private func drawSphere(in rect: CGRect, on layer: inout GraphicsContext) {
+        let radius = rect.width / 2
+        let sphere = Path(ellipseIn: rect)
+        layer.fill(
+            sphere,
+            with: .radialGradient(
+                Gradient(colors: [PlanPalette.taupe, PlanPalette.meshLight, PlanPalette.meshDark]),
+                center: CGPoint(x: -radius * 0.3, y: -radius * 0.34),
+                startRadius: 0, endRadius: radius * 1.3
+            )
+        )
+        var weave = layer
+        weave.clip(to: sphere)
+        // Le tissage disparaît avant de devenir un aplat : au dézoom, seule reste la sphère.
+        if radius >= 8 {
+            var parallels = Path()
+            for degrees in stride(from: 12.0, through: 84.0, by: 12.0) {
+                let ring = radius * sin(degrees * .pi / 180)
+                parallels.addEllipse(in: CGRect(x: -ring, y: -ring, width: ring * 2, height: ring * 2))
+            }
+            weave.stroke(parallels, with: .color(.white.opacity(0.09)), lineWidth: 0.5)
+            var meridians = Path()
+            let inner = radius * sin(12 * .pi / 180)
+            for step in 0..<24 {
+                let angle = Double(step) * .pi / 12
+                meridians.move(to: CGPoint(x: cos(angle) * inner, y: sin(angle) * inner))
+                meridians.addLine(to: CGPoint(x: cos(angle) * radius, y: sin(angle) * radius))
+            }
+            weave.stroke(meridians, with: .color(.black.opacity(0.12)), lineWidth: 0.5)
+        }
+        layer.stroke(sphere, with: .color(.black.opacity(0.35)), lineWidth: 0.75)
+    }
+
+    /// Une enceinte dont on ne connaît pas le modèle : un haut-parleur, vu de face comme du dessus.
+    private func drawGenericSpeaker(in rect: CGRect, on layer: inout GraphicsContext) {
+        let radius = rect.width / 2
+        layer.fill(Path(ellipseIn: rect), with: .color(PlanPalette.meshDark))
+        let cone = rect.insetBy(dx: radius * 0.28, dy: radius * 0.28)
+        layer.fill(Path(ellipseIn: cone), with: .color(PlanPalette.meshLight))
+        let dome = rect.insetBy(dx: radius * 0.68, dy: radius * 0.68)
+        layer.fill(Path(ellipseIn: dome), with: .color(PlanPalette.touchDark))
     }
 
     /// La position d'écoute, dessinée **vue de dessus**.
@@ -1024,11 +1104,11 @@ struct PlanRenderer {
         case .lamp:
             return CGPoint(x: center.x, y: center.y + height / 2 + 10)
         case .speaker:
-            // Sous la marque : le nom d'une enceinte ne doit pas masquer ce qu'elle désigne.
-            let reach = SpeakerFamily(name: object.name) == .homePod
-                ? max(object.size.width * scale * 0.9, 10) : object.size.height * scale / 2
+            // Sous l'accent : le nom d'une enceinte ne doit pas masquer ce qu'elle désigne. Sauf sur
+            // la sphère, assez grande pour le porter comme le font les autres meubles ronds : posé
+            // dessous, il tomberait sur le fauteuil voisin dès que le plan se resserre.
             return SpeakerFamily(name: object.name) == .geneva
-                ? center : CGPoint(x: center.x, y: center.y + reach + 11)
+                ? center : CGPoint(x: center.x, y: center.y + height / 2 + Self.speakerEchoGap + 9)
         default:
             // Le centre d'un canapé d'angle tombe dans le vide de l'angle : le modèle sait où
             // se trouve sa partie assez large pour porter un texte.

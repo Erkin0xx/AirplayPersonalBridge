@@ -8,6 +8,14 @@ import Testing
 @Suite("Sender AirPlay 2 — session complète")
 struct AirPlay2SenderSessionTests {
 
+    private final class LockedCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+
+        func increment() { lock.withLock { count += 1 } }
+        var value: Int { lock.withLock { count } }
+    }
+
     private func makeReceiver(
         options: FakeAirPlay2Receiver.Options = .init()
     ) async throws -> FakeAirPlay2Receiver {
@@ -335,7 +343,7 @@ struct AirPlay2SenderSessionTests {
         defer { harness.feeder.stop() }
 
         await harness.sender.setKeepAlivePolicy(
-            .init(interval: .milliseconds(10), timeout: .milliseconds(100), silenceThreshold: 2))
+            .init(interval: .milliseconds(10), timeout: .milliseconds(100)))
         try await harness.sender.start(volume: -20)
         try await Task.sleep(for: .seconds(1))
 
@@ -344,9 +352,9 @@ struct AirPlay2SenderSessionTests {
         await harness.sender.stop()
     }
 
-    /// Un récepteur qui répondait puis se tait est parti sans fermer : c'est le seul indice d'un
-    /// appareil éteint, l'UDP ne signalant rien.
-    @Test("Un récepteur qui cesse de répondre est réputé perdu")
+    /// Trois silences valaient perte, donc `TEARDOWN` et nouveau pair-setup, sur un son qui marchait
+    /// peut-être très bien. Chez pyatv ce message est « best effort », et la perte réelle a son signal.
+    @Test("Un récepteur qui répondait puis se tait n'est pas condamné pour autant")
     func feedbackSilence() async throws {
         let receiver = try await makeReceiver()
         defer { receiver.stop() }
@@ -357,10 +365,46 @@ struct AirPlay2SenderSessionTests {
         defer { harness.feeder.stop() }
 
         await harness.sender.setKeepAlivePolicy(
-            .init(interval: .milliseconds(50), timeout: .milliseconds(150), silenceThreshold: 2))
+            .init(interval: .milliseconds(20), timeout: .milliseconds(100)))
         try await harness.sender.start(volume: -20)
 
-        #expect(await waitUntil { receiver.sessionCount >= 2 })
+        #expect(await waitUntil { await harness.sender.statistics.feedbackUnanswered >= 5 })
+        #expect(await harness.sender.statistics.feedbackSent >= 1)
+        #expect(await harness.sender.state == .streaming)
+        #expect(await harness.sender.statistics.reconnections == 0)
+        #expect(receiver.sessionCount == 1)
+        #expect(!receiver.requests(inSession: 0).contains { $0.method == "TEARDOWN" })
+        #expect(receiver.requests().filter { $0.uri == "/pair-setup" }.count == 2)
+        // Le relevé remonte jusqu'à l'affichage, et le son n'a pas cessé de partir.
+        #expect(await harness.sender.currentOutputStatistics().feedbackUnanswered ?? 0 >= 5)
+        let packets = receiver.audioPackets(inSession: 0).count
+        #expect(await waitUntil { receiver.audioPackets(inSession: 0).count > packets })
+        await harness.sender.stop()
+    }
+
+    /// Une coupure de courant ne se simule pas sur la boucle locale, le noyau y acquitte les sondes :
+    /// le keepalive lui-même se vérifie sur ses réglages (`RTSPClientTests.tcpOptions`). Ce test en
+    /// couvre la suite, ce que devient sa fin de connexion une fois le silence devenu inoffensif.
+    @Test("Une rupture de la connexion reste une perte, même après des feedback sans réponse")
+    func ruptureApresSilence() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        receiver.script = { request, occurrence in
+            request.uri == "/feedback" && occurrence >= 1 ? .silent : .normal
+        }
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        await harness.sender.setKeepAlivePolicy(
+            .init(interval: .milliseconds(20), timeout: .milliseconds(100)))
+        try await harness.sender.start(volume: -20)
+        #expect(await waitUntil { await harness.sender.statistics.feedbackUnanswered >= 3 })
+
+        receiver.dropControlConnection(inSession: 0)
+
+        #expect(await waitUntil { receiver.audioPackets(inSession: 1).count >= 5 })
+        #expect(await harness.sender.state == .streaming)
+        #expect(await harness.sender.statistics.reconnections == 1)
         await harness.sender.stop()
     }
 
@@ -700,6 +744,74 @@ struct AirPlay2SenderSessionTests {
         #expect(await sender.state == .idle)
     }
 
+    // MARK: - Relecture de l'adresse
+
+    /// Un sender branché sur `receiver`, qui relit son adresse à chaque échec de reconnexion.
+    private func senderWithLookup(
+        receiver: FakeAirPlay2Receiver,
+        lookup: @escaping @Sendable () async -> AirPlay2Device?
+    ) throws -> (sender: AirPlay2Sender, feeder: SineFeeder) {
+        let ring = AudioRingBuffer(capacityFrames: 48_000, channelCount: 2)
+        let feeder = SineFeeder(ring: ring)
+        let sender = AirPlay2Sender(
+            device: receiver.device(), ring: ring, captureFormat: try SenderHarness.captureFormat(),
+            rediscover: lookup, rediscoveryInterval: 1
+        )
+        feeder.start()
+        return (sender, feeder)
+    }
+
+    /// Un récepteur redémarré qui revient ailleurs : sans relecture, le sender l'appelle à l'ancienne
+    /// adresse jusqu'à l'arrêt de la diffusion.
+    @Test("Après un échec de reconnexion, l'adresse est relue et suivie")
+    func adresseRelue() async throws {
+        let first = try await makeReceiver()
+        defer { first.stop() }
+        let second = try await makeReceiver()
+        defer { second.stop() }
+        let moved = second.device()
+        let (sender, feeder) = try senderWithLookup(receiver: first) { moved }
+        defer { feeder.stop() }
+
+        try await sender.start(volume: -20)
+        #expect(await waitUntil { first.audioPackets(inSession: 0).count >= 5 })
+
+        first.stop()
+
+        #expect(await waitUntil(timeout: .seconds(15)) { second.audioPackets(inSession: 0).count >= 5 })
+        #expect(await sender.state == .streaming)
+        await sender.stop()
+    }
+
+    /// Bonjour peut rendre à un second HomePod le nom libéré par le premier.
+    @Test("Un service de même nom, mais d'un autre appareil, n'est pas suivi")
+    func autreAppareilNonSuivi() async throws {
+        let first = try await makeReceiver()
+        defer { first.stop() }
+        let other = try await makeReceiver()
+        defer { other.stop() }
+        let impostor = AirPlay2Device(
+            serviceName: "Récepteur simulé", host: "127.0.0.1", port: other.port,
+            txt: ["features": "0x405f4200,0x1c300", "deviceid": "11:22:33:44:55:66"]
+        )
+        let lookups = LockedCounter()
+        let (sender, feeder) = try senderWithLookup(receiver: first) {
+            lookups.increment()
+            return impostor
+        }
+        defer { feeder.stop() }
+
+        try await sender.start(volume: -20)
+        #expect(await waitUntil { first.audioPackets(inSession: 0).count >= 5 })
+
+        first.stop()
+
+        #expect(await waitUntil(timeout: .seconds(15)) { lookups.value >= 2 })
+        #expect(other.sessionCount == 0)
+        #expect(await sender.state == .reconnecting)
+        await sender.stop()
+    }
+
     // MARK: - Messages d'erreur
 
     private func startFailure(
@@ -921,6 +1033,39 @@ struct AirPlay2SenderSessionTests {
 
         // Au-delà de ~2 s d'échecs ininterrompus, la session est réputée perdue.
         #expect(await waitUntil { receiver.sessionCount >= 2 })
+        await harness.sender.stop()
+    }
+
+    // MARK: - Latence annoncée
+
+    /// « Les HomePod n'annoncent rien » n'était pas établi : la réponse du `RECORD` était jetée.
+    @Test("L'Audio-Latency du RECORD est relevée, sans entrer dans le calage")
+    func latenceAnnonceeRelevee() async throws {
+        let receiver = try await makeReceiver(options: .init(announcedAudioLatency: 11_025))
+        defer { receiver.stop() }
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        try await harness.sender.start(volume: -20)
+
+        #expect(await harness.sender.statistics.reportedLatencyFrames == 11_025)
+        #expect(await harness.sender.currentOutputStatistics().reportedLatencyFrames == 11_025)
+        // Le calage reste celui d'avant : aucun changement sans écoute.
+        #expect(harness.sender.synchronizer.declaredReceiverLatencyFrames == 0)
+        await harness.sender.stop()
+    }
+
+    @Test("Un récepteur qui n'annonce aucune latence n'en a pas d'inventée")
+    func latenceNonAnnoncee() async throws {
+        let receiver = try await makeReceiver()
+        defer { receiver.stop() }
+        let harness = try SenderHarness(receiver: receiver)
+        defer { harness.feeder.stop() }
+
+        try await harness.sender.start(volume: -20)
+
+        #expect(await harness.sender.statistics.reportedLatencyFrames == nil)
+        #expect(await harness.sender.currentOutputStatistics().reportedLatencyFrames == nil)
         await harness.sender.stop()
     }
 

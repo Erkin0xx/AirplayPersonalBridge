@@ -161,6 +161,9 @@ struct DiagnosticsView: View {
                 if let requests = statistics.retransmitRequests {
                     metric("Demandes de retransmission", requests)
                 }
+                if let unanswered = statistics.feedbackUnanswered {
+                    metric("Feedback sans réponse", unanswered)
+                }
                 if let connected = statistics.eventChannelConnected {
                     metricText(
                         "Canal d'événements",

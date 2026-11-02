@@ -5,10 +5,23 @@ deux HomePod et l'Apple TV sont allumés. Jusqu'ici presque tout a été validé
 des tests : le but est de confirmer sur le vrai matériel, de corriger ce qui casse, puis de clore
 le jalon 5.
 
-Avant toute chose : lis `PROGRESS.md` et `CLAUDE.md` en entier, puis `git log -n 30`. Le mode de
-collaboration de `CLAUDE.md` s'applique : autonomie totale, pas de question oui/non, Baptiste n'est
+Avant toute chose : lis `CLAUDE.md` et `PROGRESS.md`, puis `git log -n 40`. Tant que `PROGRESS.md`
+s'arrête au jalon 4, **ce sont les messages de commit et ce fichier qui font foi** : ils sont plus
+récents, et `CLAUDE.md` contient des faits périmés (en-tête ALAC, échec du SDP contre le mock). Le mode
+de collaboration de `CLAUDE.md` s'applique : autonomie totale, pas de question oui/non, Baptiste n'est
 sollicité que pour une action physique ou une écoute. Quand tu as besoin de lui, dis exactement
 quoi faire et quoi écouter, puis une seule chose à répondre.
+
+**Une autre session Claude travaille en parallèle sur ce dépôt**, dans un worktree, sans toucher au
+matériel : elle stabilise des tests réseau intermittents et met la documentation à jour (`PROGRESS.md`,
+`CLAUDE.md`, `README.md`, vault), puis elle fusionne dans `main`. En conséquence :
+- ne reprends pas ces deux tâches ; en phase 6, repars de ce qu'elle a écrit ;
+- `.claude/skip-auto-commit` suspend le commit automatique, car `git add -A` emporterait les fichiers
+  en cours de l'autre session : commite toi-même, fichier par fichier (`git add <chemins>`), jamais
+  `git add -A`. Avant chaque commit, regarde `git status` et laisse ce qui n'est pas à toi. Retire
+  l'interrupteur en phase 6 ;
+- avant une mesure sensible, vérifie que la machine est calme (`uptime`) : l'autre session lance des
+  tests qui la chargent. Si la charge fausse une mesure, attends ou refais-la.
 
 ## Règles d'orchestration
 
@@ -33,13 +46,19 @@ quoi faire et quoi écouter, puis une seule chose à répondre.
 
 ## Phase 0 : préparation
 
-1. État : `git status`, `swift build`, `swift test`. `AUDIOCORE_MOCK_TESTS=1` et `RUN_MOCK_TESTS=1`
-   activent les tests contre mocks si tu doutes d'un sender (mocks : `./run-mocks.sh start`, à
-   arrêter ensuite pour éviter toute confusion de noms).
-2. Signature et installation : `scripts/setup-signing.sh`, `scripts/install-app.sh --open`,
-   `./make-cli-bundle.sh`. Première autorisation « sons du système » : à faire faire par Baptiste,
-   une fois pour l'app et une fois pour `audiocap`. Une recompilation ne doit plus la révoquer : à
-   confirmer ici.
+1. État : `git status`, `swift build`. **Ne lance pas la suite complète de tests au démarrage** : des
+   tests réseau échouent par intermittence sous charge (`BonjourResolutionWithoutConnectionTests`,
+   « Connexion refusée… », et d'autres), c'est connu et traité par l'autre session. Cible les tests
+   du code que tu modifies (`swift test --filter …`). **Pas de mocks pendant cette session** : ils
+   apparaîtraient comme des enceintes.
+2. Signature et installation : `scripts/setup-signing.sh`, puis `scripts/install-app.sh` (qui arrête
+   l'app en cours). L'app étant arrêtée, retire de
+   `~/Library/Application Support/AirplayPersonalBridge/settings.json` les sorties de test
+   (`airplay2/ApTV-HomePod-Mock`, tout ce qui porte `Geneva-Mock`) et la ligne fantôme `airplay2/Geneva`
+   si elle existe : l'essai contre les mocks y a laissé des entrées cochées. Lance ensuite
+   `/Applications/AirPlay Personal Bridge.app`, puis `./make-cli-bundle.sh`. Première autorisation
+   « sons du système » : à faire faire par Baptiste, une fois pour l'app et une fois pour `audiocap`.
+   Une recompilation ne doit plus la révoquer : à confirmer ici.
 3. Découverte : `swift run audiocap --browse` et `--browse2`. Relève les noms exacts et les bits de
    fonctionnalité de chaque appareil. Le nom réseau de la Geneva n'a jamais été noté : ajoute-le à
    `CLAUDE.md`.
@@ -76,6 +95,13 @@ changements n'ont jamais vu le vrai matériel, et chacun peut casser ce qui marc
   d'événements refuse ; IPv4 pour le `SETUP` ; volume sous −30 traduit en −144.
 - **Découverte** : adresse sans connexion TCP, et combien de temps un appareil éteint reste listé.
 
+Ce qui peut couper un son qui marchait, à regarder en premier : côté Geneva, le code de réponse au
+`/feedback` et son délai, un FIN ou RST reçu sur RTSP (il déclenche désormais une renégociation, alors
+que l'ancien code l'ignorait), des sondes keepalive sans ACK, et les paires `0x55`/`0xD6`. Côté HomePod
+le RTSP est chiffré et illisible en capture : lis les journaux (`log show`, sous-système du projet).
+Les HomePod annoncent-ils une `Audio-Latency` au `RECORD` ? Rien n'a jamais lu cette réponse : si
+c'est le cas, elle compte dans le calage de la phase 2.
+
 Si un ajout est refusé ou gêne : rends-le conditionnel plutôt que de le retirer d'office, en suivant
 ce que fait pyatv (`tools/pyatv313/`).
 
@@ -84,8 +110,13 @@ ce que fait pyatv (`tools/pyatv313/`).
 **Le calcul d'ancrage a changé sans jamais avoir été entendu** : l'instant annoncé valait
 « maintenant + 1 s − négociation », il vaut « maintenant » (commit c41b2ac). Le commit 0cf8a31
 compense la latence annoncée par la Geneva (4 096 trames) et n'a pas été confirmé à l'oreille non
-plus. Si un écart apparaît, le point d'entrée est `timelineSkew` : y retirer `dropped` rétablit
-l'ancien calcul.
+plus, d'autant que l'ancien écart suivait surtout la différence de durée de négociation. Si un écart
+apparaît, commence par la capture : sur chaque paquet `0xD4`, NTP − instant de la trame doit valoir
+≈ −0,1 s sur la Geneva et ≈ 0 sur les HomePod, champ 3 − champ 1 = 88 200, et ΔNTP = Δrtp / 44 100,
+sans saut. **Ne reviens pas à l'ancien calcul en retirant seulement `dropped` de `timelineSkew`** :
+l'horloge démarre désormais à la capture (commit 4a10071), et un HomePod négocié après 5 s annoncerait
+alors un instant passé de 4 s, ses trames arrivant trop tard. Ce retour exige aussi de ramener l'origine
+de l'horloge au premier sender.
 
 1. **Mesure acoustique, pour ne pas dépendre de la seule oreille.** Un sous-agent écrit une source
    de clics (salve courte toutes les 2 s, drapeau CLI à côté de `--tone`) et un script qui repère
@@ -142,11 +173,17 @@ séparées, sans jamais savoir ce que chacun restitue dans ce cas. Teste du plus
 
 ## Phase 4 : l'app et le widget de la barre de menus
 
-Déroule avec Baptiste la liste « à vérifier » de `PROGRESS.md`, au minimum : icône selon l'état ;
-cocher et décocher une enceinte en pleine diffusion sans perturber les autres ; quitter pendant une
-diffusion (`TEARDOWN` visible en capture) ; veille puis réveil ; réouverture de la fenêtre ; réglages
-conservés après relance ; démarrage à l'ouverture de session ; « Couper le son du Mac » ; alerte de
-silence ; changement de sortie audio du Mac en pleine diffusion (casque débranché) ; enceintes du plan
+L'app n'a été vue que lancée au repos, jamais utilisée pour de vrai. Déroule avec Baptiste : icône selon
+l'état et rendu réel du verre dans le panneau ; fenêtre fermée, l'app survit et quitte le Dock ; rouverte,
+elle passe devant, menus actifs ; cocher et décocher une enceinte en pleine diffusion sans perturber les
+autres ; changer de lieu d'écoute en pleine diffusion sans coupure audible ; changer de source, relance
+propre ; un nouveau processus de navigateur pendant une capture par application (Dia) ; dernière enceinte
+décochée, arrêt après 4 s ; quitter pendant une diffusion (`TEARDOWN` visible en capture, enceinte libre
+aussitôt) ; veille puis réveil ; fenêtre fermée 30 min sans décrochage ; réglages conservés après relance ;
+démarrage à l'ouverture de session et son approbation ; liens vers les Réglages, dont `Privacy_ScreenCapture`
+jamais confirmé ; Apple TV signalée « appairage requis » et symboles d'enceintes corrects ; « Couper le son du
+Mac » ; alerte de silence, sans fausse alerte d'autorisation ; changement de sortie audio du Mac en pleine
+diffusion (casque débranché) ; basses à 0 dB puis au maximum ; enceintes du plan
 rattachées aux bonnes sorties (gauche = `Salon` est une hypothèse, à confirmer en faisant jouer une
 seule enceinte) ; choix du lieu d'écoute depuis le widget et depuis le plan ; hauteurs et place exacte
 des deux lieux d'écoute à corriger par Baptiste ; entrée physique si l'interface audio est disponible.
@@ -155,7 +192,10 @@ des deux lieux d'écoute à corriger par Baptiste ; entrée physique si l'interf
 
 Une panne à la fois, chacune sans perturber les autres enceintes (invariant section 12) : Geneva
 débranchée puis rebranchée ; HomePod occupé par un autre appareil (453) ; Wi-Fi du Mac coupé 30 s ;
-enceinte absente au démarrage puis allumée. Note le temps de détection et de reprise.
+enceinte absente au démarrage puis allumée. Note le temps de détection et de reprise : une coupure de
+courant doit se voir en 11 s environ, par le keepalive TCP, car un `/feedback` sans réponse n'est plus
+fatal. Dans le diagnostic : « Interruptions cumulées » à 0 en régime établi, et le compteur « Feedback
+sans réponse ». Si le keepalive ou un FIN coupe une session saine, c'est à corriger en priorité.
 
 Puis la validation du CDC section 8 : **au moins 1 h** de diffusion continue vers toutes les sorties,
 pendant que Baptiste vaque à ses occupations. Un sous-agent relève les compteurs (retransmissions,

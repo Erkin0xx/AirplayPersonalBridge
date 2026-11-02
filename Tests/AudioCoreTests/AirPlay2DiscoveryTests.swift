@@ -62,8 +62,38 @@ struct AirPlay2DiscoveryTests {
         let names = ["Salon (2)", "Salon"]
         #expect(AirPlay2Discovery.bestMatch(for: "salon", among: names, name: { $0 }) == "Salon")
         #expect(AirPlay2Discovery.bestMatch(for: "salon (2)", among: names, name: { $0 }) == "Salon (2)")
-        #expect(AirPlay2Discovery.bestMatch(for: "sal", among: names, name: { $0 }) == "Salon (2)")
-        #expect(AirPlay2Discovery.bestMatch(for: "cuisine", among: names, name: { $0 }) == nil)
+        #expect(
+            AirPlay2Discovery.bestMatch(for: "sal", among: names, name: { $0 }, matching: .partial)
+                == "Salon (2)")
+        #expect(
+            AirPlay2Discovery.bestMatch(for: "cuisine", among: names, name: { $0 }, matching: .partial)
+                == nil)
+        #expect(AirPlay2Discovery.bestMatch(for: "sal", among: names, name: { $0 }) == nil)
+    }
+
+    /// Le chemin de l'application. Le HomePod « Salon » éteint, sa sortie visait « Salon (2) », soit
+    /// deux sorties sur un même appareil, ou « Apple TV Salon », soit un 470 et un échec définitif.
+    @Test(
+        "En exact, un récepteur absent reste introuvable, quoi qu'il y ait autour",
+        arguments: [["Salon (2)"], ["Apple TV Salon", "Salon (2)"], ["Apple TV Salon"]]
+    )
+    func exactSansRepli(services: [String]) async {
+        let finder = discovery(passes: [services])
+
+        await #expect(throws: AirPlay2DiscoveryError.self) {
+            _ = try await finder.find(named: "Salon", matching: .exact, timeout: .milliseconds(1))
+        }
+    }
+
+    @Test("En exact, le récepteur est trouvé dès qu'il revient")
+    func exactRevient() async throws {
+        let recorder = Recorder()
+        let finder = discovery(passes: [["Salon (2)"], ["Salon (2)", "Salon"]], recorder: recorder)
+
+        let device = try await finder.find(named: "Salon", matching: .exact, timeout: .milliseconds(1))
+
+        #expect(device.serviceName == "Salon")
+        #expect(recorder.resolved == ["Salon"])
     }
 
     /// Le défaut des deux sorties sur un seul HomePod, dans sa forme la plus sournoise : un
@@ -74,7 +104,8 @@ struct AirPlay2DiscoveryTests {
         let recorder = Recorder()
         let finder = discovery(passes: [["Salon (2)"], ["Salon (2)", "Salon"]], recorder: recorder)
 
-        let device = try await finder.find(named: "Salon", timeout: .milliseconds(1))
+        let device = try await finder.find(
+            named: "Salon", matching: .partial, timeout: .milliseconds(1))
 
         #expect(device.serviceName == "Salon")
         #expect(recorder.passes == 2)
@@ -85,7 +116,8 @@ struct AirPlay2DiscoveryTests {
         let recorder = Recorder()
         let finder = discovery(passes: [["ApTV-HomePod-Mock"]], recorder: recorder)
 
-        let device = try await finder.find(named: "ApTV", timeout: .milliseconds(1))
+        let device = try await finder.find(
+            named: "ApTV", matching: .partial, timeout: .milliseconds(1))
 
         #expect(device.serviceName == "ApTV-HomePod-Mock")
         #expect(recorder.passes == 2)

@@ -106,6 +106,7 @@ final class ManualCaptureSource: AudioCaptureSource, @unchecked Sendable {
     var routeChanged = false
     var expectation: Bool?
     var preparesToFail = 0
+    var startsToFail = 0
 
     init(
         format: AVAudioFormat = stereoFormat(),
@@ -136,6 +137,11 @@ final class ManualCaptureSource: AudioCaptureSource, @unchecked Sendable {
 
     func start(deliveringTo consumer: @escaping CaptureBlockConsumer) throws {
         lock.lock()
+        if startsToFail > 0 {
+            startsToFail -= 1
+            lock.unlock()
+            throw FakeError.prepareFailed
+        }
         self.consumer = consumer
         startCount += 1
         runningFlag = true
@@ -280,6 +286,7 @@ actor FakeSender: OutputSender {
     enum StartBehaviour: Sendable {
         case succeed
         case fail(FakeError)
+        case failWith(any Error & Sendable)
         case failPermanently
         /// Reste en négociation jusqu'à `releaseStart` ou `stop`.
         case hang
@@ -326,6 +333,9 @@ actor FakeSender: OutputSender {
         case .succeed:
             break
         case let .fail(error):
+            state = .failed
+            throw error
+        case let .failWith(error):
             state = .failed
             throw error
         case .failPermanently:

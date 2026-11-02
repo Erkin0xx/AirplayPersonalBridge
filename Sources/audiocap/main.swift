@@ -449,7 +449,7 @@ func runRequestedOutputs(source: BridgeEngine.Source) async throws -> Bool {
     var requests: [BridgeEngine.OutputRequest] = []
     if let airplayTarget {
         requests.append(BridgeEngine.OutputRequest(
-            id: "RAOP", proto: .raop, deviceName: airplayTarget,
+            id: "RAOP", proto: .raop, deviceName: airplayTarget, nameMatching: .partial,
             volumeDB: airplayVolume, manualDelaySeconds: airplayDelayMs / 1000
         ))
     }
@@ -462,7 +462,7 @@ func runRequestedOutputs(source: BridgeEngine.Source) async throws -> Bool {
             note("Credentials d'appairage système chargés depuis \(path)")
         }
         requests.append(BridgeEngine.OutputRequest(
-            id: "AP2", proto: .airplay2, deviceName: airplay2Target,
+            id: "AP2", proto: .airplay2, deviceName: airplay2Target, nameMatching: .partial,
             volumeDB: airplay2Volume, manualDelaySeconds: airplay2DelayMs / 1000,
             credentials: credentials
         ))

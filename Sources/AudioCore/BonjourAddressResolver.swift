@@ -3,6 +3,19 @@ import Network
 import OSLog
 import dnssd
 
+/// Comment un nom désigne un récepteur, côté RAOP comme côté AirPlay 2.
+public enum ReceiverNameMatching: Sendable, Equatable {
+    /// Ce nom-là et aucun autre, sans tenir compte de la casse : c'est ce que demande l'application,
+    /// qui connaît le nom exact de chacune de ses sorties. Un appareil éteint reste alors introuvable.
+    /// « Salon » absent ne doit jamais se rabattre sur « Salon (2) » ni sur « Apple TV Salon » : deux
+    /// sorties viseraient le même HomePod, ou l'Apple TV répondrait 470 et la sortie échouerait pour
+    /// de bon alors que le vrai récepteur n'était qu'éteint.
+    case exact
+    /// Une partie du nom suffit quand aucun ne correspond exactement : c'est pour ça que la ligne de
+    /// commande existe, on y tape `--airplay Geneva` sans connaître le nom entier.
+    case partial
+}
+
 /// Adresse et port d'un service Bonjour, obtenus **sans ouvrir de connexion vers l'appareil**.
 ///
 /// ## Pourquoi pas `NWConnection`

@@ -161,8 +161,64 @@ private final class LoopbackSenderFactory: OutputSenderFactory, @unchecked Senda
     }
 }
 
+/// La fabrique réelle, ses recherches remplacées : aucune question ne part sur le réseau.
+private final class LookupLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [(name: String, matching: ReceiverNameMatching, passes: Int?)] = []
+    private var currentPort: UInt16
+
+    init(port: UInt16) { currentPort = port }
+
+    func move(to port: UInt16) { lock.withLock { currentPort = port } }
+
+    var lookups: [(name: String, matching: ReceiverNameMatching, passes: Int?)] {
+        lock.withLock { entries }
+    }
+
+    func find(
+        name: String, matching: ReceiverNameMatching, passes: Int?
+    ) -> RAOPDevice {
+        lock.withLock {
+            entries.append((name, matching, passes))
+            return RAOPDevice(
+                serviceName: "000000000000@Boucle", host: "127.0.0.1", port: currentPort,
+                txt: ["et": "0", "cn": "0", "sr": "44100", "ss": "16", "ch": "2"]
+            )
+        }
+    }
+}
+
 @Suite("Moteur et vrai sender, sur une boucle locale")
 struct BridgeEngineRealSenderTests {
+    /// Le CLI garde sa correspondance partielle, l'application demande le nom exact : la fabrique
+    /// doit transmettre ce que dit la demande, et la relecture reste exacte dans tous les cas.
+    @Test("La fabrique cherche comme la demande le dit")
+    func factoryPassesMatching() async throws {
+        let log = LookupLog(port: 1)
+        let factory = LiveOutputSenderFactory(
+            findRAOP: { name, matching, passes in
+                log.find(name: name, matching: matching, passes: passes)
+            },
+            findAirPlay2: { name, _, _ in
+                throw AirPlay2DiscoveryError.notFound(name: name, seen: [])
+            }
+        )
+        let context = OutputSenderContext(
+            ring: AudioRingBuffer(capacityFrames: 1_024, channelCount: 2),
+            captureFormat: stereoFormat(),
+            clock: SharedPlaybackClock(captureSampleRate: 48_000)
+        )
+        for matching in [ReceiverNameMatching.exact, .partial] {
+            _ = try await factory.makeSender(
+                for: BridgeEngine.OutputRequest(
+                    id: "a", proto: .raop, deviceName: "Boucle", nameMatching: matching, volumeDB: -30
+                ),
+                context: context
+            )
+            #expect(log.lookups.last?.matching == matching)
+        }
+    }
+
     /// La reconnexion n'est pas celle d'une doublure : le sender réel perd sa connexion RTSP, son
     /// tampon déborde pendant qu'il renégocie, et il repart.
     ///
@@ -249,6 +305,56 @@ struct BridgeEngineRealSenderTests {
         #expect(expected.contains("mot de passe"))
         // Pas de remplaçant : celui-ci aurait reçu le même refus.
         #expect(factory.sender === sender)
+        await engine.stop()
+    }
+
+    /// Un récepteur redémarré qui revient sur un autre port. La relecture vise le service que le
+    /// sender sert déjà, par son nom complet et en exact.
+    @Test("Une perte prolongée fait relire l'adresse, sans viser un autre appareil")
+    func prolongedLossFollowsAddress() async throws {
+        let first = try LoopbackRAOPReceiver()
+        let firstPort = try await first.start()
+        let second = try LoopbackRAOPReceiver()
+        let secondPort = try await second.start()
+        defer { second.stop() }
+
+        let log = LookupLog(port: firstPort)
+        var dependencies = BridgeEngine.Dependencies.live
+        dependencies.senderFactory = LiveOutputSenderFactory(
+            findRAOP: { name, matching, passes in
+                log.find(name: name, matching: matching, passes: passes)
+            },
+            findAirPlay2: { name, _, _ in
+                throw AirPlay2DiscoveryError.notFound(name: name, seen: [])
+            },
+            rediscoveryInterval: 1
+        )
+        dependencies.tuning.monitorInterval = .milliseconds(20)
+        let engine = BridgeEngine(dependencies: dependencies)
+        let output = BridgeEngine.OutputRequest(
+            id: "boucle", proto: .raop, deviceName: "Boucle", volumeDB: -30
+        )
+
+        try await engine.start(source: .tone(frequency: 440, levelDBFS: -50), outputs: [output])
+        #expect(await eventually { await engine.phase(of: "boucle") == .streaming })
+
+        log.move(to: secondPort)
+        first.stop()
+
+        #expect(await eventually { await engine.phase(of: "boucle") == .reconnecting })
+        #expect(await eventually(timeout: .seconds(15)) {
+            await engine.phase(of: "boucle") == .streaming
+        })
+        #expect(await engine.snapshot(of: "boucle")?.statistics.reconnections == 1)
+
+        let lookups = log.lookups
+        #expect(lookups.first?.name == "Boucle")
+        #expect(lookups.first?.matching == .exact)
+        #expect(lookups.first?.passes == nil)
+        let reread = try #require(lookups.dropFirst().first)
+        #expect(reread.name == "000000000000@Boucle")
+        #expect(reread.matching == .exact)
+        #expect(reread.passes == 1)
         await engine.stop()
     }
 }

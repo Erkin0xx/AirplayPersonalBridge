@@ -70,7 +70,12 @@ public actor AirPlay2Sender {
 
     public private(set) var state: AirPlay2SenderState = .idle
 
-    private let device: AirPlay2Device
+    /// Le récepteur. Seuls son adresse et son port bougent, voir ``refreshAddress()``.
+    private var device: AirPlay2Device
+    /// Relit l'annonce du récepteur, quand une perte de session se prolonge. `nil` : jamais.
+    private let rediscover: (@Sendable () async -> AirPlay2Device?)?
+    /// Échecs de reconnexion consécutifs entre deux relectures.
+    private let rediscoveryInterval: Int
     private let ring: AudioRingBuffer
     private let captureFormat: AVAudioFormat
     /// Alignement, réglage manuel et correction de dérive de **cette** sortie (CDC 4.5).
@@ -125,11 +130,9 @@ public actor AirPlay2Sender {
         var interval: Duration = .seconds(2)
         /// Échéance d'un `feedback`.
         var timeout: Duration = .seconds(4)
-        /// `feedback` consécutifs sans réponse au-delà desquels le récepteur est réputé parti.
-        var silenceThreshold = 3
     }
 
-    /// Permet aux tests de vérifier la détection de silence sans attendre vingt secondes.
+    /// Permet aux tests d'observer le maintien de session sans attendre plusieurs secondes.
     func setKeepAlivePolicy(_ policy: KeepAlivePolicy) {
         keepAlivePolicy = policy
     }
@@ -152,15 +155,22 @@ public actor AirPlay2Sender {
     ///     senders est ce qui les aligne ; à défaut, chacun s'en fabrique une et se comporte
     ///     comme au jalon 3.
     ///   - reconnects: rétablissement automatique de la session après perte réseau.
+    ///   - rediscover: relit l'annonce du récepteur quand les reconnexions échouent. Ne contacte
+    ///     aucun appareil : ce ne sont que des questions mDNS.
+    ///   - rediscoveryInterval: échecs de reconnexion entre deux relectures.
     public init(
         device: AirPlay2Device,
         ring: AudioRingBuffer,
         captureFormat: AVAudioFormat,
         clock: PlaybackClockProtocol? = nil,
         reconnects: Bool = true,
-        credentials: HapCredentials? = nil
+        credentials: HapCredentials? = nil,
+        rediscover: (@Sendable () async -> AirPlay2Device?)? = nil,
+        rediscoveryInterval: Int = 3
     ) {
         self.device = device
+        self.rediscover = rediscover
+        self.rediscoveryInterval = max(1, rediscoveryInterval)
         self.ring = ring
         self.captureFormat = captureFormat
         self.reconnects = reconnects
@@ -291,6 +301,7 @@ public actor AirPlay2Sender {
                 ? .seconds(1) : min(backoff * 2, .seconds(15))
 
             var reconnected = false
+            var failedAttempts = 0
             while !Task.isCancelled && !reconnected {
                 do {
                     try await Task.sleep(for: backoff)
@@ -314,6 +325,8 @@ public actor AirPlay2Sender {
                         return
                     }
                     backoff = min(max(backoff * 2, failure.minimumRetryDelay), .seconds(15))
+                    failedAttempts += 1
+                    if failedAttempts % rediscoveryInterval == 0 { await refreshAddress() }
                 }
             }
             guard reconnected, !Task.isCancelled else { return }
@@ -321,6 +334,36 @@ public actor AirPlay2Sender {
             state = .streaming
             log.info("Session AirPlay 2 rétablie")
         }
+    }
+
+    /// Relit l'adresse et le port annoncés, quand les reconnexions s'enchaînent en échec.
+    ///
+    /// Un récepteur redémarré peut revenir sous une autre adresse (bail DHCP) ou un autre port, et
+    /// la seule chose que le sender en connaît date de la découverte initiale : sans cette relecture,
+    /// il l'appellerait à l'ancienne adresse jusqu'à l'arrêt de la diffusion.
+    ///
+    /// Rien ne change tant que la session vit, et une relecture sans réponse ne coûte rien. Seuls
+    /// l'adresse et le port sont repris : rien ne dit qu'un TXT lu à ce moment soit complet. Un
+    /// service de même nom mais d'un autre `deviceid` n'est pas celui qu'on visait : un second
+    /// HomePod peut hériter d'un nom libéré par Bonjour, et il n'a pas à recevoir ce flux.
+    private func refreshAddress() async {
+        guard let rediscover else { return }
+        let found = try? await untilCancelled { await rediscover() }
+        guard let found, found.host != device.host || found.port != device.port else { return }
+        let known = device.deviceIdentifier.lowercased()
+        let announced = found.deviceIdentifier.lowercased()
+        guard known.isEmpty || announced.isEmpty || known == announced else {
+            log.error(
+                "\(self.device.serviceName, privacy: .public) : le service de ce nom est un autre appareil (\(announced, privacy: .public)), adresse conservée"
+            )
+            return
+        }
+        log.info(
+            "\(self.device.serviceName, privacy: .public) : nouvelle adresse \(found.host, privacy: .public):\(found.port)"
+        )
+        device = AirPlay2Device(
+            serviceName: device.serviceName, host: found.host, port: found.port, txt: device.txt
+        )
     }
 
     /// Arrête la diffusion et libère la session.
@@ -536,7 +579,12 @@ public actor AirPlay2Sender {
         streamCipher = try ChaChaPoly1305(key: session.streamKey)
 
         try await session.setVolume(volume)
-        try await session.record(startSequence: sequenceNumber, startTimestamp: rtpTimestamp)
+        // Relevée et affichée, **sans entrer dans le calage** : contrairement à RAOP, rien ne la passe
+        // au synchroniseur. Aucun récepteur n'a encore été écouté avec, et un calage qui change sans
+        // écoute peut désaligner ce qui sonne juste. Ce sera tranché sur le matériel.
+        statistics.reportedLatencyFrames = try await session.record(
+            startSequence: sequenceNumber, startTimestamp: rtpTimestamp
+        )
         startKeepAlive(session: session, generation: generation)
 
         log.info(
@@ -628,38 +676,32 @@ public actor AirPlay2Sender {
     /// `POST /feedback` périodique, sans jamais entrelacer avec une autre requête : `RTSPClient`
     /// sérialise ses échanges.
     ///
-    /// Trois issues, et une seule condamne la session :
+    /// Trois issues, et seule la rupture condamne la session. pyatv traite ce message en « best
+    /// effort » et n'en tire aucune conclusion : un message facultatif ne doit pas pouvoir couper un
+    /// son qui marche.
     ///
-    /// - **refus** (`4xx`, `5xx`) : le récepteur a répondu, il est donc là. pyatv traite ce
-    ///   message en « best effort », et un keep-alive refusé ne vaut pas une panne ;
-    /// - **rupture** de la connexion : perte franche. C'est même le seul moyen de voir une
-    ///   fermeture côté récepteur, personne ne lisant cette connexion entre deux requêtes ;
-    /// - **silence** : plusieurs échéances de suite, chez un récepteur qui répondait jusque-là,
-    ///   signifient qu'il est parti sans fermer — éteint, ou sorti du réseau. Un récepteur qui
-    ///   n'a *jamais* répondu n'est pas pénalisé : il ne gère peut-être pas ce message.
+    /// - **refus** (`4xx`, `5xx`) : le récepteur a répondu, il est donc là ;
+    /// - **silence** : compté et journalisé, rien de plus. Un récepteur éteint sans adieu n'y échappe
+    ///   pas pour autant : le keepalive TCP de `RTSPClient` (5 s, puis 3 sondes à 2 s) coupe la
+    ///   connexion en 11 s au pire, le compte courant depuis la dernière réception et non depuis le
+    ///   dernier envoi, si bien qu'un `/feedback` en souffrance ne le retarde pas. C'est alors
+    ///   ``RTSPClient/onConnectionLost(_:)`` qui signale la perte, branché à la négociation.
+    /// - **rupture** de la connexion : perte franche, que le signal ci-dessus aura souvent déjà vue.
     private func runKeepAlive(session: AirPlay2Session, generation: Int) async {
         let policy = keepAlivePolicy
-        var hasAnswered = false
-        var silentRounds = 0
 
         while !Task.isCancelled && generation == sessionGeneration {
             do {
                 try await session.sendFeedback(timeout: policy.timeout)
-                hasAnswered = true
-                silentRounds = 0
                 statistics.feedbackSent += 1
             } catch RTSPError.unexpectedStatus(_, let code, _) {
-                hasAnswered = true
-                silentRounds = 0
                 statistics.feedbackRefused += 1
                 log.debug("feedback refusé (\(code)), sans conséquence")
             } catch RTSPError.timedOut {
-                silentRounds += 1
-                log.debug("feedback sans réponse (\(silentRounds) de suite)")
-                if hasAnswered && silentRounds >= policy.silenceThreshold {
-                    noteSessionLost(generation: generation, reason: "le récepteur ne répond plus")
-                    return
-                }
+                statistics.feedbackUnanswered += 1
+                log.info(
+                    "feedback sans réponse (\(self.statistics.feedbackUnanswered) en tout), sans conséquence"
+                )
             } catch {
                 guard !Task.isCancelled else { return }
                 noteSessionLost(
@@ -958,9 +1000,11 @@ public struct AirPlay2Statistics: Sendable {
     /// Paquets renvoyés en réponse, et paquets demandés qu'on n'avait plus.
     public var retransmittedPackets = 0
     public var retransmitMisses = 0
-    /// `POST /feedback` acceptés et refusés par le récepteur.
+    /// `POST /feedback` acceptés, refusés, et restés sans réponse dans leur délai. Ces derniers ne
+    /// sont qu'un relevé : voir `runKeepAlive`.
     public var feedbackSent = 0
     public var feedbackRefused = 0
+    public var feedbackUnanswered = 0
     /// Requêtes du récepteur reçues sur le canal d'événements, déchiffrées et acquittées.
     public var eventMessages = 0
     /// Dernier échec, sous sa forme affichable. Survit à une reconnexion réussie : il dit ce qui
@@ -968,6 +1012,9 @@ public struct AirPlay2Statistics: Sendable {
     public var lastFailure: String?
     /// Valeur brute d'`audioBufferSize` annoncée par le récepteur, unité non établie.
     public var receiverBufferSize = 0
+    /// `Audio-Latency` du dernier `RECORD`, en trames. `nil` si le récepteur n'annonce rien. Simple
+    /// relevé : voir `negotiate`.
+    public var reportedLatencyFrames: Int?
     /// Canal d'événements effectivement ouvert.
     public var eventChannelConnected = false
     /// Sessions rétablies après une perte réseau, et tentatives infructueuses (CDC section 8).
