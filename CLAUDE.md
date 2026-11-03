@@ -693,6 +693,34 @@ Ce qui suit vient des commits 824f16d à 0cf8a31, puis de la session de test mat
   flux de sortie ouvert et muet, et sont réputés « jouer » (`./audiocap --list`).
 - **Pendant une session vers les HomePod, l'Apple TV perd sa sortie Home cinéma**, et la reprend ~1 s après la fin.
 
+## Retard de bout en bout et vidéo — relevés du 2026-11-03
+
+Recherche seule : rien de cela n'est implémenté, ni essayé sur les enceintes.
+
+- **Les 2 s sont un choix** : `latencyFrames` = 88 200 dans les deux senders et `playoutDelaySeconds` = 2 dans l'horloge. Ils se
+  compensent dans `syncAnchorUnixTime` : les changer exige de les bouger ensemble.
+- **Le +290 ms du micro vient probablement de 11 025 trames (0,25 s) que le récepteur ajoute à la latence annoncée** : décrit par
+  OwnTone (`AIRPLAY_AUDIO_LATENCY_MS`) d'après shairport-sync, et par libraop. Hypothèse, non isolée par une mesure.
+- **Pourquoi l'image est en avance** : les applications jouent sur les haut-parleurs du Mac, qui annoncent 17 ms (`device` 60 +
+  `safety` 48 + `stream` 690 trames à 48 kHz). Elles ignorent les ~2,3 s de la diffusion.
+- **Un agrégat ne sait pas annoncer de latence aux applications.** `kAudioSubDeviceExtraOutputLatencyKey` à 2,3 s (sonde sur fichier
+  silencieux, agrégat privé et public) : la valeur va dans le `safety offset`, `kAudioDevicePropertyLatency` reste à 60, l'horodatage
+  de sortie reste à 12 ms (IOProc et AUHAL), AVPlayer ne bouge pas (horloge partie à ~0,1 s, périphérique bien en marche). L'agrégat
+  n'expose pas non plus de volume virtuel : les touches du Mac ne le piloteraient pas. Firefox lit `dev + stream` (`cubeb_audiounit`),
+  donc pas le `safety offset`. Reste à essayer : une sortie virtuelle (AudioServerPlugIn) qui annonce `kAudioDevicePropertyLatency`.
+- **Retransmissions sur le vrai Wi-Fi** (`captures/p5-endurance-1h.pcapng`, 1 h, sinusoïde) : 0,54 % des paquets redemandés, un par
+  demande, réponse servie en moins de 8 ms. Délai entre la 1re émission et la demande :
+
+  | | médiane | p99 | max | > 0,5 s | > 0,75 s | > 1 s |
+  |---|---|---|---|---|---|---|
+  | HomePod « Salon » (2 510 demandes) | 95 ms | 938 ms | 1 058 ms | 303 | 120 | 9 |
+  | HomePod « Salon (2) » (2 554) | 96 ms | 972 ms | 1 081 ms | 384 | 171 | 21 |
+  | Geneva, 202 442 paquets (1 060) | 24 ms | 168 ms | 295 ms | 0 | 0 | 0 |
+
+  **Rythme relevé avec un tampon de 2 s** : rien ne dit qu'un HomePod garderait les mêmes délais avec un tampon plus court.
+- **iPhone** : le récepteur AirPlay du Mac est éteint (rien sur 5000/7000). Audio Hijack a une source « AirPlay System Receiver », avec
+  un bug de capture sous macOS 26 contourné en 4.5.4. Que notre tap global voie ce son reste à essayer.
+
 ## Plan et capture de Baptiste
 
 - `RoomLayout.salon` (`Model/SalonPlan.swift`) reproduit sa capture. Échelle de la capture : **178 px/m,
