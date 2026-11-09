@@ -44,10 +44,11 @@ files=$(git status --porcelain | cut -c4- | sed -e 's/.* -> //' -e 's/^"//' -e '
 [ "$changed" -gt 3 ] && files="$files, +$((changed - 3))"
 
 git add -A || exit 0
-git commit -q -m "auto: $files" \
-    -m "Commit automatique de fin de tour (hook Stop, .claude/auto-commit.sh).
-Ce n'est pas un commit de clôture de jalon : voir PROGRESS.md pour l'état réel." \
-    -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 0
+# Message en anglais, au format conventional commits, et sans aucune ligne d'attribution : règle de
+# Baptiste pour tous ses dépôts depuis le 2026-11-08 (~/.claude/CLAUDE.md, skill super-commit).
+git commit -q -m "chore(auto): checkpoint $files" \
+    -m "End-of-turn automatic commit (Stop hook, .claude/auto-commit.sh).
+Not a milestone closing commit: PROGRESS.md holds the real state." || exit 0
 
 branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 
