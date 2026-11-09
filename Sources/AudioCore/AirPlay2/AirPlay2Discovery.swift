@@ -83,12 +83,18 @@ public struct AirPlay2Device: Sendable {
 public enum AirPlay2DiscoveryError: Error, CustomStringConvertible {
     case notFound(name: String, seen: [String])
 
+    /// Affichée telle quelle sous le nom de la sortie : voir ``ReceiverNotFound``.
     public var description: String {
         switch self {
+        case .notFound: ReceiverNotFound.message
+        }
+    }
+
+    /// Le détail pour le journal : type de service, nom cherché et services vus.
+    public var diagnostic: String {
+        switch self {
         case let .notFound(name, seen):
-            let list = seen.isEmpty ? "aucun" : seen.joined(separator: ", ")
-            return "aucun récepteur _airplay._tcp correspondant à « \(name) » "
-                + "(services vus : \(list))"
+            ReceiverNotFound.diagnostic(serviceType: AirPlay2Discovery.serviceType, name: name, seen: seen)
         }
     }
 }
@@ -212,7 +218,9 @@ public actor AirPlay2Discovery {
             }
         }
         if let fallback { return fallback }
-        throw AirPlay2DiscoveryError.notFound(name: name, seen: seen.sorted())
+        let error = AirPlay2DiscoveryError.notFound(name: name, seen: seen.sorted())
+        log.info("\(error.diagnostic, privacy: .public)")
+        throw error
     }
 
     /// Un parcours qui s'interrompt à l'annulation : il dure plusieurs secondes, et arrêter une

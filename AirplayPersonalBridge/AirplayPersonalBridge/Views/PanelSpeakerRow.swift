@@ -161,6 +161,10 @@ struct PanelSpeakerRow: View {
                     .transition(.opacity)
             }
         }
+        // Jamais moins haute que son contenu. Le message sous le nom ne se tasse pas, et une rangée
+        // comprimée le laissait déborder sur sa voisine, centré dans un cadre trop court : c'est ce que
+        // montrait la capture du 2026-11-09, la Geneva éteinte recouvrant le nom de « Salon ».
+        .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .contain)
     }
 

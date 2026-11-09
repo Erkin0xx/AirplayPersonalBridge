@@ -51,6 +51,32 @@ struct DisplayedTextTests {
         }
     }
 
+    /// Le moteur affiche la `description` sous le nom de l'enceinte : un récepteur éteint y montrait
+    /// le diagnostic du parcours (capture du 2026-11-09). Le détail reste, dans `diagnostic`.
+    @Test("Un récepteur introuvable se dit en une phrase, le détail allant au journal")
+    func receiverNotFound() throws {
+        let raopSeen = ["001122334455@Apple TV Salon", "111111111111@Salon"]
+        let raop = RAOPDiscoveryError.notFound(name: "F8F25A011261@Erki’s geneva", seen: raopSeen)
+        let airplay2 = AirPlay2DiscoveryError.notFound(name: "Salon", seen: ["Geneva", "Salon (2)"])
+        let expected = "Introuvable sur le réseau — éteinte ?"
+
+        #expect(raop.description == expected)
+        #expect(airplay2.description == expected)
+        for text in [raop.description, airplay2.description] {
+            for detail in ["_tcp", "F8F25A011261", "services vus", "Salon"] {
+                #expect(!text.contains(detail), "« \(detail) » dans « \(text) »")
+            }
+            #expect(try formalWords(in: text).isEmpty, "\(text)")
+        }
+
+        #expect(raop.diagnostic.contains("_raop._tcp"))
+        #expect(raop.diagnostic.contains("F8F25A011261@Erki’s geneva"))
+        #expect(raop.diagnostic.contains("001122334455@Apple TV Salon, 111111111111@Salon"))
+        #expect(airplay2.diagnostic.contains("_airplay._tcp"))
+        #expect(airplay2.diagnostic.contains("Geneva, Salon (2)"))
+        #expect(AirPlay2DiscoveryError.notFound(name: "Salon", seen: []).diagnostic.contains("services vus : aucun"))
+    }
+
     @Test("Aucune réponse RTSP traduite ne vouvoie, quel que soit le statut")
     func rtspErrors() throws {
         for status in [400, 401, 403, 404, 453, 470, 500, 503, 600] {

@@ -620,6 +620,38 @@ struct BridgeStateReflectionTests {
         await harness.stopStreaming()
     }
 
+    /// La Geneva éteinte affichait le diagnostic de la découverte (capture du 2026-11-09) : type de
+    /// service, instance avec son préfixe matériel, liste des services vus. Ici, les vraies erreurs de
+    /// découverte traversent le vrai moteur jusqu'à la ligne de la rangée.
+    @Test("Une enceinte éteinte se lit en une phrase courte, en AirPlay 1 comme en AirPlay 2")
+    func receiverMissing() async throws {
+        let harness = BridgeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.left, Devices.right])
+        let seen = ["001122334455@Apple TV Salon", "111111111111@Salon", "222222222222@Salon (2)"]
+        harness.factory.markAbsent(
+            Devices.genevaID, error: RAOPDiscoveryError.notFound(name: "F8F25A011261@Erki’s geneva", seen: seen)
+        )
+        harness.factory.markAbsent(
+            Devices.leftID, error: AirPlay2DiscoveryError.notFound(name: "Salon", seen: ["Salon (2)", "Geneva"])
+        )
+        await harness.startStreaming(expecting: [Devices.rightID])
+
+        for id in [Devices.genevaID, Devices.leftID] {
+            let output = try #require(harness.output(id))
+            #expect(await eventually {
+                if case .waiting = output.connection { return true }
+                return false
+            })
+            let line = try #require(output.statusLine)
+            #expect(line.text == "Introuvable sur le réseau — éteinte ?", "\(id)")
+            #expect(line.tone == .warning)
+            for detail in ["_tcp", "F8F25A011261", "services vus", "Apple TV"] {
+                #expect(!line.text.contains(detail), "\(id) : « \(detail) » dans « \(line.text) »")
+            }
+        }
+        await harness.stopStreaming()
+    }
+
     @Test("Une reconnexion se lit, et sa cause aussi")
     func reconnecting() async throws {
         let harness = BridgeHarness()

@@ -178,9 +178,15 @@ struct AirPlay2DiscoveryTests {
         do {
             _ = try await finder.find(named: "Grenier", timeout: .milliseconds(1))
             Issue.record("aurait dû échouer")
-        } catch let AirPlay2DiscoveryError.notFound(name, seen) {
-            #expect(name == "Grenier")
-            #expect(seen == ["Bureau", "Cuisine", "Salon"])
+        } catch let error as AirPlay2DiscoveryError {
+            switch error {
+            case let .notFound(name, seen):
+                #expect(name == "Grenier")
+                #expect(seen == ["Bureau", "Cuisine", "Salon"])
+            }
+            // Ce que l'utilisateur lit sous le nom, et ce que garde le journal.
+            #expect(error.description == "Introuvable sur le réseau — éteinte ?")
+            #expect(error.diagnostic.contains("« Grenier » (services vus : Bureau, Cuisine, Salon)"))
         } catch {
             Issue.record("mauvaise erreur : \(error)")
         }
