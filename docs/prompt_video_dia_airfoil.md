@@ -53,8 +53,10 @@ non-régression le prouve à la fin de la phase 1.
   peut-être : tout ce qu'un processus joue serait capté et envoyé aux enceintes. Utilise des médias au
   silence numérique strict.
 - **Sortie audio par défaut** : note-la avant de la changer, et rends-la après chaque essai, par script.
-- **Mot de passe administrateur** (installation du pilote, relance de `coreaudiod`) : prépare un script,
-  et Baptiste le lance avec `sudo` dans son Terminal. Toi, tu n'as pas de terminal interactif.
+- **Mot de passe administrateur** (installation du pilote, règle `sudo` de la section 1.6, relance de
+  `coreaudiod`) : prépare un script, et Baptiste le lance avec `sudo` dans son Terminal, une seule fois si
+  possible. Toi, tu n'as pas de terminal interactif. Ne lui demande jamais son mot de passe dans la
+  conversation : il resterait dans la transcription.
 - **Sous-agents** : donne-leur les fichiers et faits utiles, le défaut avec sa preuve, un périmètre de
   fichiers et un critère de fin. Pour du code, ils travaillent en `isolation: "worktree"` et vérifient leur
   base (`git log -1`, `git merge main` si elle est périmée). Ils commitent sur leur branche sans pousser.
@@ -92,8 +94,8 @@ ne touche ni au matériel ni au dépôt, et tourne pendant la phase 1.
   journal par `os_log`. Le code va dans `Drivers/`, avec un `README.md`.
 - **Signature** : seulement via `scripts/setup-signing.sh --codesign`. Vérifie dans les journaux de
   `coreaudiod` (`/usr/bin/log show`) qu'il accepte le plug-in auto-signé.
-- **Scripts** : installation (copie dans `/Library/Audio/Plug-Ins/HAL/`, propriétaire `root:wheel`,
-  relance de `coreaudiod`) et désinstallation. Préviens Baptiste que la relance coupe le son quelques
+- **Scripts** : installation (copie dans `/Library/Audio/Plug-Ins/HAL/`, propriétaire `root:wheel`, règle
+  `sudo` de la section 1.6, relance de `coreaudiod`) et désinstallation, qui retire les deux. Préviens Baptiste que la relance coupe le son quelques
   secondes et fait reconstruire la capture de l'app.
 - **Valeur de départ** : 2,30 s (110 400 trames à 48 kHz). Calcule-la à un seul endroit, à partir de
   `playoutDelaySeconds` plus un résidu mesuré : si le tampon change un jour, elle suivra.
@@ -160,6 +162,34 @@ Sync » retient les images ; « Audio Bluetooth Sync » décale le `timestampOff
 MediaSource. Une extension tierce lit toutes les pages : lis son code avant d'en parler à Baptiste, et
 préfère une extension minimale écrite par nous. Le contenu protégé (DRM) ne passera probablement pas par
 un canevas. La décision revient à Baptiste.
+
+### 1.6 À la fermeture de l'app : `sudo killall coreaudiod` (demande de Baptiste)
+
+À faire quel que soit le résultat de 1.3. Quand l'app quitte, par le menu ou par SIGTERM, sa dernière
+action avant de fermer est de relancer `coreaudiod`.
+
+- **Ordre** :
+  1. `TEARDOWN` des sessions ;
+  2. arrêt de la capture, tap et agrégat détruits ;
+  3. sortie par défaut, volume et sourdine du Mac rendus ;
+  4. relance de `coreaudiod` ;
+  5. fermeture.
+
+  `launchd` redémarre `coreaudiod` tout seul.
+- **Pas de mot de passe à chaque fermeture** : le script d'installation pose une règle limitée à cette
+  seule commande, dans `/etc/sudoers.d/airplay-bridge` (`root:wheel`, mode 0440). Vérifie-la avec
+  `visudo -cf` avant de la mettre en place : `<utilisateur> ALL=(root) NOPASSWD: /usr/bin/killall coreaudiod`.
+  L'app appelle `/usr/bin/sudo -n /usr/bin/killall coreaudiod`. Si le pilote est abandonné, un script à
+  part pose la règle seule.
+- **Ne jamais bloquer la fermeture** :
+  - délai court (1 s), dans la borne de 5 s de l'arrêt propre ;
+  - sans la règle ou en cas d'échec, une ligne `OSLog`, et l'app quitte quand même ;
+  - pas de `waitUntilExit`.
+- **Effets à connaître** : la relance coupe tout le son du Mac une à deux secondes, celui des autres
+  applications compris. Dis-le à Baptiste au premier essai. `scripts/install-app.sh` arrête l'app par
+  SIGTERM : chaque réinstallation relancera donc `coreaudiod`.
+- **Tests** : l'ordre de la séquence et le cas d'échec, par un protocole et une doublure. Aucun test ne
+  relance le vrai `coreaudiod`.
 
 ## Phase 2 : ce qu'Airfoil fait (sous-agent, en parallèle)
 
