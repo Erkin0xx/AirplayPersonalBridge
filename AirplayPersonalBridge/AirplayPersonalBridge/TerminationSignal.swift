@@ -9,8 +9,8 @@ import AppKit
 /// Automation, un signal n'en ouvre aucune.
 ///
 /// **`terminate` part d'un bloc de la boucle, jamais du gestionnaire de la source.** Ce gestionnaire
-/// s'exécute dans un bloc de la file principale. Pendant une diffusion, `applicationShouldTerminate`
-/// répond `.terminateLater`, et AppKit fait tourner une boucle imbriquée jusqu'à
+/// s'exécute dans un bloc de la file principale. `applicationShouldTerminate` répond toujours
+/// `.terminateLater` (`QuitSequence`), et AppKit fait tourner une boucle imbriquée jusqu'à
 /// `reply(toApplicationShouldTerminate:)`. Mais une boucle imbriquée dans un bloc de la file
 /// principale ne draine plus cette file : CFRunLoop s'en abstient tant qu'il est en train de la
 /// servir. Plus aucune tâche du MainActor ne tourne, ni l'arrêt des sorties, ni sa borne de 5 s, ni
