@@ -846,8 +846,9 @@ final class BridgeState {
 
         let source: BridgeEngine.Source =
             selectedSource.tapMode.map { .processTap($0) } ?? .inputDevice
-        // Calage vidéo, avant la capture : l'agrégat du tap prend pour horloge la sortie par défaut du
-        // moment, et le lien du volume, plus bas, doit trouver le pilote comme sortie du Mac.
+        // Calage vidéo, avant la capture : le lien du volume, plus bas, doit trouver le pilote comme
+        // sortie du Mac. L'agrégat du tap, lui, prend pour horloge la sortie des effets sonores, qui
+        // reste celle du Mac : le pilote n'y entre pas, et la capture ne prend aucun retard (mesuré).
         if sourceAllowsVideoSync { videoSync.beginSession() }
         // Relié au volume du Mac, le tap coupe le son local : décidé ici, pour n'avoir rien à relancer.
         let linksSystemVolume = sourceAllowsSystemVolumeLink && systemVolume.canLink()
