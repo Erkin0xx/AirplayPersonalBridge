@@ -151,6 +151,36 @@ public enum DefaultOutputDevice {
         try? AudioObject.string(device, kAudioObjectPropertyName, operation: "nom de la sortie")
     }
 
+    /// Les sorties que l'utilisateur pourrait choisir comme sortie par défaut, dans l'ordre de Core
+    /// Audio. Sans les agrégats : celui de la capture, privé, n'est visible que de ce processus, et
+    /// ne doit jamais servir de repli. La sortie virtuelle en fait partie : à l'appelant de l'écarter.
+    public static func candidates() -> [AudioObjectID] {
+        let devices =
+            (try? AudioObject.array(
+                AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDevices,
+                of: AudioObjectID.self, operation: "liste des périphériques")) ?? []
+        return devices.filter { device in
+            let canBeDefault =
+                (try? AudioObject.value(
+                    device, kAudioDevicePropertyDeviceCanBeDefaultDevice,
+                    scope: kAudioObjectPropertyScopeOutput, defaultValue: UInt32(0),
+                    operation: "sortie possible par défaut")) ?? 0
+            return canBeDefault != 0 && transportType(of: device) != kAudioDeviceTransportTypeAggregate
+        }
+    }
+
+    /// La sortie intégrée du Mac (haut-parleurs, ou prise casque d'un Mac sans haut-parleurs).
+    public static func builtIn() -> AudioObjectID? {
+        candidates().first { transportType(of: $0) == kAudioDeviceTransportTypeBuiltIn }
+    }
+
+    static func transportType(of device: AudioObjectID) -> UInt32? {
+        try? AudioObject.value(
+            device, kAudioDevicePropertyTransportType, defaultValue: UInt32(0),
+            operation: "transport de la sortie"
+        )
+    }
+
     /// Fait de cette sortie la sortie par défaut.
     @discardableResult
     public static func set(_ device: AudioObjectID) -> Bool {

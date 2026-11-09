@@ -410,13 +410,16 @@ final class BridgeHarness {
     private let tuning: BridgeEngine.Tuning
     /// Le volume du Mac : aucune sortie par défaut, donc rien de lié (`SystemVolumeLinkTests`).
     private let systemVolume: any SystemVolumeControlling
+    /// Les sorties du Mac : aucune par défaut, donc rien ne bascule (`VideoSyncSwitchTests`).
+    private let outputSwitch: any DefaultOutputSwitching
 
     init(
         settings: BridgeSettings = BridgeSettings(),
         timing: BridgeEnvironment.Timing = .fast,
         permissions: StubPermissions = StubPermissions(),
         tuning: BridgeEngine.Tuning? = nil,
-        systemVolume: any SystemVolumeControlling = NoSystemVolumeControl()
+        systemVolume: any SystemVolumeControlling = NoSystemVolumeControl(),
+        outputSwitch: any DefaultOutputSwitching = InertDefaultOutputSwitch()
     ) {
         let stopOrder = StopOrder()
         self.stopOrder = stopOrder
@@ -427,6 +430,7 @@ final class BridgeHarness {
         self.permissions = permissions
         self.tuning = tuning ?? Self.fastTuning
         self.systemVolume = systemVolume
+        self.outputSwitch = outputSwitch
     }
 
     static var fastTuning: BridgeEngine.Tuning {
@@ -462,7 +466,8 @@ final class BridgeHarness {
                 streamingActivity: activity,
                 timing: timing,
                 isProcessAlive: { [weak self] pid in !(self?.deadPIDs.contains(pid) ?? false) },
-                systemVolume: systemVolume
+                systemVolume: systemVolume,
+                outputSwitch: outputSwitch
             )
         )
     }

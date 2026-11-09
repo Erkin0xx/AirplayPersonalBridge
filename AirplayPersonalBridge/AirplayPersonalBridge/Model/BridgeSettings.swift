@@ -88,11 +88,18 @@ struct BridgeSettings: Codable, Equatable {
     /// Le volume du Mac à lui rendre, tant qu'une diffusion le tient (`SystemVolumeLink`). Présent au
     /// lancement, il vient d'une diffusion interrompue sans arrêt propre.
     var systemVolumeMemory: SystemVolumeMemory?
+    /// Option « Caler l'image des vidéos » (`VideoSyncSwitch`). Activée par défaut, y compris pour un
+    /// fichier d'avant l'option.
+    var syncsVideo = true
+    /// La sortie du Mac à lui rendre, tant qu'une diffusion le tient sur le pilote. Présente au
+    /// lancement, elle vient d'une diffusion interrompue sans arrêt propre.
+    var videoSyncMemory: VideoSyncMemory?
     var outputs: [String: Output] = [:]
 
     private enum CodingKeys: String, CodingKey {
         case masterVolumeDB, isMuted, sourceID, muteLocalOutput, outputs
         case followsSystemVolume, systemVolumeMemory
+        case syncsVideo, videoSyncMemory
     }
 
     init() {}
@@ -110,6 +117,8 @@ struct BridgeSettings: Codable, Equatable {
         muteLocalOutput = fields.value(.muteLocalOutput, default: false)
         followsSystemVolume = fields.value(.followsSystemVolume, default: true)
         systemVolumeMemory = fields.value(.systemVolumeMemory, default: nil)
+        syncsVideo = fields.value(.syncsVideo, default: true)
+        videoSyncMemory = fields.value(.videoSyncMemory, default: nil)
         // Entrée par entrée : une sortie abîmée ne doit pas coûter les réglages des autres.
         let entries = fields.value(.outputs, default: [String: TolerantOutput]())
         outputs = entries.compactMapValues(\.output)

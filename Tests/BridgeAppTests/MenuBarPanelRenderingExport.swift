@@ -144,6 +144,25 @@ struct MenuBarPanelExport {
                 }, scheme: scheme,
                 to: directory.appending(path: "panneau-son-coupe-basses-aigus-options-\(suffix).png")
             )
+
+            // L'option du calage vidéo, pilote installé, puis grisée sans pilote.
+            var withDriver = BridgeEnvironment.inert
+            withDriver.outputSwitch = InertDefaultOutputSwitch(driverInstalled: true)
+            let videoSyncCases = [
+                ("calage-video", withDriver), ("calage-video-sans-pilote", BridgeEnvironment.inert),
+            ]
+            for (name, environment) in videoSyncCases {
+                try writeHosted(
+                    SimulatedGlass(scheme: scheme) {
+                        MenuBarPanelContent(
+                            state: .preview(.streaming, environment: environment),
+                            loginItem: LoginItemController(service: PreviewLoginItemService()),
+                            preview: PanelPreviewOptions(expandsOptions: true)
+                        )
+                    }, scheme: scheme,
+                    to: directory.appending(path: "panneau-options-\(name)-\(suffix).png")
+                )
+            }
         }
 
         try MenuBarGlyphSheet.write(to: directory)

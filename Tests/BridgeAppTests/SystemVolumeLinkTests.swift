@@ -14,7 +14,10 @@ import Testing
 /// Comme Core Audio, il notifie toute modification de la sortie par défaut, celles de l'app comprises,
 /// un peu plus tard et sur le MainActor : c'est ce qui rend une boucle possible, et ce que la liaison
 /// doit déjouer. Plusieurs sorties peuvent être branchées : seule la sortie par défaut est observée.
-final class FakeSystemVolume: SystemVolumeControlling {
+///
+/// Il tient aussi lieu de sorties du Mac pour le calage vidéo (`DefaultOutputSwitching`) : le même Mac,
+/// pour que le lien du volume trouve le pilote là où la bascule l'a mis (`VideoSyncSwitchTests`).
+final class FakeSystemVolume: SystemVolumeControlling, DefaultOutputSwitching {
     struct Device: Equatable {
         var id: AudioObjectID
         var uid: String
@@ -31,6 +34,12 @@ final class FakeSystemVolume: SystemVolumeControlling {
             id: 120, uid: "Headphones", name: "Casque", volume: 0.25, isMuted: false
         )
         static let hdmi = Device(id: 140, uid: "HDMI", name: "HDMI", volume: nil, isMuted: nil)
+        /// La sortie virtuelle du calage vidéo (`Drivers/APBOutput`) : volume et silence réglables, à
+        /// 100 % tant que personne n'y touche.
+        static let bridge = Device(
+            id: 200, uid: VirtualOutputDevice.deviceUID, name: "AirPlay Personal Bridge", volume: 1,
+            isMuted: false
+        )
     }
 
     private(set) var devices: [Device] = []
@@ -43,6 +52,21 @@ final class FakeSystemVolume: SystemVolumeControlling {
     /// Appelé juste avant chaque écriture : ce que l'app a persisté à cet instant.
     var beforeWrite: () -> Void = {}
     private var onChange: (@MainActor () -> Void)?
+
+    // Calage vidéo.
+    /// Les sorties intégrées au Mac, repli préféré.
+    var builtInUIDs: Set<String> = ["BuiltInSpeakerDevice"]
+    /// Faux : le pilote refuse la latence.
+    var acceptsLatency = true
+    private(set) var defaultWrites: [String] = []
+    private(set) var latencyWrites: [Int] = []
+    /// Lectures faites par la bascule, à part de celles du lien du volume (`reads`).
+    private(set) var switchReads = 0
+    /// Toutes les écritures, dans l'ordre : « volume <uid> », « silence <uid> », « latence »,
+    /// « défaut <uid> ». Le journal d'arrêt d'un banc d'essai, le plus souvent.
+    var journal: StopOrder?
+    /// Appelé juste avant d'écrire la latence ou la sortie par défaut, avec l'écriture à venir.
+    var beforeSwitch: (String) -> Void = { _ in }
 
     init(_ device: Device? = .speakers) {
         if let device { plug(device, notifying: false) }
@@ -79,6 +103,7 @@ final class FakeSystemVolume: SystemVolumeControlling {
         guard let index = devices.firstIndex(where: { $0.id == id }), devices[index].volume != nil
         else { return false }
         beforeWrite()
+        journal?.record("volume \(devices[index].uid)")
         volumeWrites.append(scalar)
         devices[index].volume = scalar
         if devices[index].uid == defaultUID { notify() }
@@ -89,6 +114,7 @@ final class FakeSystemVolume: SystemVolumeControlling {
         guard let index = devices.firstIndex(where: { $0.id == id }), devices[index].isMuted != nil
         else { return false }
         beforeWrite()
+        journal?.record("silence \(devices[index].uid)")
         muteWrites.append(muted)
         devices[index].isMuted = muted
         if devices[index].uid == defaultUID { notify() }
@@ -110,6 +136,11 @@ final class FakeSystemVolume: SystemVolumeControlling {
         if notifying { notify() }
     }
 
+    /// Une sortie branchée qui ne devient pas la sortie par défaut : le pilote installé, typiquement.
+    func add(_ device: Device) {
+        if !devices.contains(where: { $0.uid == device.uid }) { devices.append(device) }
+    }
+
     /// Une sortie débranchée.
     func unplug(_ uid: String, fallingBackTo fallback: String? = nil) {
         devices.removeAll { $0.uid == uid }
@@ -119,6 +150,61 @@ final class FakeSystemVolume: SystemVolumeControlling {
 
     private func notify() {
         Task { @MainActor [weak self] in self?.onChange?() }
+    }
+
+    // MARK: - DefaultOutputSwitching
+
+    func isVirtualOutputInstalled() -> Bool { device(VirtualOutputDevice.deviceUID) != nil }
+
+    func currentOutput() -> SystemOutputVolume.Reading? {
+        switchReads += 1
+        return current.map(Self.reading)
+    }
+
+    func output(uid: String) -> SystemOutputVolume.Reading? {
+        device(uid).map(Self.reading)
+    }
+
+    func setVolume(_ scalar: Float, onOutput uid: String) -> Bool {
+        guard let id = device(uid)?.id else { return false }
+        return setVolume(scalar, on: id)
+    }
+
+    func setMuted(_ muted: Bool, onOutput uid: String) -> Bool {
+        guard let id = device(uid)?.id else { return false }
+        return setMuted(muted, on: id)
+    }
+
+    /// Ce que fait Réglages Son : comme un branchement, la nouvelle sortie est notifiée.
+    func makeDefault(uid: String) -> Bool {
+        guard device(uid) != nil else { return false }
+        beforeSwitch("défaut \(uid)")
+        journal?.record("défaut \(uid)")
+        defaultWrites.append(uid)
+        defaultUID = uid
+        notify()
+        return true
+    }
+
+    func setVirtualOutputLatency(frames: Int) -> Bool {
+        guard isVirtualOutputInstalled(), acceptsLatency else { return false }
+        beforeSwitch("latence")
+        journal?.record("latence")
+        latencyWrites.append(frames)
+        return true
+    }
+
+    func builtInOutputUID() -> String? {
+        devices.first { builtInUIDs.contains($0.uid) }?.uid
+    }
+
+    func outputUIDs() -> [String] { devices.map(\.uid) }
+
+    private static func reading(_ device: Device) -> SystemOutputVolume.Reading {
+        SystemOutputVolume.Reading(
+            deviceID: device.id, deviceUID: device.uid, deviceName: device.name, volume: device.volume,
+            isMuted: device.isMuted
+        )
     }
 }
 

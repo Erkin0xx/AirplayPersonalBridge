@@ -302,6 +302,20 @@ final class BridgeState {
             && preferredSourceID == CaptureSource.systemWide.id
     }
 
+    /// Option « Caler l'image des vidéos » : le temps d'une diffusion par tap, la sortie virtuelle
+    /// devient la sortie par défaut du Mac, et les lecteurs vidéo retardent l'image du retard des
+    /// enceintes (`VideoSyncSwitch`).
+    var syncsVideo = true {
+        didSet {
+            guard oldValue != syncsVideo else { return }
+            scheduleSettingsSave()
+            videoSyncOptionDidChange()
+        }
+    }
+
+    /// La bascule de la sortie du Mac vers le pilote (`BridgeState+VideoSync.swift`).
+    @ObservationIgnored let videoSync: VideoSyncSwitch
+
     /// Gain effectif d'une sortie, master et trim confondus. C'est cette valeur, et elle
     /// seule, que le moteur appliquera — la vue n'en calcule aucune autre.
     ///
@@ -480,6 +494,9 @@ final class BridgeState {
             control: environment.systemVolume, writeInterval: environment.timing.pollInterval,
             memory: settings.systemVolumeMemory
         )
+        self.videoSync = VideoSyncSwitch(
+            control: environment.outputSwitch, memory: settings.videoSyncMemory
+        )
         self.settings = settings
         self.lastSavedSettings = settings
         self.roomLayout = environment.loadRoomLayout()
@@ -487,6 +504,7 @@ final class BridgeState {
         self.isMuted = settings.isMuted
         self.muteLocalOutput = settings.muteLocalOutput
         self.followsSystemVolume = settings.followsSystemVolume
+        self.syncsVideo = settings.syncsVideo
         self.preferredSourceID = settings.sourceID
         if settings.sourceID == CaptureSource.inputDevice.id { selectedSource = .inputDevice }
 
@@ -511,6 +529,9 @@ final class BridgeState {
         systemVolume.onUpdate = { [weak self] in self?.applySystemVolume($0) }
         // Écrite tout de suite : c'est elle qui rend son volume au Mac après un plantage.
         systemVolume.onMemoryChange = { [weak self] in self?.flushSettings() }
+        videoSync.isEnabled = settings.syncsVideo
+        // Écrite tout de suite, elle aussi : c'est elle qui rend sa sortie au Mac après un plantage.
+        videoSync.onMemoryChange = { [weak self] in self?.flushSettings() }
     }
 
     private static func displayName(fromOutputID id: String) -> String {
@@ -546,6 +567,7 @@ final class BridgeState {
     func startBackgroundWork() {
         guard discoveryLoop == nil else { return }
         restoreLeftoverSystemVolume()
+        restoreLeftoverDefaultOutput()
         refreshSources()
         let interval = environment.timing.discoveryInterval
         discoveryLoop = Task { [weak self] in
@@ -559,6 +581,8 @@ final class BridgeState {
     /// Le panneau vient de s'ouvrir : il doit dire ce qui est vrai maintenant.
     func panelDidOpen() {
         refreshSources()
+        // Le pilote a pu être installé ou retiré depuis : l'option le dit.
+        videoSync.refreshDriverPresence()
         if let lastDiscovery,
             lastDiscovery.duration(to: .now) < environment.timing.panelRefreshMinimumAge
         {
@@ -764,6 +788,9 @@ final class BridgeState {
             enqueueLifecycle { [weak self] in await self?.performStop() }
         } else {
             streamingPhase = .starting
+            // Une nouvelle diffusion demandée : une sortie choisie à la main pendant la précédente ne
+            // retient plus la bascule vers le pilote.
+            videoSync.forgetUserChoice()
             enqueueLifecycle { [weak self] in await self?.performStart() }
         }
     }
@@ -819,6 +846,9 @@ final class BridgeState {
 
         let source: BridgeEngine.Source =
             selectedSource.tapMode.map { .processTap($0) } ?? .inputDevice
+        // Calage vidéo, avant la capture : l'agrégat du tap prend pour horloge la sortie par défaut du
+        // moment, et le lien du volume, plus bas, doit trouver le pilote comme sortie du Mac.
+        if sourceAllowsVideoSync { videoSync.beginSession() }
         // Relié au volume du Mac, le tap coupe le son local : décidé ici, pour n'avoir rien à relancer.
         let linksSystemVolume = sourceAllowsSystemVolumeLink && systemVolume.canLink()
         sessionMutesLocalOutput = muteLocalOutput || linksSystemVolume
@@ -887,6 +917,9 @@ final class BridgeState {
         captureHealth = BridgeEngine.CaptureHealth()
         captureAlert = nil
         systemVolume.endSession()
+        // Après l'arrêt du moteur (`performStop`) : rendre la sortie avec la capture en place la ferait
+        // reconstruire pour rien.
+        videoSync.endSession()
         sessionMutesLocalOutput = false
         for output in outputs where output.connection != .idle { output.connection = .idle }
         environment.streamingActivity.end()
@@ -1217,13 +1250,13 @@ final class BridgeState {
     /// Rend au Mac ce que la diffusion lui a pris. Troisième temps de la fermeture (`QuitSequence`) :
     /// après l'arrêt des sorties et de la capture, avant la relance de coreaudiod.
     ///
-    /// Aujourd'hui le volume et le silence du Mac. `performStop` les a déjà rendus quand l'arrêt a pu
-    /// tourner, avant de détruire le tap ; cet appel, sans effet alors (`endSession` est idempotent),
-    /// couvre l'arrêt que la borne a interrompu. C'est aussi là que la sortie par défaut du Mac sera
-    /// rendue, quand une sortie virtuelle (calage vidéo) la remplacera le temps d'une diffusion :
-    /// coreaudiod doit repartir sur la vraie.
+    /// Le volume et le silence du Mac, puis sa sortie par défaut, que le calage vidéo a confiée au
+    /// pilote : coreaudiod doit repartir sur la vraie. `performStop` les a déjà rendus quand l'arrêt a
+    /// pu tourner ; ces appels, sans effet alors (les deux `endSession` sont idempotents), couvrent
+    /// l'arrêt que la borne a interrompu.
     func restoreSystemOutput() {
         systemVolume.endSession()
+        videoSync.endSession()
     }
 
     /// Attend une tâche, sans dépasser un délai.
@@ -1275,6 +1308,8 @@ final class BridgeState {
         result.muteLocalOutput = muteLocalOutput
         result.followsSystemVolume = followsSystemVolume
         result.systemVolumeMemory = systemVolume.memory
+        result.syncsVideo = syncsVideo
+        result.videoSyncMemory = videoSync.memory
         for output in outputs {
             result.outputs[output.id] = BridgeSettings.Output(
                 isEnabled: output.isEnabled, trimDB: output.trimDB, delayMS: output.delayMS,
@@ -1367,8 +1402,13 @@ extension BridgeState {
         case listeningPlaces = "lieux-ecoute"
     }
 
-    static func preview(_ scene: PanelScene) -> BridgeState {
-        let state = BridgeState(environment: .inert)
+    /// - Parameter environment: inerte ; une autre sert à montrer l'option du calage vidéo avec le
+    ///   pilote installé (`InertDefaultOutputSwitch(driverInstalled:)`).
+    static func preview(
+        _ scene: PanelScene, environment: BridgeEnvironment = .inert
+    ) -> BridgeState {
+        let state = BridgeState(environment: environment)
+        state.videoSync.refreshDriverPresence()
         state.hasCompletedDiscovery = true
         state.masterVolumeDB = defaultMasterVolumeDB
         state.sources = [

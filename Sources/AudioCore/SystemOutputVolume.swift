@@ -45,7 +45,11 @@ public enum SystemOutputVolume {
 
     /// La sortie par défaut et son volume, ou `nil` s'il n'y a aucune sortie.
     public static func read() -> Reading? {
-        guard let device = defaultOutputDevice() else { return nil }
+        defaultOutputDevice().map(read(device:))
+    }
+
+    /// Une sortie précise et son volume, qu'elle soit la sortie par défaut ou non.
+    public static func read(device: AudioObjectID) -> Reading {
         let name =
             (try? AudioObject.string(device, kAudioObjectPropertyName, operation: "nom de la sortie"))
             ?? ""

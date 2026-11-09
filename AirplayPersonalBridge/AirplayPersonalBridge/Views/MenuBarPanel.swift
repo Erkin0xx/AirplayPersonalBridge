@@ -520,6 +520,8 @@ struct MenuBarPanelContent: View {
 
             PanelSystemVolumeOption(state: state)
 
+            PanelVideoSyncOption(state: state)
+
             PanelOptionToggle(
                 title: "Démarrer à l'ouverture de session",
                 isOn: Binding(
