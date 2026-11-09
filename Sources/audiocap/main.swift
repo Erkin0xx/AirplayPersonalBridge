@@ -70,6 +70,13 @@ func defaultLevel(for mode: Mode) -> Double {
 /// Coupe le son du Mac pendant la capture, pour ne pas l'entendre en double avec les enceintes.
 var muteLocalOutput = false
 
+/// `--video-sync` : état de la sortie virtuelle de calage vidéo et de la sortie par défaut.
+var videoSyncReport = false
+/// `--video-latency <s|auto>` : latence à annoncer par la sortie virtuelle.
+var videoLatencyArgument: String?
+/// `--default-output <uid|bridge>` : sortie par défaut à imposer.
+var defaultOutputArgument: String?
+
 var arguments = Array(CommandLine.arguments.dropFirst())
 var index = 0
 while index < arguments.count {
@@ -181,6 +188,22 @@ while index < arguments.count {
         airplay2CredentialsPaths.append(arguments[index])
     case "--browse2":
         browse2Only = true
+    case "--video-sync":
+        videoSyncReport = true
+    case "--video-latency":
+        index += 1
+        guard index < arguments.count else {
+            FileHandle.standardError.write(Data("--video-latency attend des secondes ou auto\n".utf8))
+            exit(2)
+        }
+        videoLatencyArgument = arguments[index]
+    case "--default-output":
+        index += 1
+        guard index < arguments.count else {
+            FileHandle.standardError.write(Data("--default-output attend un UID ou bridge\n".utf8))
+            exit(2)
+        }
+        defaultOutputArgument = arguments[index]
     case "--help", "-h":
         note("""
             audiocap — capture audio et diffusion AirPlay 1/2 synchronisée (jalons 1 à 5)
@@ -221,6 +244,14 @@ while index < arguments.count {
                                         --volume2, --delay2, --credentials2 : donnés une fois, ils
                                         valent pour tous les --airplay2 ; répétés, ils s'appliquent
                                         dans l'ordre, un par --airplay2, autant que de --airplay2
+              --video-sync              état de la sortie virtuelle de calage vidéo (pilote
+                                        Drivers/APBOutput) et de la sortie par défaut, puis quitte
+              --video-latency <s|auto>  latence annoncée par la sortie virtuelle, en secondes ;
+                                        auto = délai de restitution + résidu mesuré (2,30 s).
+                                        Une page déjà ouverte doit être rechargée
+              --default-output <uid|bridge>
+                                        impose la sortie par défaut (bridge = sortie virtuelle),
+                                        et affiche l'UID de la précédente pour la rendre
               --record-input <f.wav>    enregistre l'entrée par défaut (Réglages Son > Entrée)
                                         pendant la diffusion, et écrit <f>.json pour dater chaque
                                         échantillon et chaque salve sur l'horloge hôte. Exige une
@@ -259,6 +290,64 @@ while index < arguments.count {
     index += 1
 }
 
+
+// --- Sortie virtuelle de calage vidéo (phase 1 du prompt vidéo) ---
+// Sans tap ni autorisation : `swift run audiocap --video-sync` suffit.
+if videoSyncReport || videoLatencyArgument != nil || defaultOutputArgument != nil {
+    func describe(_ device: AudioObjectID) -> String {
+        let name = DefaultOutputDevice.name(of: device) ?? "?"
+        let uid = DefaultOutputDevice.uid(of: device) ?? "?"
+        guard let report = VirtualOutputDevice.latencyReport(of: device) else { return "\(name) [\(uid)]" }
+        return String(
+            format: "%@ [%@] : périphérique %d + flux %d trames, safety %d, à %.0f Hz → Chromium lit %.3f s",
+            name, uid, report.deviceFrames, report.streamFrames, report.safetyOffsetFrames,
+            report.sampleRate, report.chromiumSeconds
+        )
+    }
+    var failed = false
+    if let argument = videoLatencyArgument {
+        let frames: Int
+        if argument == "auto" {
+            frames = VideoSyncLatency.frames()
+        } else if let seconds = Double(argument.replacingOccurrences(of: ",", with: ".")), seconds >= 0 {
+            frames = Int((seconds * VirtualOutputDevice.sampleRate).rounded())
+        } else {
+            note("--video-latency attend des secondes ou auto")
+            exit(2)
+        }
+        if VirtualOutputDevice.setAnnouncedLatency(frames: frames) {
+            note("Latence annoncée : \(frames) trames (\(String(format: "%.3f", Double(frames) / VirtualOutputDevice.sampleRate)) s)")
+        } else {
+            note("ERREUR : latence refusée (pilote absent, ou valeur hors de 0…10 s)")
+            failed = true
+        }
+    }
+    if let argument = defaultOutputArgument {
+        let uid = argument == "bridge" ? VirtualOutputDevice.deviceUID : argument
+        if let previous = DefaultOutputDevice.current(), let previousUID = DefaultOutputDevice.uid(of: previous) {
+            note("Sortie par défaut précédente : \(previousUID)")
+        }
+        if let device = SystemOutputVolume.device(forUID: uid), DefaultOutputDevice.set(device) {
+            note("Sortie par défaut : \(uid)")
+        } else {
+            note("ERREUR : sortie introuvable ou refusée : \(uid)")
+            failed = true
+        }
+    }
+    if videoSyncReport {
+        if let device = VirtualOutputDevice.deviceID() {
+            let frames = VirtualOutputDevice.announcedLatencyFrames()
+            note("Sortie virtuelle installée : \(describe(device))")
+            note("  latence réglée : \(frames.map(String.init) ?? "?") trames, cible auto \(VideoSyncLatency.frames()) trames")
+        } else {
+            note("Sortie virtuelle absente (Drivers/APBOutput/build.sh puis sudo scripts/install-driver.sh)")
+        }
+        if let device = DefaultOutputDevice.current() {
+            note("Sortie par défaut : \(describe(device))")
+        }
+    }
+    exit(failed ? 1 : 0)
+}
 
 // --- Mode liste ---
 if listOnly {

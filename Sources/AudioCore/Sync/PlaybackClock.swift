@@ -41,6 +41,10 @@ public protocol PlaybackClockProtocol: Sendable {
 }
 
 public final class SharedPlaybackClock: PlaybackClockProtocol, @unchecked Sendable {
+    /// Le délai commun de restitution par défaut. La sortie virtuelle de calage vidéo en dérive la
+    /// latence qu'elle annonce aux applications (`VideoSyncLatency`) : si ce délai change, elle suit.
+    public static let defaultPlayoutDelaySeconds = 2.0
+
     public let captureSampleRate: Double
     public let playoutDelaySeconds: Double
 
@@ -55,7 +59,9 @@ public final class SharedPlaybackClock: PlaybackClockProtocol, @unchecked Sendab
     ///     les senders Apple et qu'attendent les récepteurs RAOP par défaut (88 200 trames à
     ///     44,1 kHz) ; la garder identique des deux côtés évite d'avoir à réconcilier deux
     ///     profondeurs de tampon différentes.
-    public init(captureSampleRate: Double, playoutDelaySeconds: Double = 2.0) {
+    public init(
+        captureSampleRate: Double, playoutDelaySeconds: Double = SharedPlaybackClock.defaultPlayoutDelaySeconds
+    ) {
         precondition(captureSampleRate > 0, "fréquence de capture nulle")
         self.captureSampleRate = captureSampleRate
         self.playoutDelaySeconds = playoutDelaySeconds
