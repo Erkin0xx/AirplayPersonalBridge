@@ -254,7 +254,7 @@ nonisolated final class StubSenderFactory: OutputSenderFactory, @unchecked Senda
     private var created: [String: [StubSender]] = [:]
     private var requests: [String: [BridgeEngine.OutputRequest]] = [:]
     private var behaviours: [String: [StubSender.Behaviour]] = [:]
-    private var absent: Set<String> = []
+    private var absent: [String: any Error] = [:]
     private var stopHanging: Set<String> = []
     private let stopOrder: StopOrder?
 
@@ -268,9 +268,11 @@ nonisolated final class StubSenderFactory: OutputSenderFactory, @unchecked Senda
         lock.unlock()
     }
 
-    func markAbsent(_ id: String, _ isAbsent: Bool = true) {
+    /// `error` : ce que la découverte lève pour cette sortie. Les vraies erreurs de découverte
+    /// (`RAOPDiscoveryError`, `AirPlay2DiscoveryError`) font juger le texte que l'utilisateur lira.
+    func markAbsent(_ id: String, _ isAbsent: Bool = true, error: any Error = StubError.absent) {
         lock.lock()
-        if isAbsent { absent.insert(id) } else { absent.remove(id) }
+        absent[id] = isAbsent ? error : nil
         lock.unlock()
     }
 
@@ -292,7 +294,7 @@ nonisolated final class StubSenderFactory: OutputSenderFactory, @unchecked Senda
         lock.lock()
         defer { lock.unlock() }
         requests[request.id, default: []].append(request)
-        if absent.contains(request.id) { throw StubError.absent }
+        if let error = absent[request.id] { throw error }
         var behaviour = StubSender.Behaviour.succeed
         if var list = behaviours[request.id], !list.isEmpty {
             behaviour = list.removeFirst()

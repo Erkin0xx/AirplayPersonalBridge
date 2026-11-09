@@ -148,14 +148,23 @@ public enum RAOPDiscoveryError: Error, CustomStringConvertible {
     case notFound(name: String, seen: [String])
     case resolutionFailed(String)
 
+    /// Affichée telle quelle sous le nom de la sortie : voir ``ReceiverNotFound``.
     public var description: String {
         switch self {
-        case let .notFound(name, seen):
-            let list = seen.isEmpty ? "aucun" : seen.joined(separator: ", ")
-            return "aucun récepteur _raop._tcp correspondant à « \(name) » "
-                + "(services vus : \(list))"
+        case .notFound:
+            return ReceiverNotFound.message
         case let .resolutionFailed(reason):
             return "résolution du service RAOP impossible : \(reason)"
+        }
+    }
+
+    /// Le détail pour le journal : type de service, nom cherché et services vus.
+    public var diagnostic: String {
+        switch self {
+        case let .notFound(name, seen):
+            return ReceiverNotFound.diagnostic(serviceType: RAOPDiscovery.serviceType, name: name, seen: seen)
+        case .resolutionFailed:
+            return description
         }
     }
 }
@@ -240,7 +249,9 @@ public actor RAOPDiscovery {
                 log.debug("Parcours \(attempt) sans résultat pour « \(name, privacy: .public) », nouvelle tentative")
             }
         }
-        throw RAOPDiscoveryError.notFound(name: name, seen: seen)
+        let error = RAOPDiscoveryError.notFound(name: name, seen: seen)
+        log.info("\(error.diagnostic, privacy: .public)")
+        throw error
     }
 
     /// Choisit le récepteur désigné par un nom, **exactitude d'abord** : nom d'instance, puis

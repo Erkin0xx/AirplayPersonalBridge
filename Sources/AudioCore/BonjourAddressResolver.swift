@@ -16,6 +16,24 @@ public enum ReceiverNameMatching: Sendable, Equatable {
     case partial
 }
 
+/// Un récepteur cherché par son nom et absent du parcours, côté RAOP comme côté AirPlay 2.
+///
+/// Le moteur affiche la `description` d'une erreur telle quelle (`BridgeEngine.Phase`), sous le nom de
+/// l'enceinte, dans une rangée du panneau. Elle dit donc ce que l'utilisateur peut en conclure, sans
+/// type de service ni préfixe matériel. Le détail du parcours, utile au développeur seulement, part au
+/// journal (`diagnostic`).
+enum ReceiverNotFound {
+    /// Le plus souvent, l'enceinte est éteinte : la Geneva quitte le réseau en veille. Assez court pour
+    /// tenir sur une ligne sous le nom.
+    static let message = "Introuvable sur le réseau — éteinte ?"
+
+    /// Ce que le parcours a vu, pour comprendre un nom qui ne correspond pas.
+    static func diagnostic(serviceType: String, name: String, seen: [String]) -> String {
+        let list = seen.isEmpty ? "aucun" : seen.joined(separator: ", ")
+        return "aucun récepteur \(serviceType) correspondant à « \(name) » (services vus : \(list))"
+    }
+}
+
 /// Adresse et port d'un service Bonjour, obtenus **sans ouvrir de connexion vers l'appareil**.
 ///
 /// ## Pourquoi pas `NWConnection`
