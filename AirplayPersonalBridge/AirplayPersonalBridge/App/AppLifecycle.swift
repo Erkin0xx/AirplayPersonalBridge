@@ -21,16 +21,26 @@ enum MainWindow {
 /// Hors de `AirplayPersonalBridgeApp.swift` pour que `swift build` la compile et que `swift test`
 /// la couvre : le point d'entrée `@main` n'appartient qu'à la cible Xcode.
 final class AppLifecycle: NSObject, NSApplicationDelegate {
-    /// Borne de l'arrêt à la fermeture de l'app. Un récepteur muet ne doit pas retenir la session
-    /// de l'utilisateur ; au-delà, ce récepteur finira par expirer de lui-même.
+    /// Borne de l'arrêt à la fermeture de l'app, relance de coreaudiod comprise. Un récepteur muet ne
+    /// doit pas retenir la session de l'utilisateur ; au-delà, ce récepteur finira par expirer de
+    /// lui-même.
     static let shutdownTimeout: Duration = .seconds(5)
+    /// La part de la borne laissée à la relance de coreaudiod, dernière action avant de fermer.
+    static let coreAudioRestartTimeout: Duration = .seconds(1)
     /// Au-delà, AppKit a sa réponse même si l'arrêt n'a pas pu tourner (`TerminationReply`). Après la
     /// borne : tant que le MainActor tourne, c'est elle qui répond.
     static let replyFallbackDelay: Duration = shutdownTimeout + .seconds(1)
+    /// L'arrêt des sorties a ce que la relance laisse de la borne : 4 s.
+    static let quitBudget = QuitSequence.Budget(
+        outputs: shutdownTimeout - coreAudioRestartTimeout,
+        coreAudioRestart: coreAudioRestartTimeout
+    )
 
     let state: BridgeState
     let loginItem: LoginItemController
     let dock: DockIconController
+    private let coreAudio: any CoreAudioRestarting
+    private let quitBudget: QuitSequence.Budget
 
     private var isTerminating = false
     private var wasLaunchedAtLogin = false
@@ -38,19 +48,27 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
     private var windowObservers: [any NSObjectProtocol] = []
     private var powerObservers: [any NSObjectProtocol] = []
 
-    /// Celle qu'emploie `@NSApplicationDelegateAdaptor`.
+    /// Celle qu'emploie `@NSApplicationDelegateAdaptor`, seule à relancer le vrai coreaudiod.
     override convenience init() {
         self.init(
             state: BridgeState(environment: .live),
             loginItem: LoginItemController(),
-            dock: DockIconController()
+            dock: DockIconController(),
+            coreAudio: LiveCoreAudioRestarter(command: .killCoreAudio)
         )
     }
 
-    init(state: BridgeState, loginItem: LoginItemController, dock: DockIconController) {
+    /// - Parameter coreAudio: sans valeur par défaut, pour qu'aucun test ne relance coreaudiod par
+    ///   mégarde : chacun passe une doublure.
+    init(
+        state: BridgeState, loginItem: LoginItemController, dock: DockIconController,
+        coreAudio: any CoreAudioRestarting, quitBudget: QuitSequence.Budget = AppLifecycle.quitBudget
+    ) {
         self.state = state
         self.loginItem = loginItem
         self.dock = dock
+        self.coreAudio = coreAudio
+        self.quitBudget = quitBudget
         super.init()
     }
 
@@ -179,24 +197,25 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
         handleTerminationRequest { sender.reply(toApplicationShouldTerminate: true) }
     }
 
-    /// Sans diffusion, l'app peut quitter tout de suite. Sinon elle attend un arrêt borné : quitter
-    /// sur-le-champ laisserait un récepteur bloqué sur une session sans `TEARDOWN`.
+    /// Toute fermeture passe par `QuitSequence`, diffusion en cours ou non : quitter sur-le-champ
+    /// laisserait un récepteur bloqué sur une session sans `TEARDOWN`, et la relance de coreaudiod,
+    /// dernière action de l'app, vaut à chaque fois. AppKit attend donc toujours une réponse bornée.
     ///
     /// Vaut aussi pour SIGTERM : `TerminationSignal` le convertit en `terminate`, qui passe ici. La
     /// borne ne tient que si le MainActor tourne pendant l'attente d'AppKit : `TerminationReply` répond
     /// de lui-même sinon.
     func handleTerminationRequest(reply: @escaping () -> Void) -> NSApplication.TerminateReply {
-        guard state.needsOrderlyShutdown else {
-            state.flushSettings()
-            state.persistRoomLayout()
-            return .terminateNow
-        }
         guard !isTerminating else { return .terminateLater }
         isTerminating = true
         let answer = TerminationReply(fallbackAfter: Self.replyFallbackDelay, reply: reply)
+        let sequence = QuitSequence(
+            stopOutputs: { [state] limit in await state.shutdown(timeout: limit) },
+            restoreSystemOutput: { [state] in state.restoreSystemOutput() },
+            coreAudio: coreAudio,
+            budget: quitBudget
+        )
         Task {
-            await state.shutdown(timeout: Self.shutdownTimeout)
-            answer.send()
+            await sequence.run { answer.send() }
         }
         return .terminateLater
     }

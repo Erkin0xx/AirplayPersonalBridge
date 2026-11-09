@@ -46,14 +46,38 @@ enum StubError: Error, CustomStringConvertible {
     }
 }
 
+/// L'ordre des arrêts, relevé par les doublures : `TEARDOWN` d'un sender, arrêt d'une capture, et ce
+/// qu'un test y ajoute (relance de coreaudiod, réponse à AppKit).
+nonisolated final class StopOrder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [String] = []
+
+    func record(_ event: String) {
+        lock.lock()
+        recorded.append(event)
+        lock.unlock()
+    }
+
+    var events: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
+}
+
 /// Capture qui ne livre rien : on teste l'orchestration, pas le signal.
 nonisolated final class StubCaptureSource: AudioCaptureSource, @unchecked Sendable {
     let requiredPermission: CapturePermission.Kind?
     private let fails: Bool
+    private let stopOrder: StopOrder?
 
-    init(requiredPermission: CapturePermission.Kind? = nil, fails: Bool = false) {
+    init(
+        requiredPermission: CapturePermission.Kind? = nil, fails: Bool = false,
+        stopOrder: StopOrder? = nil
+    ) {
         self.requiredPermission = requiredPermission
         self.fails = fails
+        self.stopOrder = stopOrder
     }
 
     func prepare() throws -> AVAudioFormat {
@@ -65,7 +89,7 @@ nonisolated final class StubCaptureSource: AudioCaptureSource, @unchecked Sendab
     }
 
     func start(deliveringTo consumer: @escaping CaptureBlockConsumer) throws {}
-    func stop() {}
+    func stop() { stopOrder?.record("capture") }
 }
 
 /// Tient le compte des captures demandées au moteur.
@@ -74,6 +98,11 @@ nonisolated final class CaptureLog: @unchecked Sendable {
     private var requests: [(source: BridgeEngine.Source, options: BridgeEngine.StartOptions)] = []
     private var failing = false
     private var permission: CapturePermission.Kind?
+    private let stopOrder: StopOrder?
+
+    init(stopOrder: StopOrder? = nil) {
+        self.stopOrder = stopOrder
+    }
 
     func record(
         _ source: BridgeEngine.Source, _ options: BridgeEngine.StartOptions
@@ -81,7 +110,9 @@ nonisolated final class CaptureLog: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         requests.append((source, options))
-        return StubCaptureSource(requiredPermission: permission, fails: failing)
+        return StubCaptureSource(
+            requiredPermission: permission, fails: failing, stopOrder: stopOrder
+        )
     }
 
     func failNextCaptures(_ value: Bool) {
@@ -152,15 +183,18 @@ actor StubSender: OutputSender {
     private var statistics = OutputStatistics()
     private let behaviour: Behaviour
     private let stopHangs: Bool
+    private let stopOrder: StopOrder?
     private var stopContinuation: CheckedContinuation<Void, Never>?
 
     init(
-        requestID: String, context: OutputSenderContext, behaviour: Behaviour, stopHangs: Bool
+        requestID: String, context: OutputSenderContext, behaviour: Behaviour, stopHangs: Bool,
+        stopOrder: StopOrder? = nil
     ) {
         self.requestID = requestID
         self.context = context
         self.behaviour = behaviour
         self.stopHangs = stopHangs
+        self.stopOrder = stopOrder
         self.synchronizer = OutputSynchronizer(
             label: requestID, clock: context.clock, outputSampleRate: 44_100
         )
@@ -182,6 +216,7 @@ actor StubSender: OutputSender {
 
     func stop() async {
         stopCount += 1
+        stopOrder?.record("TEARDOWN \(requestID)")
         if stopHangs { await withCheckedContinuation { stopContinuation = $0 } }
         state = .idle
     }
@@ -221,6 +256,11 @@ nonisolated final class StubSenderFactory: OutputSenderFactory, @unchecked Senda
     private var behaviours: [String: [StubSender.Behaviour]] = [:]
     private var absent: Set<String> = []
     private var stopHanging: Set<String> = []
+    private let stopOrder: StopOrder?
+
+    init(stopOrder: StopOrder? = nil) {
+        self.stopOrder = stopOrder
+    }
 
     func script(_ id: String, _ list: [StubSender.Behaviour]) {
         lock.lock()
@@ -260,7 +300,7 @@ nonisolated final class StubSenderFactory: OutputSenderFactory, @unchecked Senda
         }
         let sender = StubSender(
             requestID: request.id, context: context, behaviour: behaviour,
-            stopHangs: stopHanging.contains(request.id)
+            stopHangs: stopHanging.contains(request.id), stopOrder: stopOrder
         )
         created[request.id, default: []].append(sender)
         return sender
@@ -348,8 +388,10 @@ extension BridgeEnvironment.Timing {
 
 /// `BridgeState` branché sur ses doublures.
 final class BridgeHarness {
-    let factory = StubSenderFactory()
-    let captures = CaptureLog()
+    /// `TEARDOWN` des senders et arrêts de capture, dans l'ordre où le moteur les fait.
+    let stopOrder: StopOrder
+    let factory: StubSenderFactory
+    let captures: CaptureLog
     let discovery = StubDiscovery()
     let store: InMemorySettingsStore
     let activity = StubActivity()
@@ -374,6 +416,10 @@ final class BridgeHarness {
         tuning: BridgeEngine.Tuning? = nil,
         systemVolume: any SystemVolumeControlling = NoSystemVolumeControl()
     ) {
+        let stopOrder = StopOrder()
+        self.stopOrder = stopOrder
+        self.factory = StubSenderFactory(stopOrder: stopOrder)
+        self.captures = CaptureLog(stopOrder: stopOrder)
         self.store = InMemorySettingsStore(settings)
         self.timing = timing
         self.permissions = permissions

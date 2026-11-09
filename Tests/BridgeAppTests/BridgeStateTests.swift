@@ -1372,18 +1372,33 @@ struct BridgeStateSleepTests {
 
 @Suite("État — fermeture de l'application")
 struct BridgeStateShutdownTests {
-    @Test("Quitter sans diffusion est immédiat, et sauvegarde")
-    func quitWhileIdle() async {
-        let harness = BridgeHarness()
-        let lifecycle = AppLifecycle(
+    private func lifecycle(
+        _ harness: BridgeHarness, coreAudio: StubCoreAudioRestarter,
+        budget: QuitSequence.Budget = AppLifecycle.quitBudget
+    ) -> AppLifecycle {
+        AppLifecycle(
             state: harness.state,
             loginItem: LoginItemController(service: PreviewLoginItemService()),
-            dock: DockIconController(presenter: StubPresenter())
+            dock: DockIconController(presenter: StubPresenter()),
+            coreAudio: coreAudio, quitBudget: budget
         )
+    }
+
+    /// La relance de coreaudiod vaut à chaque fermeture : AppKit attend donc sa réponse même sans
+    /// diffusion, au lieu de quitter sur-le-champ.
+    @Test("Quitter sans diffusion passe aussi par la relance de coreaudiod, et sauvegarde")
+    func quitWhileIdle() async {
+        let harness = BridgeHarness()
+        let coreAudio = StubCoreAudioRestarter()
+        let lifecycle = lifecycle(harness, coreAudio: coreAudio)
         harness.state.masterVolumeDB = -9
-        var replied = false
-        #expect(lifecycle.handleTerminationRequest { replied = true } == .terminateNow)
-        #expect(!replied)
+        var replies = 0
+        var repliedBeforeRestart = false
+        coreAudio.onRestart = { repliedBeforeRestart = replies > 0 }
+        #expect(lifecycle.handleTerminationRequest { replies += 1 } == .terminateLater)
+        #expect(await eventually { replies == 1 })
+        #expect(coreAudio.restartCount == 1)
+        #expect(!repliedBeforeRestart)
         #expect(harness.store.stored.masterVolumeDB == -9)
         #expect(harness.layoutSaveCount == 1)
     }
@@ -1395,11 +1410,8 @@ struct BridgeStateShutdownTests {
         await harness.discover(raop: [Devices.genevaRAOP])
         await harness.startStreaming(expecting: [Devices.genevaID])
         let sender = try #require(harness.factory.latest(Devices.genevaID))
-        let lifecycle = AppLifecycle(
-            state: harness.state,
-            loginItem: LoginItemController(service: PreviewLoginItemService()),
-            dock: DockIconController(presenter: StubPresenter())
-        )
+        let coreAudio = StubCoreAudioRestarter()
+        let lifecycle = lifecycle(harness, coreAudio: coreAudio)
 
         var replies = 0
         #expect(lifecycle.handleTerminationRequest { replies += 1 } == .terminateLater)
@@ -1409,6 +1421,79 @@ struct BridgeStateShutdownTests {
         #expect(await sender.stopCount >= 1)
         #expect(harness.state.streamingPhase == .idle)
         #expect(await staysFalse { replies > 1 })
+        #expect(coreAudio.restartCount == 1)
+    }
+
+    /// L'ordre voulu par Baptiste, de bout en bout : le vrai moteur, des senders et une capture sans
+    /// matériel qui notent leur arrêt, un volume du Mac sans Core Audio.
+    @Test("Quitter en diffusion : TEARDOWN, arrêt de la capture, son du Mac rendu, relance, réponse")
+    func quitOrder() async throws {
+        let system = FakeSystemVolume()
+        let harness = BridgeHarness(systemVolume: system)
+        await harness.discover(raop: [Devices.genevaRAOP], airplay2: [Devices.left])
+        await harness.startStreaming(expecting: [Devices.genevaID, Devices.leftID])
+        #expect(await eventually { system.current?.volume == 0.6 })
+        let coreAudio = StubCoreAudioRestarter()
+        var macRestoredAtRestart = false
+        coreAudio.onRestart = {
+            harness.stopOrder.record("relance")
+            macRestoredAtRestart = system.current == FakeSystemVolume.Device.speakers
+        }
+        let lifecycle = lifecycle(harness, coreAudio: coreAudio)
+
+        var replies = 0
+        let request = lifecycle.handleTerminationRequest {
+            harness.stopOrder.record("réponse")
+            replies += 1
+        }
+        #expect(request == .terminateLater)
+        #expect(await eventually { replies == 1 })
+
+        let events = harness.stopOrder.events
+        let capture = try #require(events.firstIndex(of: "capture"), "\(events)")
+        #expect(
+            Set(events[..<capture])
+                == ["TEARDOWN \(Devices.genevaID)", "TEARDOWN \(Devices.leftID)"],
+            "\(events)"
+        )
+        #expect(Array(events[capture...]) == ["capture", "relance", "réponse"])
+        #expect(macRestoredAtRestart)
+    }
+
+    @Test("Sans la règle sudoers, la relance échoue et l'app quitte quand même")
+    func failedRestartStillQuits() async throws {
+        let harness = BridgeHarness()
+        await harness.discover(raop: [Devices.genevaRAOP])
+        await harness.startStreaming(expecting: [Devices.genevaID])
+        let sender = try #require(harness.factory.latest(Devices.genevaID))
+        let coreAudio = StubCoreAudioRestarter(.answer(.exited(status: 1)))
+        let lifecycle = lifecycle(harness, coreAudio: coreAudio)
+
+        var replies = 0
+        #expect(lifecycle.handleTerminationRequest { replies += 1 } == .terminateLater)
+        #expect(await eventually { replies == 1 })
+        #expect(await sender.stopCount >= 1)
+        #expect(coreAudio.restartCount == 1)
+    }
+
+    @Test("Une relance figée ne retient la fermeture que le temps de sa part de la borne")
+    func silentRestartIsBounded() async {
+        let harness = BridgeHarness()
+        let coreAudio = StubCoreAudioRestarter(.hang)
+        let budget = QuitSequence.Budget(
+            outputs: .milliseconds(300), coreAudioRestart: .milliseconds(100)
+        )
+        let lifecycle = lifecycle(harness, coreAudio: coreAudio, budget: budget)
+
+        var replies = 0
+        let start = ContinuousClock.now
+        #expect(lifecycle.handleTerminationRequest { replies += 1 } == .terminateLater)
+        #expect(await eventually(timeout: .seconds(3)) { replies == 1 })
+        let elapsed = start.duration(to: .now)
+        #expect(elapsed >= budget.coreAudioRestart)
+        #expect(elapsed < budget.total + .milliseconds(500))
+        #expect(coreAudio.timeouts == [budget.coreAudioRestart])
+        coreAudio.release()
     }
 
     @Test("Un récepteur muet ne retient pas la fermeture au-delà de la borne")

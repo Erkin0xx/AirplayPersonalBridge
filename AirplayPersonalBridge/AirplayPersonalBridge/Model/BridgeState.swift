@@ -1214,6 +1214,18 @@ final class BridgeState {
         await Self.wait(for: stopping, atMost: timeout)
     }
 
+    /// Rend au Mac ce que la diffusion lui a pris. Troisième temps de la fermeture (`QuitSequence`) :
+    /// après l'arrêt des sorties et de la capture, avant la relance de coreaudiod.
+    ///
+    /// Aujourd'hui le volume et le silence du Mac. `performStop` les a déjà rendus quand l'arrêt a pu
+    /// tourner, avant de détruire le tap ; cet appel, sans effet alors (`endSession` est idempotent),
+    /// couvre l'arrêt que la borne a interrompu. C'est aussi là que la sortie par défaut du Mac sera
+    /// rendue, quand une sortie virtuelle (calage vidéo) la remplacera le temps d'une diffusion :
+    /// coreaudiod doit repartir sur la vraie.
+    func restoreSystemOutput() {
+        systemVolume.endSession()
+    }
+
     /// Attend une tâche, sans dépasser un délai.
     ///
     /// Ni groupe de tâches ni `async let` : ils attendent tous leurs enfants à la sortie, et
@@ -1273,20 +1285,6 @@ final class BridgeState {
             result.outputs[output.id]?.tightSyncIdentifier = output.tightSyncIdentifier
         }
         return result
-    }
-}
-
-/// Reprise unique d'une attente, par celui qui arrive le premier.
-private final class OnceContinuation {
-    private var continuation: CheckedContinuation<Void, Never>?
-
-    init(_ continuation: CheckedContinuation<Void, Never>) {
-        self.continuation = continuation
-    }
-
-    func resume() {
-        continuation?.resume()
-        continuation = nil
     }
 }
 

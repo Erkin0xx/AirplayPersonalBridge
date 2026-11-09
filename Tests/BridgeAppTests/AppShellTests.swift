@@ -88,7 +88,8 @@ struct AppLifecycleLaunchTests {
         let lifecycle = AppLifecycle(
             state: BridgeHarness().state,
             loginItem: LoginItemController(service: PreviewLoginItemService()),
-            dock: DockIconController(presenter: StubPresenter())
+            dock: DockIconController(presenter: StubPresenter()),
+            coreAudio: StubCoreAudioRestarter()
         )
         #expect(!lifecycle.applicationShouldTerminateAfterLastWindowClosed(NSApplication.shared))
     }
@@ -101,7 +102,8 @@ struct AppLifecycleLaunchTests {
         let lifecycle = AppLifecycle(
             state: BridgeHarness().state,
             loginItem: LoginItemController(service: PreviewLoginItemService()),
-            dock: DockIconController(presenter: presenter)
+            dock: DockIconController(presenter: presenter),
+            coreAudio: StubCoreAudioRestarter()
         )
         lifecycle.noteLaunch(asLoginItem: true)
 
@@ -127,7 +129,8 @@ struct AppLifecycleLaunchTests {
         let lifecycle = AppLifecycle(
             state: BridgeHarness().state,
             loginItem: LoginItemController(service: PreviewLoginItemService()),
-            dock: DockIconController(presenter: presenter)
+            dock: DockIconController(presenter: presenter),
+            coreAudio: StubCoreAudioRestarter()
         )
         lifecycle.noteLaunch(asLoginItem: false)
 
@@ -146,7 +149,8 @@ struct AppLifecycleLaunchTests {
         let loginItem = LoginItemController(service: service)
         let lifecycle = AppLifecycle(
             state: BridgeHarness().state, loginItem: loginItem,
-            dock: DockIconController(presenter: StubPresenter())
+            dock: DockIconController(presenter: StubPresenter()),
+            coreAudio: StubCoreAudioRestarter()
         )
         #expect(loginItem.status == .disabled)
         service.status = .enabled
