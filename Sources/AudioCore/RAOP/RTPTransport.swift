@@ -155,9 +155,9 @@ public enum RTPPacketBuilder {
     /// Il relie un instant NTP à un timestamp RTP, ce qui donne au récepteur son point de
     /// calage. `isFirst` pose le bit d'extension, attendu sur la toute première annonce.
     ///
-    /// `latency` est le retard, en trames, entre l'instant « maintenant » et le timestamp
-    /// courant : c'est la profondeur de buffer que le récepteur doit respecter avant de
-    /// restituer.
+    /// `latencyFrames` est le retard, en trames, entre l'instant annoncé et le timestamp courant :
+    /// la profondeur de tampon demandée au récepteur. Un récepteur RAOP y ajoute 11 025 trames de
+    /// lui-même : c'est ``SyncLatency/announcedFrames`` qu'on écrit ici, pas la latence visée.
     public static func sync(
         rtpTimestamp: UInt32,
         latencyFrames: UInt32,

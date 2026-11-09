@@ -40,9 +40,6 @@ public enum RAOPSenderState: String, Sendable {
 public actor RAOPSender {
     /// Trames par paquet, valeur canonique du protocole.
     private static let framesPerPacket = ALACEncoder.framesPerPacket
-    /// Latence annoncée au récepteur, en trames à 44,1 kHz — soit ~2 s. C'est la valeur
-    /// qu'utilisent les senders Apple et que shairport-sync attend par défaut.
-    private static let latencyFrames: UInt32 = 88_200
     /// Période des annonces de synchro sur le canal de contrôle, en paquets audio.
     /// 126 paquets ≈ 1 s à 44,1 kHz, cadence usuelle des senders RAOP.
     private static let syncInterval = 126
@@ -128,6 +125,9 @@ public actor RAOPSender {
     /// réelle ne se provoque pas à la demande sur la boucle locale, et c'est le seul moyen de
     /// vérifier qu'un vrai récepteur accepte nos retransmissions.
     private var simulatedLossInterval = 0
+    /// Latence visée et latence annoncée dans les paquets de synchro, dérivées du délai de
+    /// restitution de l'horloge commune (``SyncLatency``). Aucune constante propre à ce sender.
+    nonisolated let syncLatency: SyncLatency
     /// Volume courant, à réappliquer après une reconnexion.
     private var currentVolume: Float = -20
     /// Rétablissement automatique après perte réseau (CDC section 8). Désactivable pour les
@@ -193,6 +193,8 @@ public actor RAOPSender {
     ///   - rediscover: relit l'annonce du récepteur quand les reconnexions échouent. Ne contacte
     ///     aucun appareil : ce ne sont que des questions mDNS.
     ///   - rediscoveryInterval: échecs de reconnexion entre deux relectures.
+    ///   - receiverAddedLatencyFrames: ce que ce récepteur ajoute à la latence annoncée dans les
+    ///     paquets de synchro (``ReceiverAddedLatency``).
     public init(
         device: RAOPDevice,
         ring: AudioRingBuffer,
@@ -201,7 +203,8 @@ public actor RAOPSender {
         reconnects: Bool = true,
         keepAliveInterval: Duration = .seconds(25),
         rediscover: (@Sendable () async -> RAOPDevice?)? = nil,
-        rediscoveryInterval: Int = 3
+        rediscoveryInterval: Int = 3,
+        receiverAddedLatencyFrames: UInt32 = ReceiverAddedLatency.default.raopFrames
     ) {
         self.device = device
         self.rediscover = rediscover
@@ -221,6 +224,11 @@ public actor RAOPSender {
         let effectiveClock =
             clock ?? SharedPlaybackClock(captureSampleRate: captureFormat.sampleRate)
         (effectiveClock as? SharedPlaybackClock)?.startIfNeeded()
+        self.syncLatency = SyncLatency(
+            playoutDelaySeconds: effectiveClock.playoutDelaySeconds,
+            sampleRate: Double(device.sampleRate),
+            receiverAddedFrames: receiverAddedLatencyFrames
+        )
         self.synchronizer = OutputSynchronizer(
             label: "RAOP/\(device.displayName)",
             clock: effectiveClock,
@@ -994,7 +1002,7 @@ public actor RAOPSender {
         }
         // L'ancrage doit décrire **le paquet qu'on émet**, donc être calculé avant d'avancer
         // la position du flux.
-        let anchor = synchronizer.syncAnchorUnixTime(latencyFrames: Self.latencyFrames)
+        let anchor = synchronizer.syncAnchorUnixTime(latencyFrames: syncLatency.playoutFrames)
         pendingSamples.removeFirst(consumedFrames * channels)
         synchronizer.didConsume(outputFrames: consumedFrames)
 
@@ -1080,7 +1088,7 @@ public actor RAOPSender {
         let ntp = anchorUnixTime.map { NTPTime(unixTime: $0) } ?? NTPTime.now()
         let packet = RTPPacketBuilder.sync(
             rtpTimestamp: rtpTimestamp,
-            latencyFrames: Self.latencyFrames,
+            latencyFrames: syncLatency.announcedFrames,
             ntp: ntp,
             isFirst: isFirst
         )

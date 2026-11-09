@@ -260,6 +260,10 @@ final class FakeAirPlay2Receiver: @unchecked Sendable {
         queue.sync { index < sessions.count ? sessions[index].syncPackets.count : 0 }
     }
 
+    func syncPackets(inSession index: Int) -> [Data] {
+        queue.sync { index < sessions.count ? sessions[index].syncPackets : [] }
+    }
+
     func streamKey(inSession index: Int) -> Data {
         queue.sync { index < sessions.count ? sessions[index].streamKey : Data() }
     }

@@ -218,8 +218,10 @@ public struct LiveOutputSenderFactory: OutputSenderFactory {
     private let findAirPlay2: AirPlay2Finder
     /// Échecs de reconnexion entre deux relectures d'adresse.
     private let rediscoveryInterval: Int
+    /// Ce que chaque famille de récepteurs ajoute à la latence annoncée (``ReceiverAddedLatency``).
+    private let receiverAddedLatency: ReceiverAddedLatency
 
-    public init() {
+    public init(receiverAddedLatency: ReceiverAddedLatency = .default) {
         self.init(
             findRAOP: { name, matching, passes in
                 guard let passes else {
@@ -234,17 +236,20 @@ public struct LiveOutputSenderFactory: OutputSenderFactory {
                 }
                 return try await AirPlay2Discovery().find(
                     named: name, matching: matching, attempts: passes)
-            }
+            },
+            receiverAddedLatency: receiverAddedLatency
         )
     }
 
     init(
         findRAOP: @escaping RAOPFinder, findAirPlay2: @escaping AirPlay2Finder,
-        rediscoveryInterval: Int = 3
+        rediscoveryInterval: Int = 3,
+        receiverAddedLatency: ReceiverAddedLatency = .default
     ) {
         self.findRAOP = findRAOP
         self.findAirPlay2 = findAirPlay2
         self.rediscoveryInterval = rediscoveryInterval
+        self.receiverAddedLatency = receiverAddedLatency
     }
 
     public func makeSender(
@@ -269,7 +274,8 @@ public struct LiveOutputSenderFactory: OutputSenderFactory {
                 rediscover: { [findRAOP, serviceName = device.serviceName] in
                     try? await findRAOP(serviceName, .exact, Self.rediscoveryPasses)
                 },
-                rediscoveryInterval: rediscoveryInterval
+                rediscoveryInterval: rediscoveryInterval,
+                receiverAddedLatencyFrames: receiverAddedLatency.raopFrames
             )
         case .airplay2:
             let device = try await untilCancelled { [findAirPlay2] in
@@ -282,7 +288,8 @@ public struct LiveOutputSenderFactory: OutputSenderFactory {
                     try? await findAirPlay2(serviceName, .exact, Self.rediscoveryPasses)
                 },
                 rediscoveryInterval: rediscoveryInterval,
-                pairingGate: context.pairingGate
+                pairingGate: context.pairingGate,
+                receiverAddedLatencyFrames: receiverAddedLatency.airPlay2Frames
             )
         }
     }

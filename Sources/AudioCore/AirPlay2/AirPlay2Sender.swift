@@ -47,10 +47,6 @@ public actor AirPlay2Sender {
     /// 44,1 kHz tourne dans la tâche du sender, en aval du ring buffer (CDC 4.5).
     private static let streamSampleRate = 44_100
     private static let streamChannelCount = 2
-    /// Latence annoncée dans les paquets de synchronisation, en trames à 44,1 kHz (~2 s).
-    /// Identique à celle du sender RAOP : les deux sorties doivent viser la même profondeur
-    /// de restitution pour que l'ancrage commun ait un sens.
-    private static let latencyFrames: UInt32 = 88_200
     /// Période des annonces de synchro, en paquets audio (~1 s).
     private static let syncInterval = 126
     /// Erreurs d'émission consécutives au-delà desquelles la session est réputée perdue : ~2 s.
@@ -85,6 +81,10 @@ public actor AirPlay2Sender {
     private let captureFormat: AVAudioFormat
     /// Alignement, réglage manuel et correction de dérive de **cette** sortie (CDC 4.5).
     public nonisolated let synchronizer: OutputSynchronizer
+    /// Latence visée et latence annoncée dans les paquets de synchro, dérivées du délai de
+    /// restitution de l'horloge commune (``SyncLatency``). Aucune constante propre à ce sender : les
+    /// deux protocoles visent ainsi la même profondeur de restitution.
+    nonisolated let syncLatency: SyncLatency
     private let log = AudioLog.airplay2
 
     private var rtsp: RTSPClient?
@@ -215,6 +215,8 @@ public actor AirPlay2Sender {
     ///   - rediscoveryInterval: échecs de reconnexion entre deux relectures.
     ///   - pairingGate: tour de pairing commun aux sorties d'un même moteur. Le sender ne sait pas
     ///     qui d'autre l'attend : il attend son tour avant chaque pairing, rien de plus.
+    ///   - receiverAddedLatencyFrames: ce que ce récepteur ajoute à la latence annoncée dans les
+    ///     paquets de synchro (``ReceiverAddedLatency``).
     public init(
         device: AirPlay2Device,
         ring: AudioRingBuffer,
@@ -224,7 +226,8 @@ public actor AirPlay2Sender {
         credentials: HapCredentials? = nil,
         rediscover: (@Sendable () async -> AirPlay2Device?)? = nil,
         rediscoveryInterval: Int = 3,
-        pairingGate: (any PairingGate)? = nil
+        pairingGate: (any PairingGate)? = nil,
+        receiverAddedLatencyFrames: UInt32 = ReceiverAddedLatency.default.airPlay2Frames
     ) {
         self.device = device
         self.rediscover = rediscover
@@ -237,6 +240,11 @@ public actor AirPlay2Sender {
         let effectiveClock =
             clock ?? SharedPlaybackClock(captureSampleRate: captureFormat.sampleRate)
         (effectiveClock as? SharedPlaybackClock)?.startIfNeeded()
+        self.syncLatency = SyncLatency(
+            playoutDelaySeconds: effectiveClock.playoutDelaySeconds,
+            sampleRate: Double(Self.streamSampleRate),
+            receiverAddedFrames: receiverAddedLatencyFrames
+        )
         self.synchronizer = OutputSynchronizer(
             label: "AirPlay2/\(device.serviceName)",
             clock: effectiveClock,
@@ -1152,7 +1160,7 @@ public actor AirPlay2Sender {
             statistics.framesInserted += 1
         }
         // L'ancrage décrit le paquet qu'on émet : le calculer avant d'avancer la position.
-        let anchor = synchronizer.syncAnchorUnixTime(latencyFrames: Self.latencyFrames)
+        let anchor = synchronizer.syncAnchorUnixTime(latencyFrames: syncLatency.playoutFrames)
         pendingSamples.removeFirst(consumedFrames * channels)
         synchronizer.didConsume(outputFrames: consumedFrames)
 
@@ -1218,7 +1226,7 @@ public actor AirPlay2Sender {
         let ntp = anchorUnixTime.map { NTPTime(unixTime: $0) } ?? NTPTime.now()
         let packet = RTPPacketBuilder.sync(
             rtpTimestamp: rtpTimestamp,
-            latencyFrames: Self.latencyFrames,
+            latencyFrames: syncLatency.announcedFrames,
             ntp: ntp,
             isFirst: isFirst
         )

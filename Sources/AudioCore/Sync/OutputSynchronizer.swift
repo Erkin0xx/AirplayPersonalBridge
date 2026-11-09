@@ -289,7 +289,10 @@ public final class OutputSynchronizer: @unchecked Sendable {
     /// restitution pour la même trame captée : c'est là, et nulle part ailleurs, que se fait
     /// l'alignement automatique.
     ///
-    /// - Parameter latencyFrames: latence annoncée dans le même paquet de synchronisation.
+    /// - Parameter latencyFrames: latence **visée**, celle que le récepteur appliquera en tout entre
+    ///   l'instant annoncé et la restitution de l'estampille courante : la latence écrite dans le
+    ///   paquet, plus ce que le récepteur y ajoute de lui-même (``SyncLatency/playoutFrames``, et
+    ///   non ``SyncLatency/announcedFrames``).
     /// - Returns: `nil` si l'horloge n'a pas encore démarré ou si la diffusion n'a pas
     ///   commencé — l'appelant retombe alors sur « maintenant », comportement du jalon 2.
     public func syncAnchorUnixTime(latencyFrames: UInt32) -> TimeInterval? {
