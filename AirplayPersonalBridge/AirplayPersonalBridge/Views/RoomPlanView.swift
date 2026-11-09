@@ -25,6 +25,8 @@ import UniformTypeIdentifiers
 /// l'infini. L'échelle et le cadrage sont donc de l'état, que seul l'utilisateur change.
 struct RoomPlanView: View {
     @Bindable var state: BridgeState
+    /// La feuille de diagnostic : la barre d'outils de la fenêtre est celle de cette colonne.
+    var showDiagnostics: () -> Void = {}
 
     enum Tool: String, CaseIterable, Identifiable {
         case select = "Sélection"
@@ -32,6 +34,14 @@ struct RoomPlanView: View {
         /// Trace une longueur connue sur l'image de fond pour en déduire son échelle.
         case calibrate = "Calibrer"
         var id: String { rawValue }
+
+        var symbol: String {
+            switch self {
+            case .select: "cursorarrow"
+            case .walls: "pencil.line"
+            case .calibrate: "ruler"
+            }
+        }
     }
 
     @State private var tool: Tool = .select
@@ -47,6 +57,10 @@ struct RoomPlanView: View {
     /// Position à l'écran de l'origine du modèle. `nil` tant que la vue n'a pas de taille.
     @State private var origin: CGPoint?
     @State private var viewSize: CGSize = .zero
+    /// L'utilisateur a déplacé, zoomé ou recadré la vue : elle ne se recadre plus jamais d'elle-même.
+    /// Jusque-là, le cadrage automatique suit la taille de la vue, qui passe par plusieurs valeurs
+    /// pendant que la fenêtre se met en place.
+    @State private var isFramedByUser = false
 
     @State private var drag: DragMode?
     /// Le plan tel qu'il était au début du glissé en cours. Il n'entre dans la pile
@@ -77,6 +91,13 @@ struct RoomPlanView: View {
     /// Force l'affichage de toutes les cotes d'un coup, pour relire un plan terminé.
     @State private var showsAllLabels = false
 
+    // MARK: Inspecteur
+
+    @State private var showsInspector: Bool
+    /// Ouvert par le bouton de la barre d'outils : il reste ouvert quand la sélection se vide, et
+    /// montre alors le plan lui-même. Ouvert par une sélection, il se referme avec elle.
+    @State private var isInspectorPinned = false
+
     // MARK: Image de fond
 
     @State private var backgroundImage: NSImage?
@@ -104,6 +125,15 @@ struct RoomPlanView: View {
         PlanTransform(scale: scale, origin: origin ?? .zero)
     }
 
+    init(
+        state: BridgeState, initialSelection: Set<PlanElement> = [], showDiagnostics: @escaping () -> Void = {}
+    ) {
+        self.state = state
+        self.showDiagnostics = showDiagnostics
+        _selection = State(initialValue: initialSelection)
+        _showsInspector = State(initialValue: !initialSelection.isEmpty)
+    }
+
     private var renderer: PlanRenderer {
         PlanRenderer(
             layout: state.roomLayout, transform: transform, outputIDs: state.outputIDsDrawnOnPlan,
@@ -113,19 +143,33 @@ struct RoomPlanView: View {
         )
     }
 
+    /// Le plan plein cadre, prolongé sous la barre latérale de verre ; par-dessus, en verre, ce qui le
+    /// pilote sur place. Les outils sont dans la barre d'outils, l'objet sélectionné dans l'inspecteur.
     var body: some View {
-        VStack(spacing: 0) {
-            toolbar
-            ShadSeparator()
-            planArea
-            ShadSeparator()
-            inspector
-        }
-        .background(Theme.background)
-        .onDeleteCommand(perform: deleteSelection)
-        // Changer d'objet clôt les retouches en cours : les réglages d'un autre meuble sont
-        // un nouveau pas d'annulation, pas la suite du précédent.
-        .onChange(of: selection) { _, _ in history.endGroup() }
+        planArea
+            .overlay(alignment: .bottomTrailing) { zoomControls }
+            // L'aide passe en bas à gauche : en haut elle recouvrait la première rangée du plan.
+            .overlay(alignment: .bottomLeading) { hint }
+            .overlay(alignment: .top) { wallDrawingControls }
+            .toolbar { planToolbar }
+            .inspector(isPresented: $showsInspector) {
+                inspector
+                    .inspectorColumnWidth(min: 270, ideal: 300, max: 380)
+            }
+            .onDeleteCommand(perform: deleteSelection)
+            // Changer d'objet clôt les retouches en cours : les réglages d'un autre meuble sont
+            // un nouveau pas d'annulation, pas la suite du précédent.
+            .onChange(of: selection) { _, newSelection in
+                history.endGroup()
+                if !newSelection.isEmpty {
+                    showsInspector = true
+                } else if !isInspectorPinned {
+                    showsInspector = false
+                }
+            }
+            .onChange(of: showsInspector) { _, isShown in
+                if !isShown { isInspectorPinned = false }
+            }
     }
 
     // MARK: - Zone de dessin
@@ -137,12 +181,23 @@ struct RoomPlanView: View {
             drawCalibration(&context)
             drawPendingWall(&context)
         }
-        .background(Theme.background)
+        .background(PlanPalette.canvas)
         .contentShape(Rectangle())
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+            let previous = viewSize
             viewSize = size
-            // Le premier cadrage est le seul qui soit automatique.
-            if origin == nil, size.width > 0 { fitToContent(in: size) }
+            // Le premier cadrage est le seul qui soit automatique : il suit la vue tant que
+            // l'utilisateur n'a pas pris la main.
+            if !isFramedByUser, size.width > 0 {
+                fitToContent(in: size)
+            } else if let current = origin, previous.width > 0 {
+                // L'inspecteur qui s'ouvre, la barre latérale qui se replie : le plan garde son centre
+                // à l'écran, comme une carte, au lieu de filer sous le panneau qui vient d'apparaître.
+                origin = CGPoint(
+                    x: current.x + (size.width - previous.width) / 2,
+                    y: current.y + (size.height - previous.height) / 2
+                )
+            }
         }
         .gesture(planGesture)
         .simultaneousGesture(
@@ -165,10 +220,9 @@ struct RoomPlanView: View {
             }
         }
         .frame(minHeight: 260)
-        .overlay(alignment: .bottomTrailing) { zoomControls }
-        // L'aide passe en bas à gauche : en haut elle recouvrait la première rangée du plan
-        // et se battait avec la barre d'outils juste au-dessus.
-        .overlay(alignment: .bottomLeading) { hint }
+        // Sous la barre latérale de verre, le plan se prolonge en reflet flouté : la fenêtre se lit
+        // comme un seul contenu, et non comme une colonne de commandes collée à un dessin.
+        .backgroundExtensionEffect()
         .onAppear(perform: loadBackgroundImage)
         .onChange(of: state.roomLayout.background?.fileName) { _, _ in loadBackgroundImage() }
         .fileImporter(
@@ -188,31 +242,53 @@ struct RoomPlanView: View {
         }
     }
 
+    // MARK: - Commandes flottantes
+
+    /// Le zoom, comme celui de Plans : des boutons de verre posés sur le contenu, dans l'angle.
     private var zoomControls: some View {
-        HStack(spacing: 4) {
-            Button { zoom(to: scale / 1.25, around: center) } label: {
-                Image(systemName: "minus").font(.system(size: 10, weight: .bold))
+        GlassEffectContainer(spacing: 8) {
+            HStack(spacing: 8) {
+                Text(String(format: "%.0f px/m", scale))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .frame(height: 28)
+                    .floatingGlass(in: Capsule())
+                    .accessibilityLabel("Échelle")
+                    .accessibilityValue(String(format: "%.0f points par mètre", scale))
+
+                HStack(spacing: 0) {
+                    Button { zoom(to: scale / 1.25, around: center) } label: {
+                        Label("Dézoomer", systemImage: "minus").labelStyle(.iconOnly).frame(width: 16)
+                    }
+                    Button { zoom(to: scale * 1.25, around: center) } label: {
+                        Label("Zoomer", systemImage: "plus").labelStyle(.iconOnly).frame(width: 16)
+                    }
+                }
+                .glassButtonStyle()
+
+                Button("Cadrer") {
+                    isFramedByUser = true
+                    fitToContent(in: viewSize)
+                }
+                    .glassButtonStyle()
+                    .help("Montrer tout le plan")
+
+                Button {
+                    showsAllLabels.toggle()
+                } label: {
+                    Label(
+                        "Toutes les cotes",
+                        systemImage: showsAllLabels ? "text.bubble.fill" : "text.bubble"
+                    )
+                    .labelStyle(.iconOnly)
+                }
+                .glassButtonStyle(prominent: showsAllLabels)
+                .help("Afficher toutes les cotes d'un coup")
+                .accessibilityValue(showsAllLabels ? "affichées" : "masquées")
             }
-            .shadButton(.outline, size: .small)
-            Button { zoom(to: scale * 1.25, around: center) } label: {
-                Image(systemName: "plus").font(.system(size: 10, weight: .bold))
-            }
-            .shadButton(.outline, size: .small)
-            Button("Cadrer") { fitToContent(in: viewSize) }
-                .shadButton(.outline, size: .small)
-            Button {
-                showsAllLabels.toggle()
-            } label: {
-                Image(systemName: showsAllLabels ? "text.bubble.fill" : "text.bubble")
-                    .font(.system(size: 11))
-            }
-            .shadButton(showsAllLabels ? .primary : .outline, size: .small)
-            .help("Afficher toutes les cotes d'un coup")
-            Text(String(format: "%.0f px/m", scale))
-                .font(Theme.Font.tiny.monospacedDigit())
-                .foregroundStyle(Theme.mutedForeground)
         }
-        .padding(10)
+        .padding(12)
     }
 
     @ViewBuilder
@@ -233,166 +309,223 @@ struct RoomPlanView: View {
         }
         if let text {
             Text(text)
-                .font(Theme.Font.tiny)
-                .foregroundStyle(Theme.mutedForeground)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(Theme.card, in: Capsule())
-                .overlay { Capsule().strokeBorder(Theme.border, lineWidth: 1) }
-                .padding(10)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .frame(height: 28)
+                .floatingGlass(in: Capsule())
+                .padding(12)
+        }
+    }
+
+    /// Le tracé en cours : ses trois issues, au-dessus du plan, là où l'œil est déjà. Elles n'existent
+    /// que le temps du tracé, et la barre d'outils ne bouge pas pour elles.
+    @ViewBuilder
+    private var wallDrawingControls: some View {
+        if tool == .walls && !pendingWall.isEmpty {
+            GlassEffectContainer(spacing: 8) {
+                HStack(spacing: 8) {
+                    Button("Annuler le tracé") { pendingWall = [] }
+                        .keyboardShortcut(.cancelAction)
+                        .glassButtonStyle()
+                    if pendingWall.count >= 2 {
+                        Button("Terminer") { commitPendingWall() }
+                            .glassButtonStyle()
+                    }
+                    if pendingWall.count >= 3 {
+                        Button("Fermer la pièce") { commitPendingWall(closing: true) }
+                            .glassButtonStyle(prominent: true)
+                    }
+                }
+            }
+            .padding(12)
         }
     }
 
     private var center: CGPoint { CGPoint(x: viewSize.width / 2, y: viewSize.height / 2) }
 
-    // MARK: - Barre d'outils et palette
+    // MARK: - Barre d'outils
 
-    private var toolbar: some View {
-        VStack(spacing: 8) {
-            HStack {
-                ShadTabs(
-                    selection: $tool,
-                    // Calibrer sans image de fond faisait tracer une mesure, saisir une
-                    // longueur, puis ne produisait aucun effet.
-                    items: Tool.allCases
-                        .filter { $0 != .calibrate || state.roomLayout.background != nil }
-                        .map { ($0, $0.rawValue) }
-                )
-                .onChange(of: tool) { _, _ in commitPendingWall() }
-
-                Spacer()
-
-                if tool == .walls && pendingWall.count >= 2 {
-                    Button("Terminer") { commitPendingWall() }
-                        .shadButton(.outline, size: .small)
-                }
-                if tool == .walls && pendingWall.count >= 3 {
-                    Button("Fermer") { commitPendingWall(closing: true) }
-                        .shadButton(.primary, size: .small)
-                }
-                if tool == .walls && !pendingWall.isEmpty {
-                    Button("Annuler") { pendingWall = [] }
-                        .shadButton(.ghost, size: .small)
-                        .keyboardShortcut(.cancelAction)
-                }
-                if tool == .select && !selection.isEmpty {
-                    Button("Supprimer", action: deleteSelection)
-                        .shadButton(.destructive, size: .small)
-                }
-
-                listeningPlacePicker
-
-                Button(action: undo) {
-                    Image(systemName: "arrow.uturn.backward").font(.system(size: 11))
-                }
-                .shadButton(.ghost, size: .small)
-                .keyboardShortcut("z", modifiers: .command)
-                .disabled(!canUndo)
-                .help("Annuler (⌘Z)")
-
-                Button(action: redo) {
-                    Image(systemName: "arrow.uturn.forward").font(.system(size: 11))
-                }
-                .shadButton(.ghost, size: .small)
-                .keyboardShortcut("z", modifiers: [.command, .shift])
-                .disabled(!history.canRedo)
-                .help("Rétablir (⇧⌘Z)")
-
-                Menu {
-                    Button("Charger le plan du salon", action: loadSalonPlan)
-                    Divider()
-                    Button("Pivoter le plan 90° à droite") { rotatePlan(clockwise: true) }
-                    Button("Pivoter le plan 90° à gauche") { rotatePlan(clockwise: false) }
-                    Divider()
-                    Button("Tout sélectionner") { selectAll() }
-                    Divider()
-                    Button("Importer un plan en fond…") { showsImporter = true }
-                    if state.roomLayout.background != nil {
-                        Button("Retirer le plan de fond", role: .destructive) {
-                            history.record(state.roomLayout)
-                            state.roomLayout.background = nil
-                            backgroundImage = nil
-                            if tool == .calibrate { tool = .select }
-                            state.persistRoomLayout()
-                        }
-                    }
-                    Divider()
-                    Button("Effacer les murs", role: .destructive) {
-                        history.record(state.roomLayout)
-                        state.roomLayout.walls.removeAll()
-                        selection = selection.filter { if case .wall = $0 { false } else { true } }
-                        state.persistRoomLayout()
-                    }
-                    Button("Tout effacer", role: .destructive) {
-                        history.record(state.roomLayout)
-                        state.roomLayout = RoomLayout()
-                        selection = []
-                        if tool == .calibrate { tool = .select }
-                        state.persistRoomLayout()
-                    }
-                } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold))
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .frame(width: 26, height: 26)
-                .background(Theme.muted, in: RoundedRectangle(cornerRadius: Theme.Radius.md))
-                .fixedSize()
-            }
-
-            palette
-            if state.roomLayout.background != nil { backgroundBar }
-        }
-        .padding(8)
+    /// Calibrer sans image de fond faisait tracer une mesure, saisir une longueur, puis ne produisait
+    /// aucun effet : l'outil n'existe qu'avec une image.
+    private var availableTools: [Tool] {
+        Tool.allCases.filter { $0 != .calibrate || state.roomLayout.background != nil }
     }
 
-    /// Réglages de l'image de fond. Ils n'apparaissent que si une image est chargée —
-    /// afficher en permanence des commandes sans objet encombrerait pour rien.
-    @ViewBuilder
-    private var backgroundBar: some View {
-        if let background = state.roomLayout.background {
-            HStack(spacing: 8) {
-                Image(systemName: "photo")
-                    .foregroundStyle(.secondary)
+    @ToolbarContentBuilder
+    private var planToolbar: some ToolbarContent {
+        editingTools
+        historyAndViewTools
+        windowTools
+    }
 
-                ShadSlider(
-                    value: Binding(
-                        get: { background.opacity },
-                        set: {
-                            history.record(state.roomLayout, group: "opacité du fond")
-                            state.roomLayout.background?.opacity = $0
-                        }
-                    ),
-                    range: 0.05...1
-                )
-                .frame(maxWidth: 110)
-                .onChange(of: background.opacity) { _, _ in state.persistRoomLayout() }
-
-                Toggle(isOn: Binding(
-                    get: { background.isLocked },
-                    set: {
-                        history.record(state.roomLayout)
-                        state.roomLayout.background?.isLocked = $0
-                        state.persistRoomLayout()
-                    }
-                )) {
-                    Image(systemName: background.isLocked ? "lock.fill" : "lock.open")
+    @ToolbarContentBuilder
+    private var editingTools: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            Picker("Outil", selection: $tool) {
+                ForEach(availableTools) { tool in
+                    Label(tool.rawValue, systemImage: tool.symbol).tag(tool)
                 }
-                .toggleStyle(.button)
-                .buttonStyle(ShadButtonStyle(variant: .outline, size: .small))
-                .help(
-                    background.isLocked
-                        ? "Image verrouillée — elle ne bougera pas"
-                        : "Image déverrouillée — glisse-la pour la caler"
-                )
+            }
+            .pickerStyle(.segmented)
+            .labelStyle(.iconOnly)
+            .help("Outil : Sélection, Murs" + (availableTools.contains(.calibrate) ? ", Calibrer" : ""))
+            .onChange(of: tool) { _, _ in commitPendingWall() }
+        }
 
-                Text(String(format: "%.1f cm/px", background.metersPerPixel * 100))
-                    .font(Theme.Font.tiny.monospacedDigit())
-                    .foregroundStyle(Theme.mutedForeground)
+        // Les outils de tracé à gauche, contre la barre latérale ; tout le reste au bord droit.
+        ToolbarSpacer(.flexible)
+        ToolbarItem {
+            addMenu
+        }
 
-                Spacer()
+        if state.roomLayout.listeners.count >= 2 {
+            ToolbarSpacer(.fixed)
+            ToolbarItem {
+                listeningPlacePicker
             }
         }
+
+    }
+
+    @ToolbarContentBuilder
+    private var historyAndViewTools: some ToolbarContent {
+        ToolbarSpacer(.fixed)
+        ToolbarItemGroup {
+            Button(action: undo) {
+                Label("Annuler", systemImage: "arrow.uturn.backward")
+            }
+            .keyboardShortcut("z", modifiers: .command)
+            .disabled(!canUndo)
+            .help("Annuler (⌘Z)")
+
+            Button(action: redo) {
+                Label("Rétablir", systemImage: "arrow.uturn.forward")
+            }
+            .keyboardShortcut("z", modifiers: [.command, .shift])
+            .disabled(!history.canRedo)
+            .help("Rétablir (⇧⌘Z)")
+        }
+
+        ToolbarSpacer(.fixed)
+        ToolbarItemGroup {
+            moreMenu
+
+            Button {
+                showsInspector.toggle()
+                isInspectorPinned = showsInspector
+            } label: {
+                Label("Inspecteur", systemImage: "sidebar.trailing")
+            }
+            .help(showsInspector ? "Masquer l'inspecteur" : "Afficher l'inspecteur du plan")
+        }
+
+    }
+
+    /// Ce qui vaut pour toute la fenêtre ferme la barre : le diagnostic, puis l'action principale.
+    @ToolbarContentBuilder
+    private var windowTools: some ToolbarContent {
+        ToolbarSpacer(.fixed)
+        ToolbarItem {
+            Button(action: showDiagnostics) {
+                Label("Diagnostic", systemImage: "waveform.path.ecg")
+            }
+            .help("Compteurs de la capture et de chaque sortie")
+        }
+        ToolbarSpacer(.fixed)
+        ToolbarItem {
+            StreamingCommand(state: state)
+        }
+        .sharedBackgroundVisibility(.hidden)
+    }
+
+    /// La bibliothèque de meubles, plus un raccourci par sortie découverte.
+    ///
+    /// Les modèles sont dans un menu et non en boutons alignés : la liste s'allonge, et une
+    /// rangée de boutons devenait illisible avant même d'être complète.
+    private var addMenu: some View {
+        Menu {
+            // Raccourci : pose une enceinte **déjà rattachée** à cette sortie. L'entrée ne disparaît
+            // pas une fois utilisée — une sortie AirPlay 2 peut porter deux HomePod, et il faut pouvoir
+            // poser le second.
+            if !state.outputs.isEmpty {
+                Section("Enceinte rattachée à une sortie") {
+                    ForEach(state.outputs) { output in
+                        Button {
+                            let base = RoomObject.Library.genericSpeaker
+                            add(
+                                RoomObject.Preset(
+                                    label: base.label, kind: .speaker(outputID: output.id),
+                                    size: base.size, shape: base.shape, elevation: base.elevation,
+                                    note: base.note
+                                ),
+                                name: output.displayName
+                            )
+                        } label: {
+                            Label(output.displayName, systemImage: "hifispeaker.fill")
+                        }
+                    }
+                }
+            }
+            ForEach(RoomObject.Library.groups, id: \.0) { title, presets in
+                Section(title) {
+                    ForEach(presets) { preset in
+                        Button {
+                            add(preset)
+                        } label: {
+                            Label(preset.label, systemImage: preset.kind.symbol)
+                        }
+                    }
+                }
+            }
+        } label: {
+            Label("Ajouter", systemImage: "plus")
+        }
+        .help("Ajouter un meuble, ou une enceinte rattachée à une sortie")
+    }
+
+    private var moreMenu: some View {
+        Menu {
+            Button("Charger le plan du salon", action: loadSalonPlan)
+            Divider()
+            Button("Pivoter le plan 90° à droite") { rotatePlan(clockwise: true) }
+            Button("Pivoter le plan 90° à gauche") { rotatePlan(clockwise: false) }
+            Divider()
+            Button("Tout sélectionner") { selectAll() }
+            Button("Supprimer la sélection", role: .destructive, action: deleteSelection)
+                .disabled(selection.isEmpty)
+            Divider()
+            Button("Importer un plan en fond…") { showsImporter = true }
+            if state.roomLayout.background != nil {
+                Button("Retirer le plan de fond", role: .destructive, action: removeBackground)
+            }
+            Divider()
+            Button("Effacer les murs", role: .destructive) {
+                history.record(state.roomLayout)
+                state.roomLayout.walls.removeAll()
+                selection = selection.filter { if case .wall = $0 { false } else { true } }
+                state.persistRoomLayout()
+            }
+            Button("Tout effacer", role: .destructive) {
+                history.record(state.roomLayout)
+                state.roomLayout = RoomLayout()
+                selection = []
+                if tool == .calibrate { tool = .select }
+                state.persistRoomLayout()
+            }
+        } label: {
+            Label("Plus", systemImage: "ellipsis")
+        }
+        .menuIndicator(.hidden)
+        .help("Plan du salon, rotation, image de fond, effacement")
+    }
+
+    private func removeBackground() {
+        history.record(state.roomLayout)
+        state.roomLayout.background = nil
+        backgroundImage = nil
+        if tool == .calibrate { tool = .select }
+        state.persistRoomLayout()
     }
 
     /// Le choix du lieu d'écoute. Il n'apparaît qu'à partir de deux : avec un seul, il n'y a rien
@@ -400,77 +533,24 @@ struct RoomPlanView: View {
     @ViewBuilder
     private var listeningPlacePicker: some View {
         let listeners = state.roomLayout.listeners
-        if listeners.count >= 2, let active = state.roomLayout.listener {
-            HStack(spacing: 6) {
-                Text("Écoute").shadMuted()
-                ShadTabs(
-                    selection: Binding(
-                        get: { active.id },
-                        set: { id in
-                            history.record(state.roomLayout)
-                            state.roomLayout.selectListener(id: id)
-                            state.persistRoomLayout()
-                        }
-                    ),
-                    items: listeners.map {
-                        ($0.id, $0.name.isEmpty ? $0.kind.label : $0.name)
+        if let active = state.roomLayout.listener {
+            Picker(
+                "Écoute",
+                selection: Binding(
+                    get: { active.id },
+                    set: { id in
+                        history.record(state.roomLayout)
+                        state.roomLayout.selectListener(id: id)
+                        state.persistRoomLayout()
                     }
                 )
-            }
-        }
-    }
-
-    /// La bibliothèque de meubles, plus un raccourci par sortie découverte.
-    ///
-    /// Les modèles sont dans un menu et non en boutons alignés : la liste s'allonge, et une
-    /// rangée de boutons devenait illisible avant même d'être complète.
-    private var palette: some View {
-        HStack(spacing: 6) {
-            Menu {
-                ForEach(RoomObject.Library.groups, id: \.0) { title, presets in
-                    Section(title) {
-                        ForEach(presets) { preset in
-                            Button {
-                                add(preset)
-                            } label: {
-                                Label(preset.label, systemImage: preset.kind.symbol)
-                            }
-                        }
-                    }
+            ) {
+                ForEach(listeners) { listener in
+                    Text(listener.name.isEmpty ? listener.kind.label : listener.name).tag(listener.id)
                 }
-            } label: {
-                Label("Ajouter un meuble", systemImage: "plus")
-                    .font(Theme.Font.medium)
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .padding(.horizontal, 10)
-            .frame(height: 26)
-            .background(Theme.muted, in: RoundedRectangle(cornerRadius: Theme.Radius.md))
-            .fixedSize()
-
-            // Raccourci : pose une enceinte **déjà rattachée** à cette sortie. Le bouton ne
-            // disparaît plus une fois utilisé — une sortie AirPlay 2 peut porter deux
-            // HomePod, et il faut pouvoir poser le second.
-            ForEach(state.outputs) { output in
-                Button {
-                    let base = RoomObject.Library.genericSpeaker
-                    add(
-                        RoomObject.Preset(
-                            label: base.label, kind: .speaker(outputID: output.id),
-                            size: base.size, shape: base.shape, elevation: base.elevation,
-                            note: base.note
-                        ),
-                        name: output.displayName
-                    )
-                } label: {
-                    Label(output.displayName, systemImage: "hifispeaker.fill")
-                }
-                .shadButton(.outline, size: .small)
-                .help("Ajoute une enceinte rattachée à \(output.displayName)")
-            }
-
-            Spacer()
+            .pickerStyle(.segmented)
+            .help("Lieu d'écoute : recale les enceintes pour ce lieu, sans couper le son")
         }
     }
 
@@ -557,12 +637,12 @@ struct RoomPlanView: View {
         var path = Path()
         path.move(to: transform.toView(first))
         path.addLine(to: transform.toView(end))
-        context.stroke(path, with: .color(Theme.destructive), style: .init(lineWidth: 2, lineCap: .round))
+        context.stroke(path, with: .color(PlanPalette.measure), style: .init(lineWidth: 2, lineCap: .round))
         for point in [first, end] {
             let view = transform.toView(point)
             context.stroke(
                 Path(ellipseIn: CGRect(x: view.x - 5, y: view.y - 5, width: 10, height: 10)),
-                with: .color(Theme.destructive), lineWidth: 2
+                with: .color(PlanPalette.measure), lineWidth: 2
             )
         }
     }
@@ -583,7 +663,7 @@ struct RoomPlanView: View {
             if degrees < 0 { degrees += 360 }
             context.draw(
                 Text(String(format: "%.2f m • %.0f°", length, degrees))
-                    .font(Theme.Font.small).foregroundStyle(Theme.info),
+                    .font(.callout).foregroundStyle(PlanPalette.drawing),
                 at: CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 12)
             )
             // Le carré d'angle droit, comme sur un plan d'architecte : il confirme d'un
@@ -596,7 +676,7 @@ struct RoomPlanView: View {
             }
         }
         context.stroke(
-            path, with: .color(Theme.info), style: .init(lineWidth: 3, lineCap: .round, dash: [6, 4])
+            path, with: .color(PlanPalette.drawing), style: .init(lineWidth: 3, lineCap: .round, dash: [6, 4])
         )
         for (index, point) in pendingWall.enumerated() {
             let view = transform.toView(point)
@@ -610,7 +690,7 @@ struct RoomPlanView: View {
                         width: radius * 2, height: radius * 2
                     )
                 ),
-                with: .color(Theme.info)
+                with: .color(PlanPalette.drawing)
             )
         }
     }
@@ -646,13 +726,14 @@ struct RoomPlanView: View {
             )
         )
         mark.addLine(to: CGPoint(x: cornerView.x + v.x * size, y: cornerView.y + v.y * size))
-        context.stroke(mark, with: .color(Theme.info), lineWidth: 1.5)
+        context.stroke(mark, with: .color(PlanPalette.drawing), lineWidth: 1.5)
     }
 
     // MARK: - Cadrage
 
     private func zoom(to newScale: Double, around anchor: CGPoint) {
         guard let origin else { return }
+        isFramedByUser = true
         let clamped = min(max(newScale, scaleRange.lowerBound), scaleRange.upperBound)
         // Le point sous le curseur ne doit pas bouger : c'est ce qui rend un zoom
         // utilisable pour viser un détail.
@@ -729,6 +810,10 @@ struct RoomPlanView: View {
         )
         backgroundImage = image
         tool = .calibrate
+        // Ses réglages (opacité, verrou, échelle) sont dans l'inspecteur du plan : il s'ouvre, et
+        // reste ouvert le temps de caler l'image.
+        showsInspector = true
+        isInspectorPinned = true
         state.persistRoomLayout()
     }
 
@@ -921,6 +1006,8 @@ struct RoomPlanView: View {
                         y: startOrigin.y + value.translation.height / scale
                     )
                 case let .pan(startOrigin):
+                    // Un clic n'est pas une prise en main : seul un vrai glissé fige le cadrage.
+                    if travelled >= clickTolerance { isFramedByUser = true }
                     self.origin = CGPoint(
                         x: startOrigin.x + value.translation.width,
                         y: startOrigin.y + value.translation.height
@@ -1069,284 +1156,12 @@ struct RoomPlanView: View {
 
     // MARK: - Inspecteur
 
-    /// Un seul meuble sélectionné : ses réglages. Plusieurs éléments, ou des murs : un
-    /// résumé et de quoi les effacer. Il n'y a rien à régler finement sur un mur — sa
-    /// longueur se lit sur le plan et se change en le retraçant.
-    @ViewBuilder
     private var inspector: some View {
-        if selection.count == 1, let only = selection.first, case let .object(id) = only,
-            let snapshot = state.roomLayout.objects.first(where: { $0.id == id })
-        {
-            ObjectInspector(
-                // Liaison **par identité**, jamais par index. Supprimer un objet invalide
-                // son index, mais SwiftUI réévalue le getter avant de reconstruire la vue :
-                // une liaison indexée plantait l'app à chaque suppression. Le repli sur
-                // l'instantané couvre l'image où l'objet n'existe déjà plus.
-                object: Binding(
-                    get: { state.roomLayout.objects.first { $0.id == id } ?? snapshot },
-                    set: { newValue in
-                        guard let index = index(ofObject: id) else { return }
-                        // Toutes les retouches d'un même objet forment un seul pas d'annulation.
-                        history.record(state.roomLayout, group: "inspecteur \(id)")
-                        // Une taille nulle ou négative rendrait l'objet invisible et impossible
-                        // à rattraper au clic : il ne resterait qu'à tout sélectionner.
-                        var edited = newValue
-                        edited.size = CGSize(
-                            width: max(newValue.size.width, 0.01),
-                            height: max(newValue.size.height, 0.01)
-                        )
-                        state.roomLayout.objects[index] = edited
-                    }
-                ),
-                outputs: state.outputs,
-                onCommit: { state.persistRoomLayout() },
-                onDelete: deleteSelection
-            )
-            .id(id)
-        } else if !selection.isEmpty {
-            selectionSummary
-        } else {
-            HStack {
-                if let dimensions = state.roomLayout.dimensions, dimensions.width > 0 {
-                    Label(
-                        String(format: "%.2f m × %.2f m", dimensions.width, dimensions.height),
-                        systemImage: "ruler"
-                    )
-                } else {
-                    Label(
-                        "Choisis « Murs » et clique pour tracer, puis pose les meubles",
-                        systemImage: "hand.point.up.left"
-                    )
-                }
-                Spacer()
-            }
-            .shadMuted()
-            .padding(10)
-        }
-    }
-
-    private var selectionSummary: some View {
-        let wallIDs = selection.compactMap { element -> UUID? in
-            if case let .wall(id) = element { return id }
-            return nil
-        }
-        let objectCount = selection.count - wallIDs.count
-        let totalLength = state.roomLayout.walls
-            .filter { wallIDs.contains($0.id) }
-            .reduce(0) { $0 + $1.length }
-
-        return HStack(spacing: 12) {
-            if !wallIDs.isEmpty {
-                Label(
-                    "\(wallIDs.count) mur\(wallIDs.count > 1 ? "s" : "") — \(String(format: "%.2f m", totalLength)) au total",
-                    systemImage: "square.split.bottomrightquarter"
-                )
-            }
-            if objectCount > 0 {
-                Label("\(objectCount) meuble\(objectCount > 1 ? "s" : "")", systemImage: "cube")
-            }
-            Spacer()
-            Button(action: deleteSelection) {
-                Label("Supprimer", systemImage: "trash")
-            }
-            .shadButton(.destructive, size: .small)
-        }
-        .font(Theme.Font.small)
-        .foregroundStyle(Theme.mutedForeground)
-        .padding(10)
-    }
-}
-
-/// Réglages fins de l'objet sélectionné.
-///
-/// Des champs numériques plutôt que des poignées sur le plan : une hauteur ne se manipule
-/// pas dans une vue du dessus, et une rotation au degré près à la souris est un exercice de
-/// patience. Le plan sert au placement, l'inspecteur aux valeurs.
-private struct ObjectInspector: View {
-    @Binding var object: RoomObject
-    let outputs: [OutputState]
-    let onCommit: () -> Void
-    let onDelete: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Label(
-                    object.name.isEmpty ? object.kind.label : object.name,
-                    systemImage: object.kind.symbol
-                )
-                .font(Theme.Font.title)
-                Spacer()
-                Button(action: onDelete) {
-                    Image(systemName: "trash").font(.system(size: 11))
-                }
-                .shadButton(.ghost, size: .small)
-                .help("Supprimer (touche Suppr)")
-            }
-
-            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
-                GridRow {
-                    Text("Nom").shadMuted()
-                    // Rien d'autre ne permettait de nommer un objet. Or le nom d'une enceinte
-                    // n'est pas qu'une étiquette : c'est lui qui la rattache à sa sortie.
-                    TextField(object.kind.label, text: $object.name)
-                        .textFieldStyle(.plain)
-                        .font(Theme.Font.small)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(
-                            Theme.background, in: RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                        )
-                        .overlay {
-                            RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                                .strokeBorder(Theme.border, lineWidth: 1)
-                        }
-                        .gridCellColumns(2)
-                }
-                GridRow {
-                    Text("Position").shadMuted()
-                    field("X", value: $object.position.x.asDouble)
-                    field("Y", value: $object.position.y.asDouble)
-                }
-                GridRow {
-                    Text(object.isRound ? "Diamètre" : "Taille")
-                        .shadMuted()
-                    if object.isRound {
-                        // Un seul champ pour un meuble rond : deux cotes indépendantes
-                        // permettraient d'en faire une ellipse par mégarde.
-                        field("Ø", value: diameter)
-                    } else {
-                        field("L", value: $object.size.width.asDouble)
-                        field("P", value: $object.size.height.asDouble)
-                    }
-                }
-                if object.shape == .lShape {
-                    GridRow {
-                        Text("Angle").shadMuted()
-                        field("Prof.", value: $object.armThickness)
-                        Button {
-                            object.isMirrored.toggle()
-                        } label: {
-                            Label(
-                                object.isMirrored ? "L à droite" : "L à gauche",
-                                systemImage: "arrow.left.arrow.right"
-                            )
-                        }
-                        .shadButton(.outline, size: .small)
-                        .help("Renvoie le retour du canapé de l'autre côté")
-                    }
-                }
-                if object.kind == .door {
-                    GridRow {
-                        Text("Charnière").shadMuted()
-                        Button {
-                            object.isMirrored.toggle()
-                        } label: {
-                            Label(
-                                object.isMirrored ? "À droite" : "À gauche",
-                                systemImage: "arrow.left.arrow.right"
-                            )
-                        }
-                        .shadButton(.outline, size: .small)
-                        .help("Fait pivoter la porte de l'autre côté")
-                        Color.clear.frame(height: 0)
-                    }
-                }
-                // Un tapis, une porte ou une fenêtre n'interviennent dans aucun calcul :
-                // leur demander une hauteur laisserait croire le contraire.
-                if !object.kind.hasNoAcousticHeight {
-                    GridRow {
-                        Text("Hauteur").shadMuted()
-                        field(heightLabel, value: $object.elevation)
-                        Text(heightHint).font(Theme.Font.tiny).foregroundStyle(Theme.mutedForeground)
-                    }
-                }
-                // Une chaise de bureau est ronde mais a un dossier, donc un sens.
-                if !object.isRound || object.kind == .chair {
-                    GridRow {
-                        Text("Orientation").shadMuted()
-                        ShadSlider(value: $object.rotation, range: 0...360, step: 5)
-                        Text(String(format: "%.0f°", object.rotation))
-                            .font(Theme.Font.small.monospacedDigit())
-                    }
-                }
-                if case let .speaker(outputID) = object.kind {
-                    GridRow {
-                        Text("Sortie").shadMuted()
-                        // C'est ce rattachement qui fait entrer l'enceinte dans le calcul
-                        // du délai : une enceinte non rattachée n'est qu'un meuble.
-                        Picker("", selection: outputBinding(current: outputID)) {
-                            Text("Aucune").tag(String?.none)
-                            ForEach(outputs) { output in
-                                Text(output.displayName).tag(String?.some(output.id))
-                            }
-                        }
-                        .labelsHidden()
-                        .controlSize(.small)
-                        Text(outputID == nil ? "hors du calcul" : "")
-                            .font(Theme.Font.tiny).foregroundStyle(Theme.mutedForeground)
-                    }
-                }
-            }
-        }
-        .padding(8)
-        .onChange(of: object) { _, _ in onCommit() }
-    }
-
-    private var diameter: Binding<Double> {
-        Binding(
-            get: { Double(object.size.width) },
-            set: { object.size = CGSize(width: $0, height: $0) }
+        PlanInspector(
+            state: state, selection: selection, history: $history, showsAllLabels: $showsAllLabels,
+            onDelete: deleteSelection, onImportBackground: { showsImporter = true },
+            onRemoveBackground: removeBackground
         )
-    }
-
-    private func outputBinding(current: String?) -> Binding<String?> {
-        Binding(
-            get: { current },
-            set: { object.kind = .speaker(outputID: $0) }
-        )
-    }
-
-    /// La hauteur ne désigne pas la même chose selon l'objet, et l'ambiguïté se paierait
-    /// directement en millisecondes de délai faux.
-    private var heightLabel: String {
-        switch object.kind {
-        case .listener: "Oreilles"
-        case .speaker: "H.-parleur"
-        default: "Centre"
-        }
-    }
-
-    private var heightHint: String {
-        switch object.kind {
-        case .listener: "hauteur d'oreilles, assis"
-        case .speaker: "hauteur du haut-parleur"
-        case .tv: "centre de l'écran"
-        case .sofa, .armchair, .chair: "hauteur d'assise"
-        case .shelf, .tvStand, .sideboard, .console, .radiator: "hauteur du dessus"
-        case .plant, .lamp: "hauteur du sommet"
-        case .device, .decor: "hauteur de pose"
-        default: "hauteur du plateau"
-        }
-    }
-
-    private func field(_ label: String, value: Binding<Double>) -> some View {
-        HStack(spacing: 3) {
-            Text(label).font(Theme.Font.tiny).foregroundStyle(Theme.mutedForeground)
-            TextField("", value: value, format: .number.precision(.fractionLength(0...2)))
-                .textFieldStyle(.plain)
-                .font(Theme.Font.small.monospacedDigit())
-                .frame(width: 46)
-                .multilineTextAlignment(.trailing)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(Theme.background, in: RoundedRectangle(cornerRadius: Theme.Radius.sm))
-                .overlay {
-                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                        .strokeBorder(Theme.border, lineWidth: 1)
-                }
-            Text("m").font(Theme.Font.tiny).foregroundStyle(Theme.mutedForeground)
-        }
     }
 }
 

@@ -5,11 +5,12 @@
 
 import SwiftUI
 
-/// Une sortie et ses réglages, présentée en carte.
+/// Une sortie et ses réglages, en rangée de barre latérale.
 ///
-/// La carte n'est pas décorative : elle dit où s'arrête une sortie et où commence la
-/// suivante. Sur une colonne étroite, quatre curseurs à la file sans regroupement visible
-/// deviennent une bouillie où l'on ne sait plus lequel appartient à quoi.
+/// La case et le nom d'abord, l'état en pastille au bout de la ligne ; dessous, une fois cochée, ses
+/// réglages fins en colonnes fixes, dont les valeurs s'alignent d'une sortie à l'autre, ce qui permet de
+/// balayer la liste verticalement au lieu de rechercher chaque nombre. Décochée, elle se réduit à son
+/// nom : ses réglages n'agiraient pas, ils n'ont pas à occuper la place.
 struct OutputRow: View {
     @Bindable var output: OutputState
     let effectiveGainDB: Double
@@ -19,160 +20,256 @@ struct OutputRow: View {
     var listeningPlaceName: String?
     /// Les autres membres de sa paire stéréo (`BridgeState.stereoPartners(of:)`).
     var stereoPartnerNames: [String] = []
+    /// Rien ne signale de silence : l'indicateur de diffusion peut bouger.
+    var isAudible = true
     /// La case : `BridgeState.setEnabled(_:for:)`, qui emmène la paire stéréo.
     var setEnabled: (Bool) -> Void
 
-    /// Colonnes fixes : les valeurs s'alignent d'un curseur à l'autre, ce qui permet de
-    /// balayer la carte verticalement au lieu de rechercher chaque nombre.
-    private let valueWidth: CGFloat = 56
+    /// Les colonnes des réglages : libellé, curseur, valeur.
     private let labelWidth: CGFloat = 44
+    private let valueWidth: CGFloat = 58
+    private let columnGap: CGFloat = 8
+    /// La case, puis l'icône : le message et les réglages commencent sur le bord du nom.
+    static let checkboxWidth: CGFloat = 16
+    static let iconWidth: CGFloat = 18
+    static let columnGap: CGFloat = 8
+    static let textInset = checkboxWidth + columnGap + iconWidth + columnGap
 
     var body: some View {
-        Card(padding: 11) {
-            VStack(alignment: .leading, spacing: 10) {
-                title
-                if let line = output.statusLine {
-                    OutputStatusMessage(text: line.text, tone: line.tone)
-                }
+        VStack(alignment: .leading, spacing: 6) {
+            header
+            if let line = message {
+                OutputStatusMessage(text: line.text, tone: line.tone, isMuted: !output.isEnabled)
+                    .padding(.leading, Self.textInset)
+            }
+            if output.isEnabled {
                 settings
+                    .transition(.opacity)
             }
         }
-        .opacity(output.isEnabled ? 1 : 0.55)
+        .padding(.vertical, 6)
     }
 
-    private var title: some View {
-        HStack(spacing: 8) {
-            Toggle("", isOn: Binding(get: { output.isEnabled }, set: { setEnabled($0) }))
-                .labelsHidden()
-                .toggleStyle(.checkbox)
-                .accessibilityLabel("Diffuser vers \(output.displayName)")
-                .accessibilityHint(PanelStereoPair.accessibilityHint(partners: stereoPartnerNames) ?? "")
+    /// Le message sous le nom, s'il dit quelque chose. « Connexion… » n'apporte rien : la pastille de la
+    /// rangée le dit déjà, comme le témoin du panneau.
+    private var message: (text: String, tone: OutputStatusTone)? {
+        if case .connecting = output.connection { return nil }
+        return output.statusLine
+    }
 
-            OutputStatusDot(state: output.connection)
+    // MARK: - En-tête
+
+    private var header: some View {
+        HStack(spacing: Self.columnGap) {
+            Toggle(
+                "Diffuser vers \(output.displayName)",
+                isOn: Binding(get: { output.isEnabled }, set: { setEnabled($0) })
+            )
+            .labelsHidden()
+            .toggleStyle(.checkbox)
+            .frame(width: Self.checkboxWidth)
+            .accessibilityHint(PanelStereoPair.accessibilityHint(partners: stereoPartnerNames) ?? "")
+
+            Image(
+                systemName: SpeakerSymbol.name(
+                    displayName: output.displayName, proto: output.proto,
+                    unavailability: output.unavailability
+                )
+            )
+            .foregroundStyle(output.isEnabled ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+            .frame(width: Self.iconWidth)
+            .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(output.displayName)
-                    .font(Theme.Font.medium)
-                    .foregroundStyle(Theme.foreground)
+                    .foregroundStyle(output.isEnabled ? .primary : .secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text(output.host.isEmpty ? "adresse inconnue" : "\(output.host):\(String(output.port))")
-                    .font(Theme.Font.tiny.monospacedDigit())
-                    .foregroundStyle(Theme.mutedForeground)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
-                if let pair = StereoPairs.names(stereoPartnerNames) {
-                    Text("Paire stéréo avec \(pair)")
-                        .font(Theme.Font.tiny)
-                        .foregroundStyle(Theme.mutedForeground)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .help(PanelStereoPair.help(partners: stereoPartnerNames) ?? "")
-                }
+                    .truncationMode(.tail)
+                    .help(PanelStereoPair.help(partners: stereoPartnerNames) ?? subtitle)
             }
 
             Spacer(minLength: 4)
 
-            ShadBadge(text: output.proto.rawValue, variant: .outline)
+            OutputStatePill(state: output.connection, isAudible: isAudible && !output.isMuted)
         }
     }
 
+    /// La paire stéréo d'abord, qui dit ce que la case emmène ; sinon l'adresse. Le protocole ferme la
+    /// ligne : c'est lui que la troncature mange en premier. Une ligne, jamais deux.
+    private var subtitle: String {
+        if let pair = PanelStereoPair.legend(partners: stereoPartnerNames) {
+            return "\(pair) · \(output.proto.rawValue)"
+        }
+        let address = output.host.isEmpty ? "adresse inconnue" : "\(output.host):\(String(output.port))"
+        return "\(address) · \(output.proto.rawValue)"
+    }
+
+    // MARK: - Réglages
+
+    /// Des rangées à colonnes fixes plutôt qu'une `Grid` : dans une cellule de liste, la grille gardait
+    /// la largeur idéale de ses curseurs, et laissait un vide au bout de chaque rangée.
     private var settings: some View {
-        VStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             settingRow(
-                "Trim", value: $output.trimDB, in: BridgeSettings.Limits.trimDB,
-                format: { String(format: "%+.1f dB", $0) }
+                "Trim", help: "Volume de cette sortie, en plus du volume master",
+                value: Binding(get: { output.trimDB }, set: { output.trimDB = ($0 * 2).rounded() / 2 }),
+                in: BridgeSettings.Limits.trimDB,
+                text: PanelFormat.decibels(output.trimDB, fractionDigits: 1, signed: true)
             )
             settingRow(
-                "Délai", value: $output.delayMS, in: BridgeSettings.Limits.delayMS,
-                format: { String(format: "%.0f ms", $0) }
+                "Délai", help: "Décalage manuel, ajouté à la compensation du lieu d'écoute",
+                value: Binding(get: { output.delayMS }, set: { output.delayMS = $0.rounded() }),
+                in: BridgeSettings.Limits.delayMS,
+                text: Self.milliseconds(output.delayMS)
             )
             if let listeningCompensationMS {
-                HStack(spacing: 5) {
-                    Spacer().frame(width: labelWidth)
-                    Image(systemName: "ruler").font(.system(size: 9))
-                    Text(
-                        "\(listeningPlaceName ?? "Lieu d'écoute") : "
-                            + String(format: "+ %.1f ms", listeningCompensationMS)
-                    )
-                    Spacer(minLength: 0)
-                }
-                .font(Theme.Font.tiny)
-                .foregroundStyle(Theme.mutedForeground)
+                Label(
+                    "\(listeningPlaceName ?? "Lieu d'écoute") : + "
+                        + listeningCompensationMS.formatted(
+                            .number.precision(.fractionLength(1)).locale(Locale(identifier: "fr_FR"))
+                        ) + " ms",
+                    systemImage: "ruler"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, labelWidth + columnGap)
                 .help("Compensation du lieu d'écoute, appliquée d'elle-même. Le curseur s'y ajoute.")
             }
             if output.supportsToneControl {
                 settingRow(
-                    "Basses", value: $output.bassBoostDB, in: BridgeSettings.Limits.bassBoostDB,
-                    format: { String(format: "%+.1f dB", $0) }
+                    "Basses", help: "Renfort des graves sous 80 Hz, pour cette sortie seulement",
+                    value: Binding(get: { output.bassBoostDB }, set: { PanelBassControl.set($0, on: output) }),
+                    in: BridgeSettings.Limits.bassBoostDB,
+                    text: PanelFormat.decibels(output.bassBoostDB, fractionDigits: 1, signed: true)
                 )
                 settingRow(
-                    "Aigus", value: $output.trebleCutDB, in: BridgeSettings.Limits.trebleCutDB,
-                    format: { String(format: "%+.1f dB", $0) }
+                    "Aigus", help: "Atténuation des aigus au-dessus de 3 kHz, pour cette sortie seulement",
+                    value: Binding(get: { output.trebleCutDB }, set: { PanelTrebleControl.set($0, on: output) }),
+                    in: BridgeSettings.Limits.trebleCutDB,
+                    text: PanelFormat.decibels(output.trebleCutDB, fractionDigits: 1, signed: true)
                 )
             }
-
-            HStack(spacing: 8) {
+            HStack(spacing: columnGap) {
                 Text("Sortie")
-                    .font(Theme.Font.small)
-                    .foregroundStyle(Theme.mutedForeground)
+                    .foregroundStyle(.secondary)
                     .frame(width: labelWidth, alignment: .leading)
-                LevelBar(gainDB: effectiveGainDB)
-                Text(String(format: "%.1f dB", effectiveGainDB))
-                    .font(Theme.Font.small.monospacedDigit())
-                    .foregroundStyle(Theme.mutedForeground)
+                LevelGauge(gainDB: effectiveGainDB)
+                Text(PanelFormat.decibels(effectiveGainDB, fractionDigits: 1))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
                     .frame(width: valueWidth, alignment: .trailing)
             }
+            .help("Gain effectif : master et trim confondus, silences compris")
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Gain effectif de \(output.displayName)")
+            .accessibilityValue(PanelFormat.decibels(effectiveGainDB, fractionDigits: 1))
         }
-        .disabled(!output.isEnabled)
+        .font(.callout)
+        // Dans l'axe du nom : la case et l'icône forment la colonne de gauche.
+        .padding(.leading, Self.textInset)
     }
 
     private func settingRow(
-        _ label: String,
-        value: Binding<Double>,
-        in range: ClosedRange<Double>,
-        format: @escaping (Double) -> String
+        _ label: String, help: String, value: Binding<Double>, in range: ClosedRange<Double>, text: String
     ) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: columnGap) {
             Text(label)
-                .font(Theme.Font.small)
-                .foregroundStyle(Theme.mutedForeground)
+                .foregroundStyle(.secondary)
                 .frame(width: labelWidth, alignment: .leading)
-            ShadSlider(value: value, range: range)
-                .accessibilityLabel("\(label) de \(output.displayName)")
-            Text(format(value.wrappedValue))
-                .font(Theme.Font.small.monospacedDigit())
-                .foregroundStyle(Theme.foreground)
+                .accessibilityHidden(true)
+            Slider(value: value, in: range) {
+                Text("\(label) de \(output.displayName)")
+            }
+            .labelsHidden()
+            .controlSize(.small)
+            .accessibilityValue(text)
+            .help(help)
+            Text(text)
+                .monospacedDigit()
                 .frame(width: valueWidth, alignment: .trailing)
+                .accessibilityHidden(true)
         }
+    }
+
+    private static func milliseconds(_ value: Double) -> String {
+        let number = value.formatted(.number.precision(.fractionLength(0)).locale(Locale(identifier: "fr_FR")))
+        return "\(number.replacingOccurrences(of: "-", with: "−")) ms"
     }
 }
 
-/// Pastille d'état. La reconnexion a sa propre couleur : c'est un fonctionnement normal
-/// prévu par le CDC section 8, pas une panne — la confondre avec un échec ferait paniquer
-/// pour rien devant les 90 reconnexions d'une session d'une heure.
-struct OutputStatusDot: View {
+/// L'état d'une sortie en pastille, au bout de sa ligne. Rien au repos : une pastille « inactive » sur
+/// chaque rangée ne dirait que du bruit.
+///
+/// La reconnexion a la teinte de l'attente, pas celle de l'échec : c'est un fonctionnement normal prévu
+/// par le CDC section 8, pas une panne — la confondre avec un échec ferait paniquer pour rien devant les
+/// 90 reconnexions d'une session d'une heure.
+struct OutputStatePill: View {
     let state: OutputConnectionState
+    /// Un son passe vraiment : la vague peut bouger.
+    var isAudible = true
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appearsActive) private var appearsActive
 
     var body: some View {
-        Circle()
-            .fill(color)
-            .frame(width: 7, height: 7)
-            .accessibilityLabel(label)
+        if let text {
+            HStack(spacing: 4) {
+                symbol
+                Text(text)
+            }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(tint.opacity(0.14), in: Capsule())
             .help(label)
-    }
-
-    private var color: Color {
-        switch state {
-        case .idle: Theme.mutedForeground
-        case .connecting: Theme.warning
-        case .waiting: Theme.warning
-        case .streaming: Theme.success
-        case .reconnecting: Theme.warning
-        case .failed: Theme.destructive
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(label)
         }
     }
 
-    private var label: String {
+    @ViewBuilder
+    private var symbol: some View {
+        switch state {
+        case .connecting, .waiting, .reconnecting:
+            ProgressView().controlSize(.mini)
+        case .streaming:
+            Image(systemName: "waveform")
+                .symbolEffect(.variableColor.iterative, isActive: isAudible && !reduceMotion && appearsActive)
+        case .failed:
+            Image(systemName: "exclamationmark.circle.fill")
+        case .idle:
+            EmptyView()
+        }
+    }
+
+    private var text: String? {
+        switch state {
+        case .idle: nil
+        case .connecting: "Connexion"
+        case .waiting: "En attente"
+        case .streaming: "Diffusion"
+        case .reconnecting: "Reconnexion"
+        case .failed: "Échec"
+        }
+    }
+
+    private var tint: Color {
+        switch state {
+        case .idle: .secondary
+        case .connecting, .waiting, .reconnecting: .orange
+        case .streaming: .green
+        case .failed: .red
+        }
+    }
+
+    /// Ce que disent l'aide au survol et VoiceOver, message compris.
+    var label: String {
         switch state {
         case .idle: "Inactive"
         case .connecting: "Connexion"
@@ -185,25 +282,29 @@ struct OutputStatusDot: View {
     }
 }
 
-/// La ligne de message d'une sortie, telle que le moteur la rédige.
+/// Le message d'une sortie, tel que le moteur le rédige. Partagé par la fenêtre et le panneau.
 ///
-/// Ces messages disent quoi faire, et certains font plusieurs phrases (l'appairage d'un Apple TV,
-/// par exemple). Repliés, ils gardent la liste lisible d'un coup d'œil ; un lien les déplie, pour
-/// qu'une coupure ne passe jamais pour la fin du message.
+/// Ces messages disent quoi faire, et certains font plusieurs phrases (l'appairage d'un Apple TV, par
+/// exemple). Repliés, ils gardent la liste lisible d'un coup d'œil ; un lien les déplie, pour qu'une
+/// coupure ne passe jamais pour la fin du message.
 struct OutputStatusMessage: View {
     let text: String
     let tone: OutputStatusTone
-    @State private var isExpanded = false
+    /// La rangée est en retrait : même un avertissement n'y appelle pas le regard.
+    var isMuted = false
+    /// Les lignes visibles une fois replié.
+    var foldedLines = 3
+    /// Au-delà, le message ne tient pas dans ses lignes repliées : le lien apparaît.
+    var foldedLength = 125
 
-    /// Ce qui tient en trois lignes dans la colonne la plus étroite.
-    private let foldedLength = 125
+    @State private var isExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(text)
-                .font(Theme.Font.tiny)
+                .font(.subheadline)
                 .foregroundStyle(color)
-                .lineLimit(isExpanded ? nil : 3)
+                .lineLimit(isExpanded ? nil : foldedLines)
                 .truncationMode(.tail)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -211,17 +312,18 @@ struct OutputStatusMessage: View {
             if text.count > foldedLength {
                 Button(isExpanded ? "Réduire" : "Lire la suite") { isExpanded.toggle() }
                     .buttonStyle(.plain)
-                    .font(Theme.Font.tiny.weight(.medium))
-                    .foregroundStyle(Theme.mutedForeground)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
             }
         }
     }
 
     private var color: Color {
+        if isMuted { return .secondary }
         switch tone {
-        case .muted: Theme.mutedForeground
-        case .warning: Theme.warning
-        case .critical: Theme.destructive
+        case .muted: return .secondary
+        case .warning: return PanelPalette.warningText
+        case .critical: return PanelPalette.criticalText
         }
     }
 }
@@ -229,40 +331,36 @@ struct OutputStatusMessage: View {
 /// Indicateur de gain. Ce n'est **pas** un vumètre : il montre la consigne, pas le niveau
 /// du signal. Afficher un vrai niveau demanderait de mesurer les échantillons dans le
 /// pipeline, ce qui n'existe pas encore et ne doit pas être simulé.
-private struct LevelBar: View {
+private struct LevelGauge: View {
     let gainDB: Double
 
     var body: some View {
-        GeometryReader { geometry in
-            let fraction = (gainDB - BridgeState.silenceDB) / (0 - BridgeState.silenceDB)
-            ZStack(alignment: .leading) {
-                Capsule().fill(Theme.muted)
-                Capsule()
-                    .fill(Theme.primary.opacity(0.7))
-                    .frame(width: max(0, geometry.size.width * fraction))
-            }
+        Gauge(
+            value: min(max(gainDB, BridgeState.silenceDB), 0),
+            in: BridgeState.silenceDB...0
+        ) {
+            EmptyView()
         }
-        .frame(height: 5)
+        .gaugeStyle(.accessoryLinearCapacity)
+        .tint(.secondary)
+        .controlSize(.small)
     }
 }
 
 #Preview {
     @Previewable @State var state = BridgeState.previewWithRoom()
-    ScrollView {
-        VStack(spacing: 10) {
-            ForEach(state.outputs) { output in
-                OutputRow(
-                    output: output,
-                    effectiveGainDB: state.effectiveGainDB(for: output),
-                    listeningCompensationMS: state.listeningCompensationMS(for: output),
-                    listeningPlaceName: state.listeningPlaceName,
-                    stereoPartnerNames: state.stereoPartners(of: output).map(\.displayName),
-                    setEnabled: { state.setEnabled($0, for: output) }
-                )
-            }
+    List {
+        ForEach(state.outputs) { output in
+            OutputRow(
+                output: output,
+                effectiveGainDB: state.effectiveGainDB(for: output),
+                listeningCompensationMS: state.listeningCompensationMS(for: output),
+                listeningPlaceName: state.listeningPlaceName,
+                stereoPartnerNames: state.stereoPartners(of: output).map(\.displayName),
+                setEnabled: { state.setEnabled($0, for: output) }
+            )
         }
-        .padding(14)
     }
-    .background(Theme.background)
-    .frame(width: 340, height: 460)
+    .listStyle(.sidebar)
+    .frame(width: 330, height: 460)
 }

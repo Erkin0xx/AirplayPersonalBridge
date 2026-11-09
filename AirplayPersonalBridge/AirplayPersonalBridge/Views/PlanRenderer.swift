@@ -6,12 +6,31 @@
 import AppKit
 import SwiftUI
 
-/// Les matières du plan, prélevées sur le plan d'origine de Baptiste.
+/// Les couleurs du plan.
 ///
-/// Elles complètent le thème sans le remplacer : ce que `Theme` décrit (fond, grille, états)
-/// reste à lui. Du bois reste du bois en mode clair comme en mode sombre, d'où des couleurs
-/// fixes ; seuls le mur, le tapis et le contour, qui se détachent du fond, changent avec lui.
+/// Deux familles. Le fond, la grille et les états (sélection, tracé, distances) sont des couleurs du
+/// système : elles suivent l'apparence, l'accent et le contraste choisis dans les Réglages, comme le
+/// reste de la fenêtre. Les matières, elles, sont prélevées sur le plan d'origine de Baptiste : du bois
+/// reste du bois en mode clair comme en mode sombre, d'où des couleurs fixes ; seuls le mur, le tapis et
+/// le contour, qui se détachent du fond, changent avec lui.
 enum PlanPalette {
+    /// Le fond du plan, celui d'un document.
+    static let canvas = Color(nsColor: .textBackgroundColor)
+    /// La graduation au mètre : un filet, pas un quadrillage.
+    static let grid = Color(nsColor: .separatorColor)
+    /// Ce qui est sélectionné ou désigné : l'accent du système.
+    static let selection = Color(nsColor: .controlAccentColor)
+    /// Le mur en cours de tracé.
+    static let drawing = Color(nsColor: .controlAccentColor)
+    /// La mesure de calibrage.
+    static let measure = Color(nsColor: .systemRed)
+    /// Le lieu d'écoute et les distances qui en partent.
+    static let listening = Color(nsColor: .systemOrange)
+    /// Les cotes au repos.
+    static let secondaryText = Color(nsColor: .secondaryLabelColor)
+    /// Les traits de premier plan : contour des poignées, de la tête, des oreilles.
+    static let ink = Color(nsColor: .labelColor)
+
     static let wall = dynamic(dark: 0xD0D7D0, light: 0x565C57)
     static let outline = dynamic(dark: 0xE4EAE6, light: 0x6B6F6A)
     static let rug = dynamic(dark: 0x272723, light: 0xE4DFD3)
@@ -135,7 +154,7 @@ struct PlanRenderer {
             layer.opacity = 1
             if !background.isLocked {
                 layer.stroke(
-                    Path(rect), with: .color(Theme.info),
+                    Path(rect), with: .color(PlanPalette.selection),
                     style: .init(lineWidth: 2, dash: [6, 4])
                 )
             }
@@ -174,7 +193,7 @@ struct PlanRenderer {
             path.addLine(to: CGPoint(x: size.width, y: viewY))
             y += step
         }
-        context.stroke(path, with: .color(Theme.border.opacity(0.7)), lineWidth: 1)
+        context.stroke(path, with: .color(PlanPalette.grid), lineWidth: 1)
     }
 
     // MARK: - Murs
@@ -197,13 +216,13 @@ struct PlanRenderer {
                 line.addLine(to: transform.toView(wall.b))
                 context.stroke(
                     line,
-                    with: .color(isSelected ? Theme.info : PlanPalette.wall),
+                    with: .color(isSelected ? PlanPalette.selection : PlanPalette.wall),
                     style: .init(lineWidth: isSelected ? 8 : 6, lineCap: .round)
                 )
             } else if isSelected {
                 var selected = Path()
                 addPolygon(body, to: &selected)
-                context.fill(selected, with: .color(Theme.info))
+                context.fill(selected, with: .color(PlanPalette.selection))
             }
             if wall.paint == .sage { drawPaint(of: wall, in: &context) }
         }
@@ -250,7 +269,7 @@ struct PlanRenderer {
             context.draw(
                 Text(String(format: "%.2f m", wall.length))
                     .font(.system(size: 10))
-                    .foregroundStyle(isSelected ? Theme.info : Theme.mutedForeground),
+                    .foregroundStyle(isSelected ? PlanPalette.selection : PlanPalette.secondaryText),
                 at: at
             )
         }
@@ -271,9 +290,9 @@ struct PlanRenderer {
                     x: view.x - radius, y: view.y - radius, width: radius * 2, height: radius * 2
                 )
             )
-            context.fill(circle, with: .color(isHovered ? Theme.info : Theme.background))
+            context.fill(circle, with: .color(isHovered ? PlanPalette.selection : PlanPalette.canvas))
             context.stroke(
-                circle, with: .color(isHovered ? Theme.info : Theme.foreground.opacity(0.55)),
+                circle, with: .color(isHovered ? PlanPalette.selection : PlanPalette.ink.opacity(0.55)),
                 lineWidth: 1.5
             )
         }
@@ -311,7 +330,7 @@ struct PlanRenderer {
                 line.move(to: speakerView)
                 line.addLine(to: listenerView)
                 context.stroke(
-                    line, with: .color(Theme.warning.opacity(0.55)),
+                    line, with: .color(PlanPalette.listening.opacity(0.55)),
                     style: .init(lineWidth: 1.5, dash: [5, 4])
                 )
 
@@ -333,7 +352,7 @@ struct PlanRenderer {
                     ? String(format: "%.2f m (3D)", distance)
                     : String(format: "%.2f m", distance)
                 drawHaloText(
-                    Text(label).font(Theme.Font.tiny).foregroundStyle(Theme.warning),
+                    Text(label).font(.subheadline).foregroundStyle(PlanPalette.listening),
                     at: CGPoint(
                         x: (speakerView.x + listenerView.x) / 2,
                         y: (speakerView.y + listenerView.y) / 2 - 8
@@ -358,7 +377,7 @@ struct PlanRenderer {
                 )
                 drawHaloText(
                     Text(String(format: "moyenne %.2f m", mean))
-                        .font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.warning),
+                        .font(.system(size: 10, weight: .bold)).foregroundStyle(PlanPalette.listening),
                     at: CGPoint(
                         x: (middle.x + listenerView.x) / 2, y: (middle.y + listenerView.y) / 2 + 8
                     ),
@@ -389,7 +408,7 @@ struct PlanRenderer {
             drawMaterial(of: object, in: rect, outline: outline, on: &layer)
 
             if isSelected {
-                layer.stroke(outline, with: .color(Theme.info), lineWidth: 2.5)
+                layer.stroke(outline, with: .color(PlanPalette.selection), lineWidth: 2.5)
             }
             // Le trait sur un bord marque l'avant du meuble : sans repère d'orientation, faire
             // tourner un canapé ne se voit pas. Seulement sur l'objet qu'on manipule : à
@@ -398,7 +417,7 @@ struct PlanRenderer {
                 var front = Path()
                 front.move(to: CGPoint(x: -width / 2, y: -height / 2))
                 front.addLine(to: CGPoint(x: width / 2, y: -height / 2))
-                layer.stroke(front, with: .color(Theme.info), lineWidth: 2.5)
+                layer.stroke(front, with: .color(PlanPalette.selection), lineWidth: 2.5)
             }
         }
         if object.kind == .listener {
@@ -479,8 +498,8 @@ struct PlanRenderer {
             layer.stroke(outline, with: .color(PlanPalette.outline.opacity(0.6)), lineWidth: 1)
         case .speaker: drawSpeaker(object, in: rect, on: &layer)
         case .listener:
-            layer.fill(outline, with: .color(Theme.warning.opacity(0.22)))
-            layer.stroke(outline, with: .color(Theme.warning.opacity(0.6)), lineWidth: 1)
+            layer.fill(outline, with: .color(PlanPalette.listening.opacity(0.22)))
+            layer.stroke(outline, with: .color(PlanPalette.listening.opacity(0.6)), lineWidth: 1)
         }
     }
 
@@ -813,7 +832,7 @@ struct PlanRenderer {
 
     /// Une percée dans le mur et ses deux vantaux coulissants, décalés l'un de l'autre.
     private func drawWindow(in rect: CGRect, on layer: inout GraphicsContext) {
-        layer.fill(Path(rect), with: .color(Theme.background))
+        layer.fill(Path(rect), with: .color(PlanPalette.canvas))
         layer.stroke(Path(rect), with: .color(PlanPalette.outline), lineWidth: 1)
         let paneHeight = max(rect.height * 0.2, 1.5)
         let panes = [
@@ -833,7 +852,7 @@ struct PlanRenderer {
     }
 
     private func drawRadiator(in rect: CGRect, on layer: inout GraphicsContext) {
-        layer.fill(Path(rect), with: .color(Theme.background))
+        layer.fill(Path(rect), with: .color(PlanPalette.canvas))
         var hatch = Path()
         let spacing = 0.06 * scale
         var x = rect.minX - rect.height
@@ -1002,14 +1021,14 @@ struct PlanRenderer {
                         x: -shoulders / 2, y: -head * 0.35, width: shoulders, height: head * 1.15
                     )
                 ),
-                with: .color(Theme.warning.opacity(0.85))
+                with: .color(PlanPalette.listening.opacity(0.85))
             )
 
             // Tête.
             let headRect = CGRect(x: -head / 2, y: -head / 2, width: head, height: head)
-            layer.fill(Path(ellipseIn: headRect), with: .color(Theme.warning))
+            layer.fill(Path(ellipseIn: headRect), with: .color(PlanPalette.listening))
             layer.stroke(
-                Path(ellipseIn: headRect), with: .color(Theme.foreground.opacity(0.55)), lineWidth: 1
+                Path(ellipseIn: headRect), with: .color(PlanPalette.ink.opacity(0.55)), lineWidth: 1
             )
 
             // Les deux oreilles : c'est là qu'arrivent les distances calculées.
@@ -1022,7 +1041,7 @@ struct PlanRenderer {
                             width: ear, height: ear * 1.6
                         )
                     ),
-                    with: .color(Theme.foreground.opacity(0.6))
+                    with: .color(PlanPalette.ink.opacity(0.6))
                 )
             }
 
@@ -1032,7 +1051,7 @@ struct PlanRenderer {
             nose.addLine(to: CGPoint(x: 0, y: -head * 0.72))
             nose.addLine(to: CGPoint(x: head * 0.18, y: -head * 0.45))
             nose.closeSubpath()
-            layer.fill(nose, with: .color(Theme.warning))
+            layer.fill(nose, with: .color(PlanPalette.listening))
         }
     }
 

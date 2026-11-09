@@ -22,6 +22,8 @@ struct AirplayPersonalBridgeApp: App {
             MainWindowContent(lifecycle: lifecycle)
         }
         .defaultLaunchBehavior(.presented)
+        // Assez large pour la barre latérale, le plan et ses outils sans débordement de la barre d'outils.
+        .defaultSize(width: 1200, height: 760)
         // La fenêtre s'ouvre selon la façon dont l'app est lancée, pas selon qu'elle l'était au
         // dernier arrêt : sans cela, l'avoir fermée une fois la ferait disparaître au lancement.
         .restorationBehavior(.disabled)

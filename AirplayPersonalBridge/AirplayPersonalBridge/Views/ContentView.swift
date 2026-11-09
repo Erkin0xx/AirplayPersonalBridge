@@ -7,25 +7,37 @@ import SwiftUI
 
 /// La fenêtre principale (CDC section 9, jalon 5).
 ///
-/// Une colonne de commandes étroite à gauche, le plan sur tout le reste. Les commandes ont
-/// une largeur naturelle — un curseur ne gagne rien à faire 700 points — alors que le plan,
-/// lui, profite de chaque point qu'on lui donne.
+/// Le plan d'abord : il occupe toute la fenêtre, et passe sous la barre latérale de verre où flottent
+/// les commandes du son (source, master, sorties). Les outils du plan et l'action principale vivent dans
+/// la barre d'outils, l'objet sélectionné dans l'inspecteur. Les commandes ont une largeur naturelle — un
+/// curseur ne gagne rien à faire 700 points — alors que le plan, lui, profite de chaque point.
 struct ContentView: View {
     /// Partagé avec le panneau de la barre de menus : c'est l'application qui le détient, la
     /// fenêtre peut se fermer et se rouvrir sans rien perdre.
     @Bindable var state: BridgeState
     @State private var showsDiagnostics = false
+    private let preview: MainWindowPreviewOptions
+
+    init(state: BridgeState, preview: MainWindowPreviewOptions = MainWindowPreviewOptions()) {
+        self.state = state
+        self.preview = preview
+    }
 
     var body: some View {
-        HSplitView {
-            controlColumn
-                .frame(minWidth: 310, idealWidth: 340, maxWidth: 400)
-            RoomPlanView(state: state)
-                .frame(minWidth: 520)
-                .layoutPriority(1)
+        NavigationSplitView {
+            BridgeSidebar(state: state)
+                .navigationSplitViewColumnWidth(min: 290, ideal: 330, max: 420)
+        } detail: {
+            RoomPlanView(
+                state: state, initialSelection: preview.planSelection,
+                showDiagnostics: { showsDiagnostics = true }
+            )
         }
-        .frame(minWidth: 900, minHeight: 620)
-        .background(Theme.background)
+        .navigationTitle("AirPlay Personal Bridge")
+        // Le titre reste celui de la fenêtre (menu Fenêtre, Mission Control), mais la barre d'outils
+        // garde sa place aux outils : l'état en mots est en tête de la barre latérale.
+        .toolbar(removing: .title)
+        .frame(minWidth: 960, minHeight: 620)
         // Les applications qui jouent changent sans prévenir : la liste doit être juste à
         // l'ouverture. La découverte, elle, tourne déjà sans fenêtre (`AppLifecycle`).
         .onAppear { state.refreshSources() }
@@ -33,215 +45,54 @@ struct ContentView: View {
             DiagnosticsView(state: state, onClose: { showsDiagnostics = false })
         }
     }
+}
 
-    private var controlColumn: some View {
-        VStack(spacing: 0) {
-            header
-            ShadSeparator()
-            outputList
-            ShadSeparator()
-            footer
+/// Diffuser ou arrêter : la seule commande proéminente de la fenêtre.
+///
+/// Teintée de l'accent quand elle invite à démarrer, du rouge système quand elle arrête : c'est l'état
+/// qu'elle dit, pas une décoration. Pendant une transition, elle garde son nom et sa largeur, et un témoin
+/// remplace son icône ; c'est l'en-tête de la barre latérale qui dit « Démarrage… ».
+struct StreamingCommand: View {
+    let state: BridgeState
+
+    var body: some View {
+        let isStopSide = state.streamingPhase == .running || state.streamingPhase == .stopping
+        let isTransition = state.streamingPhase == .starting || state.streamingPhase == .stopping
+        Button {
+            state.toggleStreaming()
+        } label: {
+            Label {
+                Text(isStopSide ? "Arrêter" : "Diffuser")
+            } icon: {
+                if isTransition {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: isStopSide ? "stop.fill" : "play.fill")
+                }
+            }
+            .labelStyle(.titleAndIcon)
+            .frame(minWidth: 84)
         }
-        .background(Theme.background)
+        .glassButtonStyle(prominent: true)
+        .tint(isStopSide ? .red : .accentColor)
+        // ⌘↩ et non `.defaultAction` : Retour valide un champ de l'inspecteur du plan, et cette
+        // validation ne doit pas faire partir le son vers les enceintes.
+        .keyboardShortcut(.return, modifiers: .command)
+        // Rien à diffuser tant qu'aucune sortie n'est cochée. Le cœur le supporterait
+        // (une sortie absente n'empêche pas l'autre), mais l'action n'aurait aucun sens.
+        .disabled(!state.canToggleStreaming)
+        .help(isStopSide ? "Arrêter la diffusion (⌘↩)" : "Diffuser vers les sorties cochées (⌘↩)")
+        .accessibilityLabel(isStopSide ? "Arrêter la diffusion" : "Lancer la diffusion")
     }
+}
 
-    /// Le sélecteur porte des identifiants : les PID d'une application varient d'un relevé à
-    /// l'autre, et une valeur complète ne correspondrait plus à aucune entrée de la liste.
-    private var sourceSelection: Binding<String> {
-        Binding(
-            get: { state.selectedSource.id },
-            set: { state.selectSource(id: $0) }
-        )
-    }
-
-    // MARK: - Haut : source et volume master
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Source").shadLabel()
-                HStack(spacing: 6) {
-                    Picker("", selection: sourceSelection) {
-                        ForEach(state.sources) { source in
-                            Text(source.label).tag(source.id)
-                        }
-                    }
-                    .labelsHidden()
-                    .font(Theme.Font.body)
-
-                    Button {
-                        state.refreshSources()
-                    } label: {
-                        Image(systemName: "arrow.clockwise").font(.system(size: 11))
-                    }
-                    .shadButton(.outline, size: .small)
-                    .help("Rafraîchir la liste des applications qui jouent du son")
-                }
-
-                if let awaited = state.awaitedSourceName {
-                    HStack(spacing: 6) {
-                        Text("Passera sur \(awaited) dès que cette application jouera.").shadMuted()
-                        Button("Annuler", action: state.forgetAwaitedSource)
-                            .shadButton(.outline, size: .small)
-                    }
-                }
-
-                HStack(spacing: 6) {
-                    ShadSwitch(isOn: $state.muteLocalOutput)
-                    Text("Couper le son du Mac").shadMuted()
-                }
-                .disabled(state.selectedSource.tapMode == nil)
-                .opacity(state.selectedSource.tapMode == nil ? 0.5 : 1)
-                .help(
-                    "Éteint la sortie de ce Mac, les enceintes continuent de jouer. Ne s'applique "
-                        + "qu'à la capture du son système ou d'une application. Pendant une "
-                        + "diffusion, le changer la relance."
-                )
-            }
-
-            Card(padding: 12) {
-                HStack(spacing: 14) {
-                    RotaryKnob(
-                        value: $state.masterVolumeDB,
-                        range: BridgeState.silenceDB...0,
-                        diameter: 68,
-                        resetValue: BridgeState.defaultMasterVolumeDB
-                    )
-                    .opacity(state.isMuted ? 0.35 : 1)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Volume master").shadMuted()
-                        Text(
-                            state.isMuted
-                                ? "silence" : String(format: "%.0f dB", state.masterVolumeDB)
-                        )
-                        .font(.system(size: 22, weight: .semibold, design: .rounded).monospacedDigit())
-                        .foregroundStyle(state.isMuted ? Theme.mutedForeground : Theme.foreground)
-
-                        HStack(spacing: 6) {
-                            ShadSwitch(isOn: $state.isMuted)
-                            Text("Silence").shadMuted()
-                        }
-                        .help("Coupe le son des enceintes sans les déconnecter")
-                    }
-                    Spacer(minLength: 0)
-                }
-            }
-        }
-        .padding(14)
-    }
-
-    // MARK: - Milieu : les sorties
-
-    private var outputList: some View {
-        ScrollView {
-            LazyVStack(spacing: 10) {
-                ForEach(state.outputs) { output in
-                    OutputRow(
-                        output: output,
-                        effectiveGainDB: state.effectiveGainDB(for: output),
-                        listeningCompensationMS: state.listeningCompensationMS(for: output),
-                        listeningPlaceName: state.listeningPlaceName,
-                        stereoPartnerNames: state.stereoPartners(of: output).map(\.displayName),
-                        setEnabled: { state.setEnabled($0, for: output) }
-                    )
-                }
-
-                if state.outputs.isEmpty { emptyState }
-            }
-            .padding(14)
-        }
-        .background(Theme.background)
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "hifispeaker")
-                .font(.system(size: 26))
-                .foregroundStyle(Theme.mutedForeground)
-            Text("Aucune sortie").font(Theme.Font.title)
-            Text(state.discoveryNotice ?? "Lance une recherche sur le réseau local.")
-                .shadMuted()
-                .multilineTextAlignment(.center)
-            if state.discoveryNotice != nil {
-                Button("Ouvrir les réglages « Réseau local »") {
-                    SystemSettingsPane.localNetwork.open()
-                }
-                .shadButton(.ghost, size: .small)
-            }
-            Button("Rechercher") { Task { await state.refreshOutputs() } }
-                .shadButton(.outline, size: .small)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 36)
-    }
-
-    // MARK: - Bas : actions
-
-    private var footer: some View {
-        VStack(spacing: 8) {
-            if let failure = state.startFailure {
-                NoticeBanner(
-                    severity: .critical, title: "Démarrage impossible", detail: failure.message,
-                    actionTitle: failure.settingsPane == nil ? nil : "Ouvrir les Réglages",
-                    action: { failure.settingsPane?.open() }
-                )
-            }
-            if let alert = state.captureAlert {
-                NoticeBanner(
-                    severity: alert.severity, title: alert.title, detail: alert.detail,
-                    actionTitle: alert.settingsPane == nil ? nil : "Ouvrir les Réglages",
-                    action: { alert.settingsPane?.open() }
-                )
-            }
-
-            Button {
-                state.toggleStreaming()
-            } label: {
-                Label(
-                    state.isStreaming ? "Arrêter la diffusion" : "Diffuser",
-                    systemImage: state.isStreaming ? "stop.fill" : "play.fill"
-                )
-                .frame(maxWidth: .infinity)
-            }
-            .shadButton(state.isStreaming ? .destructive : .primary, size: .large)
-            // ⌘↩ et non `.defaultAction` : Retour valide un champ de l'inspecteur du plan, et cette
-            // validation ne doit pas faire partir le son vers les enceintes.
-            .keyboardShortcut(.return, modifiers: .command)
-            // Rien à diffuser tant qu'aucune sortie n'est cochée. Le cœur le supporterait
-            // (une sortie absente n'empêche pas l'autre), mais l'action n'aurait aucun sens.
-            .disabled(!state.canToggleStreaming)
-
-            HStack(spacing: 8) {
-                Button {
-                    Task { await state.refreshOutputs() }
-                } label: {
-                    if state.isBrowsing {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small).scaleEffect(0.7)
-                            Text("Recherche…")
-                        }
-                    } else {
-                        Label("Rechercher", systemImage: "antenna.radiowaves.left.and.right")
-                    }
-                }
-                .shadButton(.outline, size: .small)
-                .disabled(state.isBrowsing)
-
-                Spacer()
-
-                Button {
-                    showsDiagnostics = true
-                } label: {
-                    Label("Diagnostic", systemImage: "waveform.path.ecg")
-                }
-                .shadButton(.ghost, size: .small)
-            }
-        }
-        .padding(14)
-    }
+/// Ce que le rendu hors écran force, faute de souris : la fenêtre réelle ne s'en sert jamais.
+struct MainWindowPreviewOptions {
+    /// Les éléments du plan sélectionnés à l'ouverture, pour montrer l'inspecteur.
+    var planSelection: Set<PlanElement> = []
 }
 
 #Preview {
     ContentView(state: .previewWithRoom())
+        .frame(width: 1200, height: 760)
 }

@@ -45,7 +45,7 @@ struct PlanExport {
     ) throws {
         let view = Canvas { context, size in plan.draw(in: &context, size: size) }
             .frame(width: canvas.width, height: canvas.height)
-            .background(Theme.background)
+            .background(PlanPalette.canvas)
             .environment(\.colorScheme, scheme)
         let renderer = ImageRenderer(content: view)
         renderer.scale = 2

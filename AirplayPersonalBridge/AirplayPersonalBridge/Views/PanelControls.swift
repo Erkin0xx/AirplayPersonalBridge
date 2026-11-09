@@ -388,8 +388,11 @@ struct PanelOptionToggle: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            // La barre latérale de la fenêtre limite ses rangées à une ligne : un détail tronqué ne dit plus
+            // quand l'option est sans effet. Toute la largeur, et non un `Spacer`, pour la même raison.
+            .lineLimit(nil)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityHidden(true)
-            Spacer(minLength: 4)
             Toggle(accessibilityTitle ?? title, isOn: $isOn)
                 .labelsHidden()
                 .toggleStyle(.switch)
@@ -487,7 +490,10 @@ struct PanelNotice: View {
                         .padding(.top, 2)
                 }
             }
-            Spacer(minLength: 0)
+            // La barre latérale de la fenêtre limite ses rangées à une ligne : un message tronqué ne dit plus
+            // quoi faire. Toute la largeur, et non un `Spacer`, pour la même raison.
+            .lineLimit(nil)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 6)
