@@ -1,0 +1,38 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>APB video sync probe</title>
+<style>body{background:#111;color:#eee;font:16px monospace}video{width:640px}</style></head>
+<body>
+<video id="v" src="silent.mp4" playsinline preload="auto"></video>
+<pre id="out">prêt</pre>
+<script>
+// Retard de l'horloge média sur l'horloge murale : Chromium n'avance currentTime qu'au rythme du son
+// réellement restitué, donc après la latence annoncée par la sortie.
+window.measure = async function (seconds = 7) {
+  const v = document.getElementById('v');
+  v.pause(); v.currentTime = 0;
+  await new Promise(r => v.readyState >= 3 ? r() : v.addEventListener('canplay', r, { once: true }));
+  const q0 = v.getVideoPlaybackQuality();
+  const t0 = performance.now();
+  await v.play();
+  const samples = [];
+  await new Promise(r => {
+    const iv = setInterval(() => {
+      const wall = (performance.now() - t0) / 1000;
+      samples.push([wall, v.currentTime]);
+      if (wall > seconds) { clearInterval(iv); r(); }
+    }, 20);
+  });
+  v.pause();
+  const first = samples.find(s => s[1] > 0.02);
+  const tail = samples.filter(s => s[0] > seconds - 2).map(s => s[0] - s[1]).sort((a, b) => a - b);
+  const q1 = v.getVideoPlaybackQuality();
+  const result = {
+    firstAdvanceWall: first ? +first[0].toFixed(3) : null,
+    steadyLagSeconds: tail.length ? +tail[Math.floor(tail.length / 2)].toFixed(3) : null,
+    droppedFrames: q1.droppedVideoFrames - q0.droppedVideoFrames,
+    totalFrames: q1.totalVideoFrames - q0.totalVideoFrames,
+  };
+  document.getElementById('out').textContent = JSON.stringify(result, null, 1);
+  return result;
+};
+</script></body></html>

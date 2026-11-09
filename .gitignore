@@ -14,8 +14,9 @@ build/
 xcuserdata/
 DerivedData/
 
-# Artefacts de test audio (dumps de capture, captures réseau)
+# Artefacts de test audio et vidéo (dumps de capture, vidéos d'essai régénérables, captures réseau)
 *.wav
+*.mp4
 *.pcap
 *.pcapng
 
