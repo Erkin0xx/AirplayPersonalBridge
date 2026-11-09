@@ -109,7 +109,9 @@ distinguant « validé par test », « mesuré » et « entendu ».
   `measure.mjs` ; le mode d'emploi est en tête de `measure.mjs`). Chrome 157 sans fenêtre, profil temporaire :
   **jamais une seconde instance de Dia**, qui affiche chez Baptiste son écran de connexion.
 - **Sortie virtuelle** : `swift run audiocap --video-sync`, `--video-latency auto|<s>`, `--default-output
-  bridge|<uid>`.
+  bridge|<uid>`. Regarde dans `PROGRESS.md` si l'app bascule déjà elle-même la sortie par défaut vers le pilote au
+  démarrage d'une diffusion (option « Caler l'image des vidéos ») ; sinon, la bascule se fait à la main par ces
+  commandes, et la sortie d'origine se rend par script.
 
 ## Règles de la session
 
@@ -127,6 +129,9 @@ distinguant « validé par test », « mesuré » et « entendu ».
 - **Toute correction arrive avec un test qui échoue sans elle.** Après fusion : `swift build`, tests ciblés (pas la
   suite complète, tests réseau intermittents sous charge), puis `scripts/install-app.sh` si l'app a changé.
 - **Secrets** : ne lis ni n'affiche rien de `credentials/`.
+- **Commits** : en anglais, conventional commits (skill `super-commit` : `fix(sync): …`, sujet à l'impératif, corps qui
+  explique le pourquoi), **sans aucune ligne d'attribution** (ni `Co-Authored-By`, ni mention de Claude ou d'IA). Même
+  règle dans le brief de chaque sous-agent qui commite.
 - Si `git push` échoue, ne force rien : signale-le.
 
 ## Pièges déjà payés
