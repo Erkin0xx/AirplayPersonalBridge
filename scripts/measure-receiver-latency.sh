@@ -12,6 +12,7 @@
 # Réglages par l'environnement :
 #   DUREE=70        durée d'une mesure à une enceinte, en secondes (au moins 60)
 #   DUREE_TROIS=90  durée d'une mesure à trois
+#   VOLUME=-10      volume AirPlay des enceintes, de -30 à 0 (trop bas, le micro ne capte rien)
 #   TRAMES=11025    compensation essayée, en trames à 44,1 kHz (RAOP et AirPlay 2)
 #   ETAPES="..."    sous-ensemble des mesures, parmi : geneva salon salon2 trois
 #
@@ -28,6 +29,7 @@ OUT="${1:-captures/retard-2s/$(date +%Y%m%d-%H%M%S)}"
 DUREE="${DUREE:-70}"
 DUREE_TROIS="${DUREE_TROIS:-90}"
 TRAMES="${TRAMES:-11025}"
+VOLUME="${VOLUME:--10}"
 ETAPES="${ETAPES:-geneva salon salon2 trois}"
 GENEVA="${GENEVA:-Erki’s geneva}"
 GAUCHE="${GAUCHE:-Salon}"
@@ -46,7 +48,15 @@ mesure() {
   shift 2
   printf '\n=== %s (%s s) ===\n' "$nom" "$duree"
   # Un échec de diffusion ne doit pas faire perdre les mesures suivantes.
-  ./audiocap --clicks "$@" --record-input "${OUT}/${nom}.wav" "$duree" \
+  # Chaque option de volume exige sa sortie : --volume2 sans --airplay2 est refusé.
+  local volumes=() argument
+  for argument in "$@"; do
+    case "$argument" in
+      --airplay) volumes+=(--volume "$VOLUME") ;;
+      --airplay2) [[ " ${volumes[*]-} " == *" --volume2 "* ]] || volumes+=(--volume2 "$VOLUME") ;;
+    esac
+  done
+  ./audiocap --clicks "$@" "${volumes[@]}" --record-input "${OUT}/${nom}.wav" "$duree" \
     > "${OUT}/${nom}.log" 2>&1 || echo "audiocap a rendu $? : voir ${OUT}/${nom}.log"
   tail -n 4 "${OUT}/${nom}.log"
   scripts/measure-clicks.py "${OUT}/${nom}.wav" > "${OUT}/${nom}.txt" 2>&1 || true
@@ -59,19 +69,20 @@ mesure() {
 for etape in $ETAPES; do
   case "$etape" in
     geneva)
-      mesure geneva-sans "$DUREE" --airplay "$GENEVA"
+      mesure geneva-sans "$DUREE" --airplay "$GENEVA" --receiver-latency 0
       mesure geneva-avec "$DUREE" --airplay "$GENEVA" --receiver-latency "$TRAMES"
       ;;
     salon)
-      mesure salon-sans "$DUREE" --airplay2 "$GAUCHE"
+      mesure salon-sans "$DUREE" --airplay2 "$GAUCHE" --receiver-latency2 0
       mesure salon-avec "$DUREE" --airplay2 "$GAUCHE" --receiver-latency2 "$TRAMES"
       ;;
     salon2)
-      mesure salon2-sans "$DUREE" --airplay2 "$DROITE"
+      mesure salon2-sans "$DUREE" --airplay2 "$DROITE" --receiver-latency2 0
       mesure salon2-avec "$DUREE" --airplay2 "$DROITE" --receiver-latency2 "$TRAMES"
       ;;
     trois)
-      mesure trois-sans "$DUREE_TROIS" --airplay "$GENEVA" --airplay2 "$GAUCHE" --airplay2 "$DROITE"
+      mesure trois-sans "$DUREE_TROIS" --airplay "$GENEVA" --airplay2 "$GAUCHE" --airplay2 "$DROITE" \
+        --receiver-latency 0 --receiver-latency2 0
       mesure trois-avec "$DUREE_TROIS" --airplay "$GENEVA" --airplay2 "$GAUCHE" --airplay2 "$DROITE" \
         --receiver-latency "$TRAMES" --receiver-latency2 "$TRAMES"
       ;;

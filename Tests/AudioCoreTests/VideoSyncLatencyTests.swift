@@ -10,17 +10,17 @@ import Testing
 /// par les senders. D'où un test qui vérifie que le délai de restitution reste celui qui a été
 /// écouté sur les enceintes.
 struct VideoSyncLatencyTests {
-    @Test("2,30 s par défaut : 2 s de restitution plus le résidu mesuré au micro")
+    @Test("2,045 s par défaut : 2 s de restitution plus le résidu mesuré au micro")
     func defaultLatency() {
         #expect(SharedPlaybackClock.defaultPlayoutDelaySeconds == 2.0)
-        #expect(abs(VideoSyncLatency.seconds() - 2.30) < 1e-9)
-        #expect(VideoSyncLatency.frames() == 110_400)
+        #expect(abs(VideoSyncLatency.seconds() - 2.045) < 1e-9)
+        #expect(VideoSyncLatency.frames() == 98_160)
     }
 
     @Test("La latence suit le délai de restitution : un seul endroit à changer")
     func followsPlayoutDelay() {
-        #expect(VideoSyncLatency.frames(playoutDelaySeconds: 1.5) == 86_400)
-        #expect(VideoSyncLatency.frames(playoutDelaySeconds: 1.5, sampleRate: 44_100) == 79_380)
+        #expect(VideoSyncLatency.frames(playoutDelaySeconds: 1.5) == 74_160)
+        #expect(VideoSyncLatency.frames(playoutDelaySeconds: 1.5, sampleRate: 44_100) == 68_135)
     }
 
     @Test("Bornée à ce que le pilote et Chromium acceptent")

@@ -261,13 +261,13 @@ while index < arguments.count {
               --receiver-latency <trames>
                                         ce que le récepteur RAOP ajoute à la latence annoncée dans
                                         les paquets de synchro, en trames à 44,1 kHz (défaut : \(ReceiverAddedLatency.default.raopFrames)).
-                                        11025 l'en retranche : il joue 0,25 s plus tôt s'il l'ajoute
+                                        0 ne retranche rien : il joue alors 0,25 s plus tard
               --receiver-latency2 <trames>
                                         idem pour toutes les sorties AirPlay 2 (défaut : \(ReceiverAddedLatency.default.airPlay2Frames))
               --video-sync              état de la sortie virtuelle de calage vidéo (pilote
                                         Drivers/APBOutput) et de la sortie par défaut, puis quitte
               --video-latency <s|auto>  latence annoncée par la sortie virtuelle, en secondes ;
-                                        auto = délai de restitution + résidu mesuré (2,30 s).
+                                        auto = délai de restitution + résidu mesuré (2,045 s).
                                         Une page déjà ouverte doit être rechargée
               --default-output <uid|bridge>
                                         impose la sortie par défaut (bridge = sortie virtuelle),

@@ -79,11 +79,12 @@ struct SyncLatencyTests {
         #expect(SyncLatency(playoutDelaySeconds: -1, sampleRate: 44_100, receiverAddedFrames: 0).playoutFrames == 0)
     }
 
-    /// Le fil entendu et mesuré le 2026-11-02 ne change pas tant que la compensation n'a pas été
-    /// mesurée au micro sur les trois enceintes.
-    @Test("Par défaut, aucune compensation : le fil reste celui qui a été entendu")
-    func defaultLeavesWireUnchanged() {
-        #expect(ReceiverAddedLatency.default == ReceiverAddedLatency(raopFrames: 0, airPlay2Frames: 0))
+    /// Mesuré au micro le 2026-11-09 : la Geneva et les deux HomePod avancent tous de 0,25 s. Une
+    /// seule famille compensée les mettrait à 0,25 s l'une de l'autre.
+    @Test("Par défaut, les deux familles sont compensées, de la même constante")
+    func defaultCompensatesBothFamilies() {
+        #expect(
+            ReceiverAddedLatency.default == ReceiverAddedLatency(raopFrames: 11_025, airPlay2Frames: 11_025))
     }
 
     /// L'ancrage retranche la latence **visée** : retrancher la seule latence annoncée ferait
@@ -165,11 +166,18 @@ struct SenderSyncAnnouncementTests {
         return (try #require(SyncAnnouncement(packet)), clock)
     }
 
-    /// Le fil d'avant, octet pour octet sur ces champs : 88 200 trames annoncées, NTP = instant visé
-    /// moins 2 s.
-    @Test("RAOP, sans réglage : 88 200 trames annoncées, comme avant")
+    /// Sans réglage, la compensation mesurée : 77 175 trames annoncées, NTP = instant visé moins 2 s.
+    @Test("RAOP, sans réglage : 77 175 trames annoncées")
     func raopDefault() async throws {
         let (sync, clock) = try await firstRAOPAnnouncement(playoutDelaySeconds: 2, receiverAddedFrames: nil)
+        #expect(sync.announcedFrames == 77_175)
+        #expect(abs(sync.ntpUnixTime - clock.epoch) < 1e-6)
+    }
+
+    /// Le fil d'avant le 2026-11-09, pour une mesure de comparaison : 88 200 trames annoncées.
+    @Test("RAOP, compensation coupée : 88 200 trames annoncées, même instant NTP")
+    func raopUncompensated() async throws {
+        let (sync, clock) = try await firstRAOPAnnouncement(playoutDelaySeconds: 2, receiverAddedFrames: 0)
         #expect(sync.announcedFrames == 88_200)
         #expect(abs(sync.ntpUnixTime - clock.epoch) < 1e-6)
     }
@@ -185,10 +193,10 @@ struct SenderSyncAnnouncementTests {
         #expect(abs(sync.playbackUnixTime(receiverAdding: 11_025) - target) < 1e-6)
     }
 
-    @Test("AirPlay 2, sans réglage : 88 200 trames annoncées, comme avant")
+    @Test("AirPlay 2, sans réglage : 77 175 trames annoncées")
     func airPlay2Default() async throws {
         let (sync, clock) = try await firstAirPlay2Announcement(playoutDelaySeconds: 2, receiverAddedFrames: nil)
-        #expect(sync.announcedFrames == 88_200)
+        #expect(sync.announcedFrames == 77_175)
         #expect(abs(sync.ntpUnixTime - clock.epoch) < 1e-6)
     }
 
@@ -255,10 +263,10 @@ struct ReceiverAddedLatencyWiringTests {
         return nil
     }
 
-    @Test("Sans réglage, les deux familles annoncent la latence visée")
+    @Test("Sans réglage, les deux familles annoncent la latence compensée")
     func defaultFactory() async throws {
-        #expect(try await announced(.raop, by: factory(nil)) == 88_200)
-        #expect(try await announced(.airplay2, by: factory(nil)) == 88_200)
+        #expect(try await announced(.raop, by: factory(nil)) == 77_175)
+        #expect(try await announced(.airplay2, by: factory(nil)) == 77_175)
     }
 
     /// Réglées séparément : la mesure au micro peut donner une constante par protocole.

@@ -11,10 +11,11 @@ private let videoSyncLog = Logger(subsystem: AudioLog.subsystem, category: "vide
 /// **Calculée ici et nulle part ailleurs** : le pilote (`Drivers/APBOutput`) ne connaît aucune valeur,
 /// il annonce ce qu'on lui écrit. Si le délai de restitution change un jour, la latence suit.
 public enum VideoSyncLatency {
-    /// Ce que les enceintes jouent au-delà du délai commun de restitution : +290 à +307 ms mesurés au
-    /// micro le 2026-11-02, enceinte par enceinte (`CLAUDE.md`, « Mesure acoustique »). Sans doute les
-    /// 11 025 trames (0,25 s) qu'un récepteur ajoute à la latence annoncée, plus le trajet du son.
-    public static let measuredReceiverResidualSeconds = 0.30
+    /// Ce que les enceintes jouent au-delà du délai commun de restitution : +40 à +47 ms mesurés au
+    /// micro le 2026-11-09, enceinte par enceinte, à table. C'est le trajet du son et les tampons des
+    /// récepteurs. Il valait 0,30 s tant que les 11 025 trames qu'un récepteur ajoute à la latence
+    /// annoncée n'étaient pas retranchées de l'annonce (``ReceiverAddedLatency``).
+    public static let measuredReceiverResidualSeconds = 0.045
 
     /// Le retard de bout en bout, en secondes.
     public static func seconds(

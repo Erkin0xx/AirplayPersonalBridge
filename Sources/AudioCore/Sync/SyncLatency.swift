@@ -22,11 +22,16 @@ public struct ReceiverAddedLatency: Sendable, Equatable {
         self.airPlay2Frames = airPlay2Frames
     }
 
-    /// Ce que l'app et le CLI emploient sans réglage. **0 partout tant que la compensation n'a pas
-    /// été mesurée sur les enceintes** : le fil reste alors celui qui a été entendu et mesuré. La
-    /// passer à ``historicalFrames`` fait jouer 0,25 s plus tôt les récepteurs concernés, donc tous
-    /// à la fois ou aucun.
-    public static let `default` = ReceiverAddedLatency(raopFrames: 0, airPlay2Frames: 0)
+    /// Ce que l'app et le CLI emploient sans réglage : la constante historique pour les deux
+    /// familles.
+    ///
+    /// Mesuré au micro le 2026-11-09, enceinte par enceinte, son direct à table, sans puis avec :
+    /// Geneva +292,4 → +43 ms, HomePod « Salon » +289,7 → +40,1 ms, « Salon (2) » +295,9 → +46,5 ms.
+    /// Les trois avancent de 0,25 s et gardent leurs écarts (6,2 ms avant, 6,4 ms après). **Les deux
+    /// familles vont ensemble** : n'en compenser qu'une les mettrait à 0,25 s l'une de l'autre.
+    public static let `default` = ReceiverAddedLatency(
+        raopFrames: historicalFrames, airPlay2Frames: historicalFrames
+    )
 }
 
 /// Les deux latences d'une sortie : celle qu'on vise, et celle qu'on écrit dans le paquet de synchro.
