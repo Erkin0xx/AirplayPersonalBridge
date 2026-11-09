@@ -708,6 +708,12 @@ Recherche seule : rien de cela n'est implémenté, ni essayé sur les enceintes.
   de sortie reste à 12 ms (IOProc et AUHAL), AVPlayer ne bouge pas (horloge partie à ~0,1 s, périphérique bien en marche). L'agrégat
   n'expose pas non plus de volume virtuel : les touches du Mac ne le piloteraient pas. Firefox lit `dev + stream` (`cubeb_audiounit`),
   donc pas le `safety offset`. Reste à essayer : une sortie virtuelle (AudioServerPlugIn) qui annonce `kAudioDevicePropertyLatency`.
+- **Dia (1.56, Chromium 157) retarde l'image de la latence annoncée par la sortie, safety offset exclu** (code Chromium lu le
+  2026-11-09 : `media/audio/mac/core_audio_util_mac.cc`, `media/audio/apple/audio_auhal.cc`). Somme `kAudioUnitProperty_Latency` +
+  `kAudioDevicePropertyLatency` + `kAudioStreamPropertyLatency` du premier flux, **lue à l'ouverture du flux** (`AUHALStream::Open`),
+  bornée à 10 s. Au-delà d'1 s, Chromium journalise « Large rendering delay » sans plafonner. Le chemin AVFoundation
+  (`kMacAVFoundationPlayback`, macOS 27, désactivé par défaut) passe un délai **nul** : s'il devient le défaut, la sortie virtuelle
+  ne servira plus à Dia. Lire Chromium : `chromium.googlesource.com/…/<fichier>?format=TEXT`, décodé en base64.
 - **Retransmissions sur le vrai Wi-Fi** (`captures/p5-endurance-1h.pcapng`, 1 h, sinusoïde) : 0,54 % des paquets redemandés, un par
   demande, réponse servie en moins de 8 ms. Délai entre la 1re émission et la demande :
 
