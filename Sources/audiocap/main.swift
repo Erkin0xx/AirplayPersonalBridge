@@ -263,17 +263,29 @@ while index < arguments.count {
 // --- Mode liste ---
 if listOnly {
     do {
-        let processes = try AudioProcessList.all().sorted {
-            ($0.isPlaying ? 0 : 1, $0.displayName) < ($1.isPlaying ? 0 : 1, $1.displayName)
+        // Le même classement que le diagnostic du silence : un flux ouvert ne fait pas une
+        // application qui joue (`BundleLocationClassifier`).
+        let classifier = BundleLocationClassifier()
+        func rank(_ process: AudioProcessInfo) -> Int {
+            guard process.isPlaying else { return 2 }
+            return classifier.isUserApplication(process) ? 0 : 1
         }
-        note("Process audio (● = en train de jouer) :\n")
-        for process in processes {
+        let processes = try AudioProcessList.all()
+            .map { (process: $0, rank: rank($0)) }
+            .sorted { ($0.rank, $0.process.displayName) < ($1.rank, $1.process.displayName) }
+        note("""
+            Process audio (● = une application joue, ◐ = flux ouvert, pas une application : \
+            démon, agent, outil ou interpréteur, ○ = aucun flux) :
+
+            """)
+        for (process, rank) in processes {
             note(String(
-                format: "  %@ %-28@ pid=%-7d %@",
-                process.isPlaying ? "●" : "○",
+                format: "  %@ %-28@ pid=%-7d %@%@",
+                ["●", "◐", "○"][rank],
                 process.displayName as NSString,
                 process.pid,
-                process.bundleID
+                process.bundleID,
+                rank == 1 ? "  (flux ouvert, pas une application)" : ""
             ))
         }
         exit(0)
@@ -501,8 +513,13 @@ func describe(_ health: BridgeEngine.CaptureHealth) -> String {
     case .healthy: return "capture active"
     case .stalled: return "CAPTURE INTERROMPUE"
     case .silentWhilePlaying:
-        return "SILENCE STRICT alors qu'une application joue — autorisation perdue ?"
-    case .silentNothingPlaying: return "silence strict, aucune application ne joue"
+        // Même lecture que l'alerte de l'app : une autorisation accordée écarte l'accusation sans
+        // l'exclure, une application pouvant garder un flux ouvert et muet.
+        return health.permission == .authorized
+            ? "silence strict alors qu'une application joue (autorisation accordée : flux muet ?)"
+            : "SILENCE STRICT alors qu'une application joue — autorisation perdue ?"
+    case .silentNothingPlaying:
+        return "silence strict, aucune application ne joue (démons et outils non comptés)"
     case .silentUnknown: return "silence strict"
     }
 }

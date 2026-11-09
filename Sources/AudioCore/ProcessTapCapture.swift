@@ -33,6 +33,7 @@ public final class ProcessTapCapture: AudioCaptureSource {
 
     private let mode: Mode
     private let muteLocalOutput: Bool
+    private let classifier: any AudioProcessClassifying
 
     private var tapID: AudioObjectID = kAudioObjectUnknown
     private var tapUUID: UUID?
@@ -65,9 +66,15 @@ public final class ProcessTapCapture: AudioCaptureSource {
     ///     (`CATapMutedWhenTapped`). Sans cela, le Mac et les enceintes jouent ensemble, avec
     ///     les deux secondes de décalage que retient une diffusion AirPlay. Le son local
     ///     revient de lui-même dès que le tap n'est plus lu, y compris si l'application plante.
-    public init(mode: Mode, muteLocalOutput: Bool = false) {
+    ///   - classifier: ce qui compte comme une application qui joue, en mode global
+    ///     (``isAudioExpected()``).
+    public init(
+        mode: Mode, muteLocalOutput: Bool = false,
+        classifier: any AudioProcessClassifying = BundleLocationClassifier()
+    ) {
         self.mode = mode
         self.muteLocalOutput = muteLocalOutput
+        self.classifier = classifier
     }
 
     deinit {
@@ -160,10 +167,31 @@ public final class ProcessTapCapture: AudioCaptureSource {
     /// un signal non nul. C'est donc un indice, pas une preuve.
     public func isAudioExpected() -> Bool? {
         guard let playing = try? AudioProcessList.playing() else { return nil }
-        let own = getpid()
+        return Self.isAudioExpected(
+            mode: mode, playing: playing, ownPID: getpid(), classifier: classifier
+        )
+    }
+
+    /// Le cœur de ``isAudioExpected()``, sans Core Audio.
+    ///
+    /// En mode global, seule une **application de l'utilisateur** compte : un démon ou un outil qui
+    /// garde un flux ouvert et muet faisait diagnostiquer `silentWhilePlaying`, « autorisation
+    /// perdue ? », alors que rien ne jouait. Écarté, il donne `false`, donc « rien ne joue », et non
+    /// `nil` : on sait qu'aucune application ne joue. Revers assumé : `afplay` ne compte pas non plus,
+    /// et un blocage de la capture pendant qu'il joue seul n'est pas reconstruit.
+    ///
+    /// En mode application, les processus désignés comptent tels quels : c'est l'utilisateur qui les a
+    /// choisis.
+    static func isAudioExpected(
+        mode: Mode, playing: [AudioProcessInfo], ownPID: pid_t,
+        classifier: any AudioProcessClassifying
+    ) -> Bool {
         switch mode {
         case let .globalExcluding(pids):
-            return playing.contains { $0.pid != own && !pids.contains($0.pid) }
+            // Le classement lit le disque : il vient en dernier, sur les seuls candidats.
+            return playing.contains {
+                $0.pid != ownPID && !pids.contains($0.pid) && classifier.isUserApplication($0)
+            }
         case let .processes(pids):
             return playing.contains { pids.contains($0.pid) }
         }

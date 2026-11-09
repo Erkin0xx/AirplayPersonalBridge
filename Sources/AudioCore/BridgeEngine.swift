@@ -236,12 +236,15 @@ public actor BridgeEngine {
             /// Les blocs ont cessé d'arriver alors que quelque chose joue, ou sans qu'on puisse dire
             /// si quelque chose joue (périphérique perdu, reconstruction en échec).
             case stalled
-            /// Silence strict alors qu'une application captée a un flux ouvert. Soit elle garde un
-            /// flux muet, et il n'y a rien d'anormal, soit **autorisation perdue ou tap mal câblé**,
-            /// typiquement juste après un rebuild, qui révoque l'autorisation sans la moindre erreur
-            /// (`CLAUDE.md`). C'est `permission` qui permet de pencher pour l'un ou l'autre.
+            /// Silence strict alors qu'une application captée a un flux ouvert. En mode global, seule
+            /// une application de l'utilisateur compte, ni démon ni outil en ligne de commande
+            /// (``AudioProcessClassifying``). Soit elle garde un flux muet, et il n'y a rien
+            /// d'anormal, soit **autorisation perdue ou tap mal câblé**, typiquement juste après un
+            /// rebuild, qui révoque l'autorisation sans la moindre erreur (`CLAUDE.md`). C'est
+            /// `permission` qui permet de pencher pour l'un ou l'autre.
             case silentWhilePlaying
-            /// Silence strict, ou plus aucun bloc, et rien ne joue : rien d'anormal.
+            /// Silence strict, ou plus aucun bloc, et aucune application ne joue : rien d'anormal. Un
+            /// démon ou un outil au flux ouvert et muet mène ici.
             case silentNothingPlaying
             /// Silence strict, et la source ne sait pas dire si quelque chose devrait jouer.
             case silentUnknown
