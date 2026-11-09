@@ -267,7 +267,7 @@ while index < arguments.count {
               --video-sync              état de la sortie virtuelle de calage vidéo (pilote
                                         Drivers/APBOutput) et de la sortie par défaut, puis quitte
               --video-latency <s|auto>  latence annoncée par la sortie virtuelle, en secondes ;
-                                        auto = délai de restitution + résidu mesuré (2,045 s).
+                                        auto = délai de restitution + résidu mesuré (0,445 s).
                                         Une page déjà ouverte doit être rechargée
               --default-output <uid|bridge>
                                         impose la sortie par défaut (bridge = sortie virtuelle),

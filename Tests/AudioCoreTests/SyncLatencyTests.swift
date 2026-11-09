@@ -227,6 +227,9 @@ struct SenderSyncAnnouncementTests {
 
 @Suite("La fabrique réelle transmet la compensation à chaque famille de récepteurs")
 struct ReceiverAddedLatencyWiringTests {
+    /// Latence visée de l'horloge par défaut, à 44,1 kHz.
+    private let playoutFrames = UInt32(SharedPlaybackClock.defaultPlayoutDelaySeconds * 44_100)
+
     private func context() throws -> OutputSenderContext {
         OutputSenderContext(
             ring: AudioRingBuffer(capacityFrames: 1_024, channelCount: 2),
@@ -265,15 +268,15 @@ struct ReceiverAddedLatencyWiringTests {
 
     @Test("Sans réglage, les deux familles annoncent la latence compensée")
     func defaultFactory() async throws {
-        #expect(try await announced(.raop, by: factory(nil)) == 77_175)
-        #expect(try await announced(.airplay2, by: factory(nil)) == 77_175)
+        #expect(try await announced(.raop, by: factory(nil)) == playoutFrames - 11_025)
+        #expect(try await announced(.airplay2, by: factory(nil)) == playoutFrames - 11_025)
     }
 
     /// Réglées séparément : la mesure au micro peut donner une constante par protocole.
     @Test("Chaque famille reçoit sa propre compensation")
     func perProtocol() async throws {
         let latency = ReceiverAddedLatency(raopFrames: 11_025, airPlay2Frames: 4_410)
-        #expect(try await announced(.raop, by: factory(latency)) == 77_175)
-        #expect(try await announced(.airplay2, by: factory(latency)) == 83_790)
+        #expect(try await announced(.raop, by: factory(latency)) == playoutFrames - 11_025)
+        #expect(try await announced(.airplay2, by: factory(latency)) == playoutFrames - 4_410)
     }
 }

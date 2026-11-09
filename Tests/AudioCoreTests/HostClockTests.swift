@@ -163,9 +163,10 @@ struct BridgeEngineTimelineTests {
         let after = Date().timeIntervalSince1970
         let timeline = try #require(await engine.playbackTimeline)
         #expect(timeline.captureSampleRate == 48_000)
-        #expect(timeline.playoutDelaySeconds == 2)
-        #expect(timeline.frameZeroPresentationUnixTime >= before + 2)
-        #expect(timeline.frameZeroPresentationUnixTime <= after + 2)
+        let delay = SharedPlaybackClock.defaultPlayoutDelaySeconds
+        #expect(timeline.playoutDelaySeconds == delay)
+        #expect(timeline.frameZeroPresentationUnixTime >= before + delay)
+        #expect(timeline.frameZeroPresentationUnixTime <= after + delay)
         #expect(timeline.presentationUnixTime(forCaptureFrame: 96_000)
             - timeline.frameZeroPresentationUnixTime == 2)
 

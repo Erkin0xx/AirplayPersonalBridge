@@ -10,11 +10,11 @@ import Testing
 /// par les senders. D'où un test qui vérifie que le délai de restitution reste celui qui a été
 /// écouté sur les enceintes.
 struct VideoSyncLatencyTests {
-    @Test("2,045 s par défaut : 2 s de restitution plus le résidu mesuré au micro")
+    @Test("0,445 s par défaut : 0,4 s de restitution plus le résidu mesuré au micro")
     func defaultLatency() {
-        #expect(SharedPlaybackClock.defaultPlayoutDelaySeconds == 2.0)
-        #expect(abs(VideoSyncLatency.seconds() - 2.045) < 1e-9)
-        #expect(VideoSyncLatency.frames() == 98_160)
+        #expect(SharedPlaybackClock.defaultPlayoutDelaySeconds == 0.4)
+        #expect(abs(VideoSyncLatency.seconds() - 0.445) < 1e-9)
+        #expect(VideoSyncLatency.frames() == 21_360)
     }
 
     @Test("La latence suit le délai de restitution : un seul endroit à changer")
@@ -29,10 +29,10 @@ struct VideoSyncLatencyTests {
         #expect(VideoSyncLatency.frames(playoutDelaySeconds: -5) == 0)
     }
 
-    @Test("Le fil ne bouge pas : l'horloge commune garde 2 s par défaut")
-    func wireUnchanged() {
+    @Test("L'horloge commune emploie le délai par défaut")
+    func clockUsesDefault() {
         let clock = SharedPlaybackClock(captureSampleRate: 48_000)
-        #expect(clock.playoutDelaySeconds == 2.0)
+        #expect(clock.playoutDelaySeconds == SharedPlaybackClock.defaultPlayoutDelaySeconds)
     }
 
     @Test("Chromium lit périphérique + flux, jamais le safety offset")

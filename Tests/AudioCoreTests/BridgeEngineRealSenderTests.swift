@@ -299,7 +299,7 @@ struct BridgeEngineRealSenderTests {
         #expect(snapshot.droppedWhileStreaming > 24_000)
 
         let sender = try #require(factory.sender)
-        let anchor = try #require(sender.synchronizer.syncAnchorUnixTime(latencyFrames: 88_200))
+        let anchor = try #require(sender.synchronizer.syncAnchorUnixTime(latencyFrames: sender.syncLatency.playoutFrames))
         let lag = Date().timeIntervalSince1970 - anchor
         #expect(abs(lag) < 0.25, "l'ancrage retarde de \(lag) s sur le direct")
 

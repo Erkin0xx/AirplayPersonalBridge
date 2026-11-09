@@ -1389,8 +1389,9 @@ struct BridgeEngineHealthTests {
             await engine.tickHealth(now: start.addingTimeInterval(Double(second)))
         }
         let frameZero = try #require(clock.presentationUnixTime(forCaptureFrame: 0))
-        // La trame n° 0, qui n'existe pas encore, est attendue à +60 s, plus les 2 s de marge.
-        #expect(abs(frameZero - (start.timeIntervalSince1970 + 62)) < 1)
+        // La trame n° 0, qui n'existe pas encore, est attendue à +60 s, plus le délai de restitution.
+        let expected = start.timeIntervalSince1970 + 60 + SharedPlaybackClock.defaultPlayoutDelaySeconds
+        #expect(abs(frameZero - expected) < 1)
         await engine.stop()
     }
 }

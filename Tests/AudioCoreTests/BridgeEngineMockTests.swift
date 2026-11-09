@@ -109,7 +109,8 @@ struct BridgeEngineMockTests {
     /// la durée de la session.
     private func expectAnchorIsCurrent(_ sender: any OutputSender, label: String) {
         let synchronizer = sender.synchronizer
-        guard let anchor = synchronizer.syncAnchorUnixTime(latencyFrames: 88_200) else {
+        guard let anchor = synchronizer.syncAnchorUnixTime(
+            latencyFrames: UInt32(SharedPlaybackClock.defaultPlayoutDelaySeconds * 44_100)) else {
             Issue.record("\(label) : ancrage indisponible")
             return
         }

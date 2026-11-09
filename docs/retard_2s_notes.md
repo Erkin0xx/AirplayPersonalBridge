@@ -11,8 +11,8 @@ Niveaux de preuve : **test** (`swift test`, faux récepteurs en boucle locale), 
 
 | Étape | État |
 |---|---|
-| 1. Retirer la constante du récepteur (~0,25 s) | **Mesuré** sur les trois enceintes, activé par défaut. **Pas encore entendu** en musique, ni vérifié dans Dia |
-| 2. Raccourcir le délai de restitution | Pas commencé. Le délai est maintenant une seule constante (voir plus bas) |
+| 1. Retirer la constante du récepteur (~0,25 s) | **Mesuré** sur les trois enceintes, activé par défaut |
+| 2. Raccourcir le délai de restitution | **0,4 s retenu à l'écoute** par Baptiste. Ni endurance ni mesure |
 | 3. Compte rendu, ADR | Pas commencé |
 
 ## Étape 1 : mesure du 2026-11-09 (micro du Mac, à table, volume AirPlay −10, clics à −20 dBFS)
@@ -101,7 +101,41 @@ arrêtée. Un membre de la paire mesuré seul ne joue que son canal : normal, le
 - Écoute à trois par Baptiste, musique, début de morceau compris : aucun écho.
 - Vidéo flash-bip dans Dia, page rechargée : image et son calés avec 2,045 s annoncés.
 
-## Étape 2 : ce qui dépend encore de 2 s
+## Étape 2 : paliers essayés à l'écoute le 2026-11-10 (**entendu**, pas mesuré)
+
+Baptiste a voulu descendre d'un coup plutôt que par paliers de 30 min. App réinstallée à chaque valeur, trois
+enceintes, musique et vidéo depuis le Mac, quelques minutes par palier, **sans capture réseau ni endurance**.
+
+| Délai de restitution | Annoncé aux enceintes | Verdict de Baptiste |
+|---|---|---|
+| 2,0 s (avec compensation) | 1,75 s | « moins bien calé », sans préciser image ou enceintes |
+| 1,0 s | 0,75 s | « j'ai l'impression que ça marche » |
+| 0,5 s | 0,25 s | marche |
+| **0,4 s** | 0,15 s | **« work fine »** : retenu |
+| 0,3 s | 0,05 s | bugue |
+| 0,25 s | 0 | « bugue de fou » |
+
+`SharedPlaybackClock.defaultPlayoutDelaySeconds` = 0,4. La sortie virtuelle annonce 0,445 s.
+
+**Ce qui n'est pas fait** : endurance de 30 min avec `tshark` sur `en0`, compte des `0xD5` et des réponses
+arrivées après l'instant de restitution, mesure aux clics à 0,4 s (écarts entre enceintes, résidu). Avec 0,15 s
+annoncés, la médiane des demandes de retransmission des HomePod (~95 ms à 2 s de tampon) laisse peu de marge, et
+leur p99 (~0,95 s) est hors d'atteinte : des trous sont attendus sur un Wi-Fi chargé. Si Baptiste entend des
+craquements à l'usage, remonter à 0,5 s. `latencyMin`/`latencyMax` du `SETUP` AirPlay 2 n'ont pas bougé.
+
+## Apple TV → Mac → enceintes (essai de Baptiste, 2026-11-10)
+
+Récepteur AirPlay du Mac activé (Réglages > Général > AirDrop et Continuité) : **l'Apple TV propose le Mac comme
+sortie audio, et le tap global capte ce son** (entendu sur les enceintes). C'est le seul chemin qui met la Geneva
+dans le son de l'Apple TV. La télécommande règle le volume envoyé.
+
+- **Écho si l'Apple TV sort à la fois sur les HomePod et sur le Mac** : ne cocher que le Mac.
+- **Pauses spontanées** au premier essai : journaux de l'app, 16 sessions AirPlay 2 fermées par les HomePod en
+  3 min (00:07 à 00:09), aucune perte côté Geneva. Hypothèse : l'Apple TV reprend sa sortie Home cinéma. Au
+  second essai, Mac seul coché, Baptiste rapporte « ça marche nickel, sans délai j'ai l'impression ».
+- Le récepteur AirPlay du Mac occupe le port 5000 : **les mocks ne démarrent plus** tant qu'il est allumé.
+
+## Ce qui dépendait de 2 s
 
 `SharedPlaybackClock.defaultPlayoutDelaySeconds` est désormais **la seule constante** : la latence annoncée des
 deux senders, l'ancrage et `VideoSyncLatency` en découlent (test « Un délai de restitution de 1,5 s se lit dans

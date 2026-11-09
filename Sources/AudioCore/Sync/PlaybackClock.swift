@@ -41,9 +41,16 @@ public protocol PlaybackClockProtocol: Sendable {
 }
 
 public final class SharedPlaybackClock: PlaybackClockProtocol, @unchecked Sendable {
-    /// Le délai commun de restitution par défaut. La sortie virtuelle de calage vidéo en dérive la
-    /// latence qu'elle annonce aux applications (`VideoSyncLatency`) : si ce délai change, elle suit.
-    public static let defaultPlayoutDelaySeconds = 2.0
+    /// Le délai commun de restitution par défaut. **La seule constante du retard de bout en bout** :
+    /// la latence annoncée par les senders (`SyncLatency`) et celle que la sortie virtuelle annonce
+    /// aux applications (`VideoSyncLatency`) en découlent.
+    ///
+    /// 0,4 s, choisi par Baptiste à l'écoute le 2026-11-10 sur la Geneva et les deux HomePod : 2 s
+    /// (la valeur d'Apple) faisait attendre chaque vidéo et chaque clic. Essayés le même soir : 1 s
+    /// et 0,5 s tiennent, **0,3 s et 0,25 s décrochent** (trous en rafale). Un récepteur ajoutant
+    /// 0,25 s de lui-même, 0,4 s ne lui annonce que 0,15 s : un paquet perdu sur le Wi-Fi n'a
+    /// presque plus le temps d'être renvoyé. Tenu quelques minutes à l'écoute, pas en endurance.
+    public static let defaultPlayoutDelaySeconds = 0.4
 
     public let captureSampleRate: Double
     public let playoutDelaySeconds: Double
@@ -55,10 +62,8 @@ public final class SharedPlaybackClock: PlaybackClockProtocol, @unchecked Sendab
 
     /// - Parameters:
     ///   - captureSampleRate: fréquence de la capture (48 000 Hz sur cette machine).
-    ///   - playoutDelaySeconds: délai commun de restitution. 2 s est la valeur qu'annoncent
-    ///     les senders Apple et qu'attendent les récepteurs RAOP par défaut (88 200 trames à
-    ///     44,1 kHz) ; la garder identique des deux côtés évite d'avoir à réconcilier deux
-    ///     profondeurs de tampon différentes.
+    ///   - playoutDelaySeconds: délai commun de restitution, voir
+    ///     ``defaultPlayoutDelaySeconds``. Les senders Apple emploient 2 s.
     public init(
         captureSampleRate: Double, playoutDelaySeconds: Double = SharedPlaybackClock.defaultPlayoutDelaySeconds
     ) {
