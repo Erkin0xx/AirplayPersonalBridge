@@ -52,6 +52,9 @@ var browse2Only = false
 /// sécurité, en complément de l'alignement automatique, jamais à sa place).
 var airplayDelayMs: Double = 0
 var airplay2DelaysMs: [Double] = []
+/// `--receiver-latency`, `--receiver-latency2` : ce que les récepteurs RAOP et AirPlay 2 ajoutent à
+/// la latence annoncée, en trames à 44,1 kHz. Sert à mesurer au micro avec et sans compensation.
+var receiverAddedLatency = ReceiverAddedLatency.default
 /// Renfort de basses de la sortie RAOP, en dB (ADR-002). `nil` : aucun.
 var airplayBassDB: Float?
 /// Niveau des sources synthétiques. `nil` : celui propre à chaque source (``defaultLevel(for:)``).
@@ -179,6 +182,17 @@ while index < arguments.count {
             exit(2)
         }
         airplay2DelaysMs.append(value)
+    case "--receiver-latency", "--receiver-latency2":
+        index += 1
+        guard index < arguments.count, let value = UInt32(arguments[index]) else {
+            FileHandle.standardError.write(Data("\(argument) attend un nombre de trames\n".utf8))
+            exit(2)
+        }
+        if argument == "--receiver-latency" {
+            receiverAddedLatency.raopFrames = value
+        } else {
+            receiverAddedLatency.airPlay2Frames = value
+        }
     case "--credentials2":
         index += 1
         guard index < arguments.count else {
@@ -244,6 +258,12 @@ while index < arguments.count {
                                         --volume2, --delay2, --credentials2 : donnés une fois, ils
                                         valent pour tous les --airplay2 ; répétés, ils s'appliquent
                                         dans l'ordre, un par --airplay2, autant que de --airplay2
+              --receiver-latency <trames>
+                                        ce que le récepteur RAOP ajoute à la latence annoncée dans
+                                        les paquets de synchro, en trames à 44,1 kHz (défaut : \(ReceiverAddedLatency.default.raopFrames)).
+                                        11025 l'en retranche : il joue 0,25 s plus tôt s'il l'ajoute
+              --receiver-latency2 <trames>
+                                        idem pour toutes les sorties AirPlay 2 (défaut : \(ReceiverAddedLatency.default.airPlay2Frames))
               --video-sync              état de la sortie virtuelle de calage vidéo (pilote
                                         Drivers/APBOutput) et de la sortie par défaut, puis quitte
               --video-latency <s|auto>  latence annoncée par la sortie virtuelle, en secondes ;
@@ -645,7 +665,14 @@ func runRequestedOutputs(source: BridgeEngine.Source, plan: OutputPlan) async th
         recording = try await MeasurementRecording.start(path: recordInputPath)
     }
 
-    let engine = BridgeEngine()
+    var dependencies = BridgeEngine.Dependencies.live
+    dependencies.senderFactory = LiveOutputSenderFactory(receiverAddedLatency: receiverAddedLatency)
+    if receiverAddedLatency != .default {
+        note("Latence ajoutée par les récepteurs, retranchée de l'annonce : RAOP "
+            + "\(receiverAddedLatency.raopFrames) trames, AirPlay 2 "
+            + "\(receiverAddedLatency.airPlay2Frames) trames")
+    }
+    let engine = BridgeEngine(dependencies: dependencies)
     do {
         try await engine.start(
             source: source, outputs: requests,
