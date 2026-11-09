@@ -55,6 +55,32 @@ extension OutputState {
     }
 }
 
+/// Ce que la rangée dit de la paire stéréo d'une enceinte (`StereoPairs`) : hors de la vue pour être
+/// testé. Chaque membre garde sa rangée, son volume et son silence ; seule la coche est commune, et c'est
+/// pourquoi elle se dit discrètement sur la ligne du nom.
+enum PanelStereoPair {
+    /// La légende sur la ligne du nom : « stéréo avec Salon (2) ».
+    static func legend(partners: [String]) -> String? {
+        StereoPairs.names(partners).map { "stéréo avec \($0)" }
+    }
+
+    /// L'aide au survol de la rangée.
+    static func help(partners: [String]) -> String? {
+        StereoPairs.names(partners).map {
+            "Paire stéréo avec \($0) : elles se cochent et se décochent ensemble, chacune garde son volume"
+        }
+    }
+
+    /// Le complément de l'état de la rangée, pour VoiceOver.
+    static func accessibilityWords(partners: [String]) -> String? {
+        StereoPairs.names(partners).map { "en paire stéréo avec \($0)" }
+    }
+
+    static func accessibilityHint(partners: [String]) -> String? {
+        StereoPairs.names(partners).map { "Coche ou décoche aussi \($0)." }
+    }
+}
+
 /// Ce que les curseurs du tiroir font d'un geste : un pas, et les bornes du filtre.
 ///
 /// Hors de la vue pour être testé : c'est par ici que passe tout réglage fait dans le panneau. Il
@@ -120,6 +146,12 @@ struct PanelSpeakerRow: View {
     /// Une rangée au moins a un tiroir : toutes réservent la colonne du chevron, pour que leurs
     /// témoins restent l'un sous l'autre.
     let reservesDrawerColumn: Bool
+    /// Les autres membres de sa paire stéréo (`BridgeState.stereoPartners(of:)`). La rangée le dit :
+    /// son clic les coche ou les décoche avec elle.
+    let stereoPartnerNames: [String]
+    /// Le clic sur la rangée : `BridgeState.toggleEnabled(_:)`, qui emmène la paire stéréo. Jamais
+    /// `isEnabled` à la main, qui laisserait l'autre membre derrière.
+    let toggle: () -> Void
     @Binding var isDrawerOpen: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -136,11 +168,14 @@ struct PanelSpeakerRow: View {
 
     init(
         output: OutputState, isAudible: Bool, reservesDrawerColumn: Bool = false,
-        isDrawerOpen: Binding<Bool> = .constant(false), previewHovering: Bool = false
+        stereoPartnerNames: [String] = [], isDrawerOpen: Binding<Bool> = .constant(false),
+        previewHovering: Bool = false, toggle: @escaping () -> Void
     ) {
         self.output = output
         self.isAudible = isAudible
         self.reservesDrawerColumn = reservesDrawerColumn
+        self.stereoPartnerNames = stereoPartnerNames
+        self.toggle = toggle
         _isDrawerOpen = isDrawerOpen
         _isHovering = State(initialValue: previewHovering)
     }
@@ -251,21 +286,22 @@ struct PanelSpeakerRow: View {
     /// seize points. Le bouton passe **sous** le contenu pour ne pas avaler le curseur.
     private var toggleSurface: some View {
         Button {
-            withAnimation(PanelMotion.standard(reduceMotion: reduceMotion)) {
-                output.isEnabled.toggle()
-            }
+            withAnimation(PanelMotion.standard(reduceMotion: reduceMotion)) { toggle() }
         } label: {
             RoundedRectangle(cornerRadius: PanelMetrics.rowRadius, style: .continuous)
                 .fill(isHovering ? PanelPalette.hover : .clear)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(PanelStereoPair.help(partners: stereoPartnerNames) ?? "")
         .accessibilityLabel("Diffuser vers \(output.displayName)")
         .accessibilityValue(accessibilityStateValue)
+        .accessibilityHint(PanelStereoPair.accessibilityHint(partners: stereoPartnerNames) ?? "")
     }
 
     private var accessibilityStateValue: String {
         var parts = [output.isEnabled ? "cochée" : "décochée"]
+        if let pair = PanelStereoPair.accessibilityWords(partners: stereoPartnerNames) { parts.append(pair) }
         if let muted = PanelSpeakerMute.rowStateWord(for: output) { parts.append(muted) }
         switch output.connection {
         case .streaming: parts.append("en diffusion")
@@ -304,11 +340,22 @@ struct PanelSpeakerRow: View {
 
     private var nameLine: some View {
         HStack(spacing: 6) {
-            Text(output.displayName)
-                .font(.system(size: 13))
-                .foregroundStyle(output.isInRetreat ? .secondary : .primary)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text(output.displayName)
+                    .font(.system(size: 13))
+                    .foregroundStyle(output.isInRetreat ? .secondary : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .layoutPriority(1)
+                // Sur la ligne du nom, pas dessous : la rangée garde sa hauteur, cochée ou non.
+                if let legend = PanelStereoPair.legend(partners: stereoPartnerNames) {
+                    Text(legend)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
             Spacer(minLength: 4)
             if output.isEnabled, isHovering || isAdjusting {
                 Text(PanelFormat.decibels(output.trimDB, fractionDigits: 1, signed: true))

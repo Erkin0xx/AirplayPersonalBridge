@@ -141,7 +141,9 @@ struct ContentView: View {
                         output: output,
                         effectiveGainDB: state.effectiveGainDB(for: output),
                         listeningCompensationMS: state.listeningCompensationMS(for: output),
-                        listeningPlaceName: state.listeningPlaceName
+                        listeningPlaceName: state.listeningPlaceName,
+                        stereoPartnerNames: state.stereoPartners(of: output).map(\.displayName),
+                        setEnabled: { state.setEnabled($0, for: output) }
                     )
                 }
 

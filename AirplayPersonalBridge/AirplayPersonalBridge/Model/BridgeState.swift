@@ -668,6 +668,7 @@ final class BridgeState {
         for (id, missed) in reconciliation.missedRounds { byID[id]?.missedRounds = missed }
 
         let reconciled = reconciliation.order.compactMap { byID[$0] }
+        Self.joinCheckedPairs(arriving: reconciliation.added.compactMap { byID[$0.id] }, in: reconciled)
         if reconciled.map(\.id) != outputs.map(\.id) { outputs = reconciled }
         if !reconciliation.added.isEmpty || !reconciliation.superseded.isEmpty || tightSyncChanged {
             scheduleSettingsSave()
@@ -716,6 +717,21 @@ final class BridgeState {
         return output
     }
 
+    /// Un membre qui apparaît rejoint sa paire si elle est cochée : c'est la paire qu'on a cochée, et un
+    /// membre seul ne jouerait que son canal (`StereoPairs`). Il entre alors en session avec elle, et si
+    /// l'autre diffuse déjà, toute la paire se rouvre ensemble.
+    ///
+    /// Jamais l'inverse : un membre coché ne se décoche pas parce que son partenaire arrive décoché. Ni
+    /// une enceinte qui ne jouera pas, comme à la première découverte.
+    private static func joinCheckedPairs(arriving: [OutputState], in outputs: [OutputState]) {
+        for output in arriving where !output.isEnabled && output.unavailability == nil {
+            guard let key = output.stereoPairKey,
+                outputs.contains(where: { $0 !== output && $0.stereoPairKey == key && $0.isEnabled })
+            else { continue }
+            output.isEnabled = true
+        }
+    }
+
     func refreshSources() {
         updateSources(isCaptureLive: isLive)
     }
@@ -761,6 +777,42 @@ final class BridgeState {
         guard awaitedSourceName != nil else { return }
         preferredSourceID = selectedSource.id
         scheduleSettingsSave()
+    }
+
+    // MARK: - Paires stéréo
+
+    /// Les autres membres de la paire stéréo de cette sortie, dans l'ordre de la liste : même `tsid`.
+    /// Vide pour une sortie sans paire connue.
+    func stereoPartners(of output: OutputState) -> [OutputState] {
+        guard let key = output.stereoPairKey else { return [] }
+        return outputs.filter { $0 !== output && $0.stereoPairKey == key }
+    }
+
+    /// Le geste de l'utilisateur sur une enceinte : la cocher ou la décocher, **avec toute sa paire
+    /// stéréo** (`StereoPairs`). C'est par ici que passent la rangée du panneau et la case de la
+    /// fenêtre ; une sortie sans paire ne change que d'elle-même.
+    ///
+    /// Un membre qui ne jouera pas (`unavailability`) n'est pas coché d'office, mais il est décoché avec
+    /// les autres. Un membre que la liste n'a plus (décoché, puis disparu du réseau) suit aussi : son
+    /// réglage enregistré change, et il reviendra dans l'état de sa paire.
+    func setEnabled(_ isEnabled: Bool, for output: OutputState) {
+        output.isEnabled = isEnabled
+        guard let key = output.stereoPairKey else { return }
+        for partner in stereoPartners(of: output) where !isEnabled || partner.unavailability == nil {
+            partner.isEnabled = isEnabled
+        }
+        let listed = Set(outputs.map(\.id))
+        let unlisted = settings.outputs.filter { id, record in
+            !listed.contains(id) && record.tightSyncIdentifier == key && record.isEnabled != isEnabled
+        }
+        guard !unlisted.isEmpty else { return }
+        for id in unlisted.keys { settings.outputs[id]?.isEnabled = isEnabled }
+        scheduleSettingsSave()
+    }
+
+    /// Inverse la coche d'une enceinte, et de sa paire : le clic sur une rangée du panneau.
+    func toggleEnabled(_ output: OutputState) {
+        setEnabled(!output.isEnabled, for: output)
     }
 
     // MARK: - Diffusion
@@ -1075,17 +1127,43 @@ final class BridgeState {
     /// Détecter le changement plutôt que réagir à chaque frappe du curseur évite d'envoyer un
     /// `SET_PARAMETER` par pixel déplacé, tout en couvrant tous les chemins qui modifient une
     /// consigne — fenêtre, panneau, master, trim, silence, plan.
+    ///
+    /// Une paire stéréo entre en session d'un seul tenant (`StereoPairs.sessionPlan`) : ses membres sont
+    /// ajoutés au même tour, et un membre qui diffuse déjà sort pour rentrer avec celui qui arrive. Cela
+    /// ne vaut que pour une **arrivée** : une reconnexion après une panne reste l'affaire du seul sender
+    /// concerné, dans le moteur, et ne relance jamais l'autre membre (CDC section 12). L'écart est voulu.
     private func syncOutputsWithEngine() {
         guard streamingPhase == .running else { return }
         let plan = volumePlan()
+        let pairs = StereoPairs.sessionPlan(
+            for: outputs.map { output in
+                StereoPairs.SessionMember(
+                    id: output.id, pairKey: output.stereoPairKey, isEnabled: output.isEnabled,
+                    isActive: activeOutputIDs.contains(output.id), isBusy: outputWork[output.id] != nil
+                )
+            }
+        )
+        // Retenue le temps que sa paire soit prête, elle entre dans un instant : la rangée le dit.
+        for output in outputs where pairs.held.contains(output.id) && output.connection == .idle {
+            output.connection = .connecting
+        }
         for output in outputs where outputWork[output.id] == nil {
             let isActive = activeOutputIDs.contains(output.id)
-            if output.isEnabled, !isActive {
+            if pairs.leaving.contains(output.id) {
+                removeFromSession(output)
+                // Elle repart aussitôt avec sa paire, plutôt que de s'éteindre.
+                output.connection = .connecting
+            } else if pairs.held.contains(output.id) {
+                continue
+            } else if output.isEnabled, !isActive {
                 addToSession(output, plan: plan)
             } else if !output.isEnabled, isActive {
                 removeFromSession(output)
             } else if isActive {
                 pushChanges(of: output, plan: plan)
+            } else if output.connection != .idle {
+                // Retenue avec sa paire, puis décochée avant d'entrer : rien ne la fait plus vivre.
+                output.connection = .idle
             }
         }
         updateEmptySelectionStop()
@@ -1434,6 +1512,8 @@ extension BridgeState {
             proto: .airplay2
         )
         right.trimDB = 1.5
+        // La paire stéréo de Baptiste : même `tsid` sur les deux HomePod.
+        for member in [left, right] { member.tightSyncIdentifier = "PAIRE-SALON" }
         let appleTV = OutputState(
             id: "raop/001122334455@Apple TV Salon", displayName: "Apple TV Salon",
             host: "192.168.1.51", port: 7000, proto: .raop, unavailability: .pairingRequired

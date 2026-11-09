@@ -17,6 +17,10 @@ struct OutputRow: View {
     /// d'elle-même, et le curseur « Délai » s'y ajoute.
     var listeningCompensationMS: Double?
     var listeningPlaceName: String?
+    /// Les autres membres de sa paire stéréo (`BridgeState.stereoPartners(of:)`).
+    var stereoPartnerNames: [String] = []
+    /// La case : `BridgeState.setEnabled(_:for:)`, qui emmène la paire stéréo.
+    var setEnabled: (Bool) -> Void
 
     /// Colonnes fixes : les valeurs s'alignent d'un curseur à l'autre, ce qui permet de
     /// balayer la carte verticalement au lieu de rechercher chaque nombre.
@@ -38,10 +42,11 @@ struct OutputRow: View {
 
     private var title: some View {
         HStack(spacing: 8) {
-            Toggle("", isOn: $output.isEnabled)
+            Toggle("", isOn: Binding(get: { output.isEnabled }, set: { setEnabled($0) }))
                 .labelsHidden()
                 .toggleStyle(.checkbox)
                 .accessibilityLabel("Diffuser vers \(output.displayName)")
+                .accessibilityHint(PanelStereoPair.accessibilityHint(partners: stereoPartnerNames) ?? "")
 
             OutputStatusDot(state: output.connection)
 
@@ -55,6 +60,14 @@ struct OutputRow: View {
                     .font(Theme.Font.tiny.monospacedDigit())
                     .foregroundStyle(Theme.mutedForeground)
                     .lineLimit(1)
+                if let pair = StereoPairs.names(stereoPartnerNames) {
+                    Text("Paire stéréo avec \(pair)")
+                        .font(Theme.Font.tiny)
+                        .foregroundStyle(Theme.mutedForeground)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(PanelStereoPair.help(partners: stereoPartnerNames) ?? "")
+                }
             }
 
             Spacer(minLength: 4)
@@ -242,7 +255,9 @@ private struct LevelBar: View {
                     output: output,
                     effectiveGainDB: state.effectiveGainDB(for: output),
                     listeningCompensationMS: state.listeningCompensationMS(for: output),
-                    listeningPlaceName: state.listeningPlaceName
+                    listeningPlaceName: state.listeningPlaceName,
+                    stereoPartnerNames: state.stereoPartners(of: output).map(\.displayName),
+                    setEnabled: { state.setEnabled($0, for: output) }
                 )
             }
         }

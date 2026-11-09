@@ -23,7 +23,7 @@ struct PanelSpeakerRowLayoutTests {
         + "un autre format ; redémarrer l'appareil peut aussi lever un blocage."
 
     private func row(_ output: OutputState) -> some View {
-        PanelSpeakerRow(output: output, isAudible: true, reservesDrawerColumn: true)
+        PanelSpeakerRow(output: output, isAudible: true, reservesDrawerColumn: true) {}
             .frame(width: Self.rowWidth)
     }
 
@@ -57,6 +57,22 @@ struct PanelSpeakerRowLayoutTests {
         for proposed in [bare, 1] {
             #expect(height(of: geneva, proposing: proposed) >= natural, "proposé : \(proposed)")
         }
+    }
+
+    /// Cocher ne fait jamais sauter le panneau : la légende d'une paire stéréo se loge sur la ligne du
+    /// nom, sans ajouter de ligne, cochée ou non.
+    @Test("La légende d'une paire stéréo ne change pas la hauteur de la rangée", arguments: [true, false])
+    func stereoLegendKeepsRowHeight(isEnabled: Bool) {
+        let salon = OutputState(
+            id: "airplay2/Salon", displayName: "Salon", host: "192.168.1.158", port: 7000,
+            proto: .airplay2
+        )
+        salon.isEnabled = isEnabled
+        let paired = PanelSpeakerRow(
+            output: salon, isAudible: true, reservesDrawerColumn: true, stereoPartnerNames: ["Salon (2)"]
+        ) {}
+        let height = NSHostingView(rootView: paired.frame(width: Self.rowWidth)).fittingSize.height
+        #expect(height == naturalHeight(of: salon))
     }
 
     @Test("Le message d'une enceinte introuvable tient sur une ligne")

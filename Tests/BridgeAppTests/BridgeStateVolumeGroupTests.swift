@@ -241,9 +241,11 @@ struct BridgeStateVolumeGroupTests {
         await harness.stopStreaming()
     }
 
+    /// Un membre seul dans la paire, ce que l'interface ne fait plus (`BridgeState.setEnabled(_:for:)`
+    /// emmène toute la paire), mais qu'un `settings.json` ancien peut encore donner.
     @Test("Un membre décoché rend l'autre à lui seul : son trim repasse dans son volume")
     func uncheckingDissolvesGroup() async throws {
-        let (harness, left, _) = try await pairHarness(withGeneva: false)
+        let (harness, left, right) = try await pairHarness(withGeneva: false)
         await harness.startStreaming(expecting: [Devices.leftID, Devices.rightID])
         let rightSender = try #require(harness.factory.latest(Devices.rightID))
 
@@ -251,12 +253,17 @@ struct BridgeStateVolumeGroupTests {
         #expect(await eventually { await rightSender.pushedVolumes.last == PairDevices.soloVolume(trim: -11.5) })
         #expect(await eventually { await rightSender.pushedLevels.last == .unity })
 
+        // Recoché, il ne rejoint pas l'autre en cours de route : toute la paire se rouvre ensemble
+        // (`StereoPairs`), sur le volume commun et les gains d'une paire.
         left.isEnabled = true
-        #expect(await eventually { left.connection == .streaming })
-        #expect(await eventually { await rightSender.pushedVolumes.last == -11.75 })
-        #expect(await eventually { await rightSender.pushedLevels.last == OutputLevel(gainDB: -6) })
+        #expect(await eventually { harness.factory.senders(Devices.rightID).count == 2 })
+        #expect(await eventually { left.connection == .streaming && right.connection == .streaming })
+        #expect(await rightSender.stopCount == 1)
         let leftSender = try #require(harness.factory.latest(Devices.leftID))
+        let reopenedRight = try #require(harness.factory.latest(Devices.rightID))
         #expect(await leftSender.startedVolume == -11.75)
+        #expect(await reopenedRight.startedVolume == -11.75)
+        #expect(await reopenedRight.startedLevel == OutputLevel(gainDB: -6))
         await harness.stopStreaming()
     }
 

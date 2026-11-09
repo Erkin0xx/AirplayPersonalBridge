@@ -337,9 +337,10 @@ struct MenuBarPanelContent: View {
                 PanelSpeakerRow(
                     output: output, isAudible: isAudible,
                     reservesDrawerColumn: reservesDrawerColumn,
+                    stereoPartnerNames: state.stereoPartners(of: output).map(\.displayName),
                     isDrawerOpen: drawerBinding(for: output.id),
                     previewHovering: previewOptions.hoveredSpeakerID == output.id
-                )
+                ) { state.toggleEnabled(output) }
             }
         }
         .padding(.horizontal, PanelMetrics.rowInset)
