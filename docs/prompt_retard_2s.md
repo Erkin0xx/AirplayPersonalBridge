@@ -24,10 +24,12 @@ retard réel. La sortie virtuelle suivra : elle annonce `VideoSyncLatency`, calc
 2. Dans le vault (`/Users/baptiste/Documents/Vault/Projets/AirplayPersonalBridge/`), lis `notes.md`, les ADR `004`
    (alignement par horloge de restitution commune), `006` (graduation commune), `009` (paire stéréo) et `014` (sortie
    virtuelle), et **`airfoil-analyse.md`**, en particulier la question 3.
-3. **Une autre session Claude a peut-être travaillé juste avant toi, ou travaille encore** (clôture du jalon 5) :
-   regarde `git log`, `git worktree list` et les processus `claude`. Si une session tourne, pose
-   `.claude/skip-auto-commit`, commite fichier par fichier, et **ne fais jouer aucune enceinte sans l'accord de
-   Baptiste** : le matériel est une ressource unique.
+3. **Une autre session Claude travaille sans doute encore sur le dépôt** : celle qui clôt le jalon 5 (prompt
+   `docs/prompt_video_dia_airfoil.md`). Regarde `git log`, `git worktree list` et les processus `claude`. Tant
+   qu'elle tourne : `.claude/skip-auto-commit` est posé (laisse-le), commite tes fichiers un par un, ne touche ni à
+   `PROGRESS.md` ni à `CLAUDE.md` ni au `README.md` (elle les réécrit à la clôture : écris tes faits dans un fichier
+   à toi, `docs/retard_2s_notes.md`, qu'elle ou toi fusionnerez ensuite), et **ne fais jouer aucune enceinte sans
+   l'accord de Baptiste** : le matériel est une ressource unique, et c'est lui qui arbitre entre les deux sessions.
 
 ## Ce qui est établi : ne le refais pas
 
@@ -55,6 +57,14 @@ retard réel. La sortie virtuelle suivra : elle annonce `VideoSyncLatency`, calc
   (`Sources/AudioCore/VirtualOutputDevice.swift`). Chromium 157 retarde l'image de cette valeur : mesuré
   +2,28 s, « Large rendering delay (2.34 s) », 0 image perdue. AVPlayer suit aussi. Une page lit la latence à
   l'ouverture de son flux : il faut recharger.
+- **L'app bascule elle-même** le Mac sur le pilote pendant une diffusion par tap (option « Caler l'image des vidéos »,
+  `Model/VideoSyncSwitch.swift`, commit d10ddcd), écrit la latence au démarrage et rend la sortie d'origine à
+  l'arrêt. Vérifie que l'app installée l'a (`/Applications/AirPlay Personal Bridge.app`, date de compilation contre
+  `git log`) : sinon, `scripts/install-app.sh --open`, après avoir prévenu Baptiste.
+- **L'agrégat du tap prend pour horloge la sortie des effets sonores**, pas la sortie par défaut : le pilote n'y entre
+  pas, et la capture ne prend aucun retard avec lui.
+- **La paire de HomePod se coche et s'ouvre d'un seul geste** (commit 8f4d7fe, `Model/StereoPairs.swift`) : un essai
+  qui relance un seul membre reproduit l'expulsion mutuelle. Relance toujours la paire entière.
 
 **Ce que Baptiste ne veut pas perdre** : la synchronisation entre enceintes. Écart mesuré ≤ 17 ms, aucun écho
 entendu à trois. La paire de HomePod ne tient que si ses deux sessions démarrent ensemble (`CLAUDE.md`). La Geneva
