@@ -90,7 +90,7 @@ struct ConsoleViewExport {
             try writeWindow(Self.state(scene), to: directory.appending(path: "console-\(name).png"))
         }
 
-        // Un HomePod coupé seul : son curseur grisé, son bouton de silence enclenché.
+        // Un HomePod coupé seul : son voile éteint sous un trait gris, son bouton de silence enclenché.
         let mutedSpeaker = Self.state(.streaming)
         mutedSpeaker.outputs.first { $0.id == "airplay2/Salon (2)" }?.isMuted = true
         try writeWindow(mutedSpeaker, to: directory.appending(path: "console-enceinte-coupee.png"))
@@ -108,7 +108,7 @@ struct ConsoleViewExport {
         }
         try writeWindow(unticked, to: directory.appending(path: "console-enceinte-decochee.png"))
 
-        // L'Apple TV masquée : sa tuile s'en va, la ligne discrète le dit en face de la recherche.
+        // L'Apple TV masquée : sa tuile s'en va, sans mention dans la vue.
         let hidden = Self.state(.streaming)
         if let appleTV = hidden.outputs.first(where: { $0.displayName == "Apple TV Salon" }) {
             hidden.setHidden(true, for: appleTV)

@@ -149,6 +149,9 @@ struct PanelVolumeSlider: View {
     let range: ClosedRange<Double>
     /// Pour le rendu hors écran, où le survol n'existe pas.
     var showsValue = false
+    /// La matière : celle du panneau, ou la coque noire de la vue Console. Les gestes, le clavier et
+    /// VoiceOver sont les mêmes.
+    var look: ControlLook = .panel
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var isFocused: Bool
@@ -190,16 +193,24 @@ struct PanelVolumeSlider: View {
             let offset = travel * fraction
 
             ZStack(alignment: .leading) {
-                Capsule().fill(PanelPalette.track)
-                Capsule()
-                    .fill(isMuted ? AnyShapeStyle(PanelPalette.silencedFill) : AnyShapeStyle(.white.opacity(0.92)))
-                    .frame(width: offset + height)
-                Circle()
-                    .fill(.white)
-                    .shadow(color: .black.opacity(0.28), radius: 2.5, y: 0.5)
-                    .overlay { Circle().strokeBorder(.black.opacity(0.05), lineWidth: 0.5) }
-                    .frame(width: height, height: height)
-                    .offset(x: offset)
+                switch look {
+                case .panel:
+                    Capsule().fill(PanelPalette.track)
+                    Capsule()
+                        .fill(isMuted ? AnyShapeStyle(PanelPalette.silencedFill) : AnyShapeStyle(.white.opacity(0.92)))
+                        .frame(width: offset + height)
+                    Circle()
+                        .fill(.white)
+                        .shadow(color: .black.opacity(0.28), radius: 2.5, y: 0.5)
+                        .overlay { Circle().strokeBorder(.black.opacity(0.05), lineWidth: 0.5) }
+                        .frame(width: height, height: height)
+                        .offset(x: offset)
+                case .darkshell:
+                    DarkshellBar(
+                        knobOffset: offset, knob: height, width: geometry.size.width, isSilenced: isMuted,
+                        isLit: isHovering || isDragging, symbol: glyph
+                    )
+                }
                 valueLabel(width: geometry.size.width, knobEnd: offset + height)
             }
             .contentShape(Capsule())
@@ -207,7 +218,8 @@ struct PanelVolumeSlider: View {
         }
         .overlay {
             Capsule()
-                .strokeBorder(BridgeTheme.accent, lineWidth: 2)
+                // Dans la console, pas de rose sur une commande : l'anneau y est blanc.
+                .strokeBorder(look == .darkshell ? Color.white.opacity(0.9) : BridgeTheme.accent, lineWidth: 2)
                 .padding(-3)
                 .opacity(isFocused && !isPointerFocus ? 1 : 0)
         }
@@ -242,7 +254,8 @@ struct PanelVolumeSlider: View {
         let room: CGFloat = 62
         let fitsInTrack = knobEnd + room < width
         // Le remplissage du silence est gris : le secondaire s'y lit, en clair comme en sombre.
-        let onLightFill = !fitsInTrack && !isMuted
+        // La coque noire n'a pas de remplissage clair : sur le voile, le texte reste clair.
+        let onLightFill = !fitsInTrack && !isMuted && look == .panel
         return Text(valueText)
             .font(.subheadline.weight(.medium).monospacedDigit())
             .foregroundStyle(onLightFill ? AnyShapeStyle(.black.opacity(0.55)) : AnyShapeStyle(.secondary))
@@ -279,21 +292,24 @@ struct PanelVolumeSlider: View {
     /// Un bouton plutôt qu'un dessin : sans lui, un clic sur l'icône tomberait sur le rail et mettrait
     /// le master au minimum, perdant le niveau que le silence devait garder. Caché à VoiceOver et hors
     /// du parcours au clavier, où `PanelMuteButton` tient ce rôle avec un libellé explicite.
+    private var glyph: Image {
+        isMuted
+            ? Image(systemName: PanelMuteButton.symbol)
+            : Image(systemName: "speaker.wave.3.fill", variableValue: fraction)
+    }
+
     private var muteButton: some View {
         Button {
             isMuted.toggle()
         } label: {
-            Group {
-                if isMuted {
-                    Image(systemName: PanelMuteButton.symbol)
-                } else {
-                    Image(systemName: "speaker.wave.3.fill", variableValue: fraction)
-                }
-            }
-            .font(.callout.weight(.medium))
-            // Coupé, l'icône se pose sur le remplissage gris et non plus sur le blanc du curseur.
-            .foregroundStyle(isMuted ? AnyShapeStyle(.secondary) : AnyShapeStyle(.black.opacity(0.65)))
-            .frame(width: height, height: height)
+            glyph
+                .font(.callout.weight(.medium))
+                // Coupé, l'icône se pose sur le remplissage gris et non plus sur le blanc du curseur.
+                .foregroundStyle(isMuted ? AnyShapeStyle(.secondary) : AnyShapeStyle(.black.opacity(0.65)))
+                .frame(width: height, height: height)
+                // Dans la coque noire, c'est le rail qui dessine l'icône, claire ou sombre selon ce qu'elle
+                // recouvre : le bouton ne garde que sa surface.
+                .opacity(look == .darkshell ? 0 : 1)
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -314,6 +330,8 @@ struct PanelVolumeSlider: View {
 /// s'il est enclenché, comme les commandes du Centre de contrôle.
 struct PanelMuteButton: View {
     @Binding var isMuted: Bool
+    /// La matière : celle du panneau, ou la coque noire de la vue Console.
+    var look: ControlLook = .panel
 
     static let symbol = "speaker.slash.fill"
     static let title = "Couper le son des enceintes"
@@ -327,9 +345,14 @@ struct PanelMuteButton: View {
         } label: {
             Image(systemName: Self.symbol)
                 .font(.callout.weight(.semibold))
-                .foregroundStyle(isMuted ? Color.white : Color.primary.opacity(0.75))
+                .foregroundStyle(foreground)
                 .frame(width: PanelMetrics.pastille, height: PanelMetrics.pastille)
-                .background(background, in: Circle())
+                .background {
+                    switch look {
+                    case .panel: Circle().fill(background)
+                    case .darkshell: DarkshellDisc(isOn: isMuted, isHovering: isHovering)
+                    }
+                }
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -341,6 +364,14 @@ struct PanelMuteButton: View {
         .accessibilityValue(isMuted ? "activé" : "désactivé")
         .accessibilityHint("Les enceintes restent connectées.")
         .accessibilityAddTraits(.isToggle)
+    }
+
+    /// Enclenché dans la console : un disque blanc, donc une icône sombre.
+    private var foreground: Color {
+        switch look {
+        case .panel: isMuted ? Color.white : Color.primary.opacity(0.75)
+        case .darkshell: isMuted ? Color.black.opacity(0.85) : Color.white.opacity(0.9)
+        }
     }
 
     private var background: AnyShapeStyle {

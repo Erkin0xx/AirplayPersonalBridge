@@ -45,7 +45,8 @@ struct ConsoleLayout: Equatable {
 /// la barre de lecture (ce qui joue, le volume général, Diffuser/Arrêter).
 ///
 /// La mise en page de la maquette 2, aux couleurs du thème : du verre sur le fond granuleux, le rose de
-/// l'app réservé à l'état, les curseurs en blanc. La source, le lieu d'écoute et les options flottent en haut
+/// l'app réservé à l'état, les commandes dans la coque noire à liseré de la maquette 15 (`Darkshell`). Ce
+/// qui est masqué ne s'y annonce pas : Baptiste n'en veut pas ici, les Réglages le disent. La source, le lieu d'écoute et les options flottent en haut
 /// de la fenêtre (`WindowChrome`) ; le plan est une autre vue.
 struct ConsoleView: View {
     @Bindable var state: BridgeState
@@ -138,8 +139,6 @@ struct ConsoleView: View {
     /// (`ConsoleWarnings`). Toujours là, même pendant la recherche : la console ne change pas de hauteur.
     private var footer: some View {
         HStack {
-            // Ce qui est masqué, en face de la recherche : la ligne existait, rien ne se déplace.
-            HiddenElementsNote(state: state)
             Spacer(minLength: 0)
             if !state.outputs.isEmpty {
                 search
