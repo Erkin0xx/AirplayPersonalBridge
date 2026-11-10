@@ -53,24 +53,4 @@ struct WindowLayoutTests {
         #expect(!streaming.isAudiblyStreaming)
         #expect(!BridgeState.preview(.idle).isAudiblyStreaming)
     }
-
-    @Test("Une nappe du fond ne s'écarte jamais de sa place de plus que l'amplitude, et revient à chaque période")
-    func auroraDriftIsBounded() {
-        let size = CGSize(width: 1200, height: 760)
-        for field in AuroraBackground.fields {
-            var time = 0.0
-            while time < field.period * 2 {
-                let center = AuroraBackground.center(of: field, at: time, in: size)
-                #expect(abs(center.x / size.width - field.center.x) <= AuroraBackground.driftAmplitude + 1e-9)
-                #expect(abs(center.y / size.height - field.center.y) <= AuroraBackground.driftAmplitude + 1e-9)
-                time += field.period / 37
-            }
-        }
-    }
-
-    @Test("Le grain est le même à chaque lancement")
-    func grainIsStable() {
-        #expect(AuroraBackground.grain.width == 256)
-        #expect(AuroraBackground.grain.height == 256)
-    }
 }

@@ -98,7 +98,7 @@ extension ContentView {
         content()
             .padding(.top, WindowChromeMetrics.contentTop - 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background { AuroraBackground(isLive: state.isAudiblyStreaming) }
+            .background { GrainientBackground(isLive: state.isAudiblyStreaming) }
     }
 }
 
