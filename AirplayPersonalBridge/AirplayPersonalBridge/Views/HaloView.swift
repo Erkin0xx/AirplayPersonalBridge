@@ -92,6 +92,10 @@ private nonisolated struct HaloSphereBoundsKey: PreferenceKey {
 /// `ContentView` : cette vue ne dessine que son contenu.
 struct HaloView: View {
     @Bindable var state: BridgeState
+    /// La place des commandes flottantes de la fenêtre, en haut. La vue la réserve elle-même, au lieu de
+    /// la recevoir en marge de `ContentView` : ses ondes, dessinées derrière elle, vont ainsi jusqu'au bord
+    /// haut de la fenêtre. Posée en marge autour de la vue, elle les coupait net sous la source.
+    var topInset: CGFloat = 0
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -104,19 +108,14 @@ struct HaloView: View {
             }
             .frame(minHeight: HaloMetrics.minimumZoneHeight)
             headline
-            master
-                .padding(.top, 10)
             HaloSpeakerChips(state: state, isAudible: isAudible)
                 .padding(.top, 18)
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 20)
-        // Ce qui est masqué, en petit dans la marge du bas : sa venue ne déplace ni le halo ni les pastilles.
-        .overlay(alignment: .bottom) {
-            HiddenElementsNote(state: state)
-                .padding(.bottom, 3)
-        }
-        // Les ondes, derrière tout : elles passent sous le titre, les pastilles et la barre d'outils.
+        .padding(.top, topInset)
+        // Les ondes, derrière tout et sur toute la vue : elles passent sous le titre, les pastilles et les
+        // commandes flottantes, sans autre bord que ceux de la fenêtre.
         .backgroundPreferenceValue(HaloSphereBoundsKey.self) { anchor in
             GeometryReader { proxy in
                 // Un décor, masquable depuis les Réglages (`WindowBlock.haloWaves`).
@@ -132,7 +131,7 @@ struct HaloView: View {
             }
         }
         // Les alertes flottent dans le coin : elles ne poussent ni le halo ni les pastilles.
-        .overlay(alignment: .topLeading) { notices }
+        .overlay(alignment: .topLeading) { notices.padding(.top, topInset) }
         .animation(PanelMotion.standard(reduceMotion: reduceMotion), value: state.startFailure)
         .animation(PanelMotion.standard(reduceMotion: reduceMotion), value: state.captureAlert)
     }
@@ -218,28 +217,6 @@ struct HaloView: View {
         .shadow(color: .black.opacity(0.35), radius: 6, y: 1)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
-    }
-
-    /// Le silence général et le niveau en chiffres : l'anneau le montre, cette ligne le dit. Volume général
-    /// masqué, il ne reste que le silence : un son coupé doit toujours se voir, et se rétablir d'un clic.
-    private var master: some View {
-        let showsLevel = state.isVisible(.masterVolume)
-        return HStack(spacing: 8) {
-            PanelMuteButton(isMuted: $state.isMuted)
-            if showsLevel || state.isMuted {
-                Text(state.isMuted ? "Son coupé" : "Volume général \(PanelFormat.decibels(state.masterVolumeDB))")
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    // La largeur du plus long : la capsule ne tressaute pas pendant qu'on tourne l'anneau.
-                    .frame(width: showsLevel ? 142 : nil, alignment: .leading)
-                    .accessibilityHidden(true)
-            }
-        }
-        .padding(.leading, 4)
-        .padding(.trailing, showsLevel || state.isMuted ? 12 : 4)
-        .padding(.vertical, 4)
-        .floatingGlass(in: Capsule(style: .circular))
     }
 
     // MARK: - Alertes

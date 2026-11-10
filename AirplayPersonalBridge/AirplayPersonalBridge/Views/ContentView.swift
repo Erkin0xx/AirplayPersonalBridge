@@ -90,7 +90,9 @@ extension ContentView {
                     .padding(.bottom, WindowChromeMetrics.sideMargin)
             }
         case .halo:
-            immersive { HaloView(state: state) }
+            // La vue Halo réserve elle-même la place des commandes flottantes : une marge posée ici
+            // rognerait ses ondes, qui doivent passer dessous jusqu'au bord haut de la fenêtre.
+            immersive(topPadding: 0) { HaloView(state: state, topInset: Self.immersiveTop) }
         case .console:
             immersive { ConsoleView(state: state) }
         }
@@ -99,10 +101,15 @@ extension ContentView {
     /// Le bord gauche de ce que le panneau des enceintes laisse visible du plan.
     private static let panelInset = WindowChromeMetrics.sideMargin + BridgeSidebar.panelWidth + 18
 
+    /// Du haut de la fenêtre au contenu d'une vue sans plan.
+    private static let immersiveTop = WindowChromeMetrics.contentTop - 8
+
     /// Une vue sans plan : son contenu sur le fond granuleux, sous les commandes flottantes.
-    private func immersive(@ViewBuilder _ content: () -> some View) -> some View {
+    private func immersive(
+        topPadding: CGFloat = ContentView.immersiveTop, @ViewBuilder _ content: () -> some View
+    ) -> some View {
         content()
-            .padding(.top, WindowChromeMetrics.contentTop - 8)
+            .padding(.top, topPadding)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background { GrainientBackground(isLive: state.isAudiblyStreaming) }
     }
