@@ -229,7 +229,11 @@ struct PanelSpeakerRow: View {
                     .transition(.opacity)
                 }
                 if let message = output.panelMessage {
-                    PanelStatusMessage(text: message.text, tone: message.tone, isMuted: output.isInRetreat)
+                    // Le message de la fenêtre, replié sur les deux lignes que tient la colonne de texte.
+                    OutputStatusMessage(
+                        text: message.text, tone: message.tone, isMuted: output.isInRetreat,
+                        foldedLines: 2, foldedLength: 86
+                    )
                 }
             }
             .frame(minHeight: Self.rowHeight)
@@ -256,7 +260,7 @@ struct PanelSpeakerRow: View {
                 }
             } label: {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(isDrawerOpen ? 90 : 0))
                     .frame(width: Self.drawerColumn, height: Self.nameLineHeight)
@@ -323,7 +327,7 @@ struct PanelSpeakerRow: View {
                 unavailability: output.unavailability
             )
         )
-        .font(.system(size: 13, weight: .medium))
+        .font(.body.weight(.medium))
         .foregroundStyle(output.isEnabled ? Color.white : Color.primary.opacity(0.75))
         .frame(width: PanelMetrics.pastille, height: PanelMetrics.pastille)
         .background(
@@ -342,7 +346,7 @@ struct PanelSpeakerRow: View {
         HStack(spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text(output.displayName)
-                    .font(.system(size: 13))
+                    .font(.body)
                     .foregroundStyle(output.isInRetreat ? .secondary : .primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -350,7 +354,7 @@ struct PanelSpeakerRow: View {
                 // Sur la ligne du nom, pas dessous : la rangée garde sa hauteur, cochée ou non.
                 if let legend = PanelStereoPair.legend(partners: stereoPartnerNames) {
                     Text(legend)
-                        .font(.system(size: 11))
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -359,7 +363,7 @@ struct PanelSpeakerRow: View {
             Spacer(minLength: 4)
             if output.isEnabled, isHovering || isAdjusting {
                 Text(PanelFormat.decibels(output.trimDB, fractionDigits: 1, signed: true))
-                    .font(.system(size: 11).monospacedDigit())
+                    .font(.subheadline.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .transition(.opacity)
                     .accessibilityHidden(true)
@@ -379,20 +383,20 @@ struct PanelSpeakerRow: View {
                 .accessibilityHidden(true)
         case .failed:
             Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: 13))
+                .font(.body)
                 .foregroundStyle(.red)
                 .accessibilityHidden(true)
         case .streaming where output.isEnabled && isAudible && !output.isMuted:
             // Elle reçoit, et un son passe : le seul cas où l'indicateur a le droit de bouger.
             Image(systemName: "waveform")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.callout.weight(.semibold))
                 .foregroundStyle(Color.accentColor)
                 .symbolEffect(.variableColor.iterative, isActive: !reduceMotion && appearsActive)
                 .accessibilityHidden(true)
         case .idle, .streaming:
             if output.isEnabled {
                 Image(systemName: "checkmark")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
                     .accessibilityHidden(true)
             }
@@ -444,7 +448,7 @@ struct PanelToneDrawer: View {
     var body: some View {
         HStack(alignment: .top, spacing: PanelMetrics.columnGap) {
             Image(systemName: Self.symbol)
-                .font(.system(size: 12, weight: .medium))
+                .font(.callout.weight(.medium))
                 .foregroundStyle(.secondary)
                 .frame(width: PanelMetrics.pastille, height: 18)
                 .accessibilityHidden(true)
@@ -495,18 +499,20 @@ private struct PanelToneSetting: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Text(title)
-                    .font(.system(size: 12))
+                    .font(.callout)
                     .accessibilityHidden(true)
                 Spacer(minLength: 4)
                 Text(valueText)
-                    .font(.system(size: 11).monospacedDigit())
+                    .font(.subheadline.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
                 // La flèche dit « revenir à » : sans elle, « 0 dB » à côté de la valeur se lirait comme
                 // une seconde valeur.
                 Button(action: reset) {
                     HStack(spacing: 3) {
-                        Image(systemName: PanelToneDrawer.resetSymbol).font(.system(size: 9, weight: .semibold))
+                        Image(systemName: PanelToneDrawer.resetSymbol)
+                            .font(.caption2.weight(.semibold))
+                            .imageScale(.small)
                         Text("0 dB")
                     }
                 }
@@ -522,7 +528,7 @@ private struct PanelToneSetting: View {
 
     /// Le même curseur que celui du volume, au même pas arrondi à la main (voir `PanelSpeakerRow`).
     private var slider: some View {
-        Slider(value: Binding(get: { value }, set: set), in: range) {
+        Slider(value: Binding(get: { value }, set: { set($0) }), in: range) {
             Text("\(title) de \(outputName)")
         }
         .labelsHidden()
@@ -530,48 +536,5 @@ private struct PanelToneSetting: View {
         .tint(.secondary)
         .help(help)
         .accessibilityValue(valueText)
-    }
-}
-
-/// Le message d'une enceinte, tel que le moteur le rédige.
-///
-/// Ces messages disent quoi faire, et certains font plusieurs phrases. Repliés, ils gardent la liste
-/// lisible ; un lien les déplie, pour qu'une coupure ne passe jamais pour la fin du message.
-private struct PanelStatusMessage: View {
-    let text: String
-    let tone: OutputStatusTone
-    /// La rangée est en retrait : même un avertissement n'y appelle pas le regard.
-    let isMuted: Bool
-    @State private var isExpanded = false
-
-    /// Ce qui tient en deux lignes dans la colonne de texte.
-    private let foldedLength = 86
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(text)
-                .font(.system(size: 11))
-                .foregroundStyle(color)
-                .lineLimit(isExpanded ? nil : 2)
-                .truncationMode(.tail)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .help(text)
-            if text.count > foldedLength {
-                Button(isExpanded ? "Réduire" : "Lire la suite") { isExpanded.toggle() }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var color: Color {
-        if isMuted { return .secondary }
-        switch tone {
-        case .muted: return .secondary
-        case .warning: return PanelPalette.warningText
-        case .critical: return PanelPalette.criticalText
-        }
     }
 }

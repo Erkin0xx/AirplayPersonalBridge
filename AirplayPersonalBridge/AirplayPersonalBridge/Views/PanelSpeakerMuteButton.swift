@@ -31,7 +31,8 @@ struct PanelSpeakerMuteButton: View {
             PanelSpeakerMute.toggle(output)
         } label: {
             Image(systemName: Self.symbol)
-                .font(.system(size: 9, weight: .semibold))
+                .font(.caption2.weight(.semibold))
+                .imageScale(.small)
                 .foregroundStyle(foreground)
                 .frame(width: Self.diameter, height: Self.diameter)
                 .background(background, in: Circle())

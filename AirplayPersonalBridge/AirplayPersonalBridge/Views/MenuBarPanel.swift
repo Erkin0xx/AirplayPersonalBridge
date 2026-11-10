@@ -122,7 +122,9 @@ struct PanelPreviewOptions {
 /// de la Geneva ont leur tiroir sous sa rangée, parce qu'ils se retouchent en écoutant.
 ///
 /// Ce qui est propre au widget vit dans ses fichiers (`PanelControls`, `PanelSpeakerRow`,
-/// `MenuBarGlyph`) : le thème de `DesignSystem` sert à la fenêtre principale.
+/// `MenuBarGlyph`). La fenêtre principale en reprend une partie, pour que les deux se ressemblent : la
+/// pastille d'état, les alertes, le bouton de silence, les options, et le message d'une enceinte
+/// (`OutputStatusMessage`). Tout s'écrit en styles de texte du système.
 struct MenuBarPanelContent: View {
     @Bindable var state: BridgeState
     let loginItem: LoginItemController
@@ -178,6 +180,7 @@ struct MenuBarPanelContent: View {
             }
         }
         .frame(width: PanelMetrics.width)
+        .containerShape(.rect(cornerRadius: PanelMetrics.panelRadius))
         .background(alignment: .top) { streamingWash }
     }
 
@@ -203,12 +206,12 @@ struct MenuBarPanelContent: View {
             PanelStatusChip(status: status.menuBar, isAudible: isAudible)
             VStack(alignment: .leading, spacing: 0) {
                 Text(status.title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.headline)
                     .lineLimit(1)
                     .minimumScaleFactor(0.9)
                 if let detail = status.detail {
                     Text(detail)
-                        .font(.system(size: 11))
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -235,7 +238,7 @@ struct MenuBarPanelContent: View {
                         ProgressView().controlSize(.mini)
                     } else {
                         Image(systemName: isStopSide ? "stop.fill" : "play.fill")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.caption.weight(.semibold))
                     }
                 }
                 .frame(width: 12, height: 12)
@@ -315,7 +318,7 @@ struct MenuBarPanelContent: View {
                         Task { await state.refreshOutputs() }
                     } label: {
                         Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.subheadline.weight(.medium))
                             .foregroundStyle(.secondary)
                             .frame(width: 20, height: 20)
                             .contentShape(Rectangle())
@@ -366,22 +369,22 @@ struct MenuBarPanelContent: View {
                     .controlSize(.small)
                     .padding(.bottom, 6)
                 Text("Recherche des enceintes…")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.body.weight(.medium))
                 Text("Elles apparaîtront ici dès qu'elles répondront.")
-                    .font(.system(size: 11))
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             } else {
                 // `hifispeaker.slash` n'existe pas : un nom inconnu n'affiche rien, sans la moindre erreur.
                 Image(systemName: "hifispeaker")
-                    .font(.system(size: 20, weight: .light))
+                    .font(.title2.weight(.light))
                     .foregroundStyle(.tertiary)
                     .padding(.bottom, 4)
                 Text("Aucune enceinte trouvée")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.body.weight(.medium))
                 if let notice = state.discoveryNotice {
                     Text(notice)
-                        .font(.system(size: 11))
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
@@ -391,7 +394,7 @@ struct MenuBarPanelContent: View {
                     Button("Réseau local…") { SystemSettingsPane.localNetwork.open() }
                 }
                 .buttonStyle(.link)
-                .font(.system(size: 11, weight: .medium))
+                .font(.subheadline.weight(.medium))
                 .padding(.top, 6)
             }
         }
@@ -409,7 +412,7 @@ struct MenuBarPanelContent: View {
         if places.count >= 2, let active = state.roomLayout.listener {
             PanelSeparator()
             HStack(spacing: 8) {
-                Text("Écoute").font(.system(size: 13))
+                Text("Écoute").font(.body)
                 Spacer(minLength: 4)
                 Picker(
                     "Lieu d'écoute",
@@ -446,12 +449,12 @@ struct MenuBarPanelContent: View {
                     Spacer(minLength: 4)
                     if !isOptionsExpanded {
                         Text(state.selectedSource.label)
-                            .font(.system(size: 12))
+                            .font(.callout)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .rotationEffect(.degrees(isOptionsExpanded ? 90 : 0))
                 }
@@ -474,7 +477,7 @@ struct MenuBarPanelContent: View {
     private var optionRows: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Text("Source").font(.system(size: 12))
+                Text("Source").font(.callout)
                 Spacer(minLength: 4)
                 Menu {
                     Picker("Source", selection: sourceSelection) {
@@ -486,7 +489,7 @@ struct MenuBarPanelContent: View {
                     .labelsHidden()
                 } label: {
                     Text(state.selectedSource.label)
-                        .font(.system(size: 12))
+                        .font(.callout)
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
@@ -496,13 +499,13 @@ struct MenuBarPanelContent: View {
             if let awaited = state.awaitedSourceName {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text("Passera sur \(awaited) dès que cette application jouera.")
-                        .font(.system(size: 11))
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 4)
                     Button("Annuler", action: state.forgetAwaitedSource)
                         .buttonStyle(.borderless)
-                        .font(.system(size: 11))
+                        .font(.subheadline)
                 }
             }
 
@@ -534,14 +537,14 @@ struct MenuBarPanelContent: View {
             if let message = loginItem.message {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(message)
-                        .font(.system(size: 11))
+                        .font(.subheadline)
                         .foregroundStyle(PanelPalette.warningText)
                         .fixedSize(horizontal: false, vertical: true)
                     if loginItem.needsApproval {
                         Spacer(minLength: 0)
                         Button("Ouvrir…") { loginItem.openSystemSettings() }
                             .buttonStyle(.link)
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.subheadline.weight(.medium))
                     }
                 }
             }

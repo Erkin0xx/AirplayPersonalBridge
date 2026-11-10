@@ -17,8 +17,11 @@ enum PanelMetrics {
     static let margin: CGFloat = 12
     /// Du bord du panneau à la surbrillance d'une rangée : le reste de la marge passe à l'intérieur.
     static let rowInset: CGFloat = 6
-    /// Concentrique au panneau, dont le rayon vaut environ 16 pt : 16 − 6 de retrait.
-    static let rowRadius: CGFloat = 10
+    /// Le rayon du panneau, déclaré comme forme de conteneur : les surbrillances proches de ses coins
+    /// en dérivent (`ConcentricRectangle`).
+    static let panelRadius: CGFloat = 16
+    /// Concentrique au panneau : 16 − 6 de retrait.
+    static let rowRadius: CGFloat = panelRadius - rowInset
     static let pastille: CGFloat = 28
     static let columnGap: CGFloat = 10
     /// Le bord gauche des textes, depuis la marge.
@@ -97,7 +100,7 @@ struct PanelCommandButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         let label = configuration.label
-            .font(.system(size: 12, weight: .medium))
+            .font(.callout.weight(.medium))
             .foregroundStyle(tint == nil ? Color.primary : Color.white)
             .padding(.horizontal, 12)
             .frame(height: PanelMetrics.pastille)
@@ -231,7 +234,7 @@ struct PanelVolumeSlider: View {
         // Le remplissage du silence est gris : le secondaire s'y lit, en clair comme en sombre.
         let onLightFill = !fitsInTrack && !isMuted
         return Text(valueText)
-            .font(.system(size: 11, weight: .medium).monospacedDigit())
+            .font(.subheadline.weight(.medium).monospacedDigit())
             .foregroundStyle(onLightFill ? AnyShapeStyle(.black.opacity(0.55)) : AnyShapeStyle(.secondary))
             .lineLimit(1)
             .frame(width: room, alignment: fitsInTrack ? .trailing : .leading)
@@ -277,7 +280,7 @@ struct PanelVolumeSlider: View {
                     Image(systemName: "speaker.wave.3.fill", variableValue: fraction)
                 }
             }
-            .font(.system(size: 12, weight: .medium))
+            .font(.callout.weight(.medium))
             // Coupé, l'icône se pose sur le remplissage gris et non plus sur le blanc du curseur.
             .foregroundStyle(isMuted ? AnyShapeStyle(.secondary) : AnyShapeStyle(.black.opacity(0.65)))
             .frame(width: height, height: height)
@@ -313,7 +316,7 @@ struct PanelMuteButton: View {
             isMuted.toggle()
         } label: {
             Image(systemName: Self.symbol)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.callout.weight(.semibold))
                 .foregroundStyle(isMuted ? Color.white : Color.primary.opacity(0.75))
                 .frame(width: PanelMetrics.pastille, height: PanelMetrics.pastille)
                 .background(background, in: Circle())
@@ -345,13 +348,15 @@ struct PanelMenuRowStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13))
+            .font(.body)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, PanelMetrics.margin - PanelMetrics.rowInset)
             .frame(minHeight: 26)
             .contentShape(Rectangle())
             .background {
-                RoundedRectangle(cornerRadius: PanelMetrics.rowRadius - 2, style: .continuous)
+                // Au milieu du panneau, le rayon minimal ; contre ses coins (« Quitter », tout en bas), le
+                // rayon concentrique au panneau, comme la surbrillance des menus de macOS 26.
+                ConcentricRectangle(corners: .concentric(minimum: .fixed(PanelMetrics.rowRadius - 2)))
                     .fill(
                         configuration.isPressed
                             ? PanelPalette.press
@@ -379,11 +384,11 @@ struct PanelOptionToggle: View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.system(size: 12))
+                    .font(.callout)
                     .foregroundStyle(isEnabled ? .primary : .secondary)
                 if let detail {
                     Text(detail)
-                        .font(.system(size: 11))
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -410,7 +415,7 @@ struct PanelChipButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 11, weight: .medium).monospacedDigit())
+            .font(.subheadline.weight(.medium).monospacedDigit())
             .foregroundStyle(isEnabled ? .primary : .tertiary)
             .padding(.horizontal, 7)
             .frame(height: 18)
@@ -431,7 +436,7 @@ struct PanelSectionTitle: View {
 
     var body: some View {
         Text(title)
-            .font(.system(size: 11, weight: .semibold))
+            .font(.subheadline.weight(.semibold))
             .foregroundStyle(.secondary)
             .accessibilityAddTraits(.isHeader)
     }
@@ -440,9 +445,7 @@ struct PanelSectionTitle: View {
 /// Le filet d'un groupe à l'autre, en retrait des bords comme ceux des menus.
 struct PanelSeparator: View {
     var body: some View {
-        Rectangle()
-            .fill(Color.primary.opacity(0.1))
-            .frame(height: 1)
+        Divider()
             .padding(.horizontal, PanelMetrics.margin)
             .accessibilityHidden(true)
     }
@@ -470,23 +473,23 @@ struct PanelNotice: View {
         // la grille au lieu d'en ouvrir une autre.
         HStack(alignment: .firstTextBaseline, spacing: PanelMetrics.textColumn - Self.iconColumn - 6) {
             Image(systemName: symbol)
-                .font(.system(size: 13, weight: .medium))
+                .font(.body.weight(.medium))
                 .foregroundStyle(tint)
                 .frame(width: Self.iconColumn)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.callout.weight(.semibold))
                     .fixedSize(horizontal: false, vertical: true)
                 if let detail {
                     Text(detail)
-                        .font(.system(size: 11))
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if let actionTitle {
                     Button(actionTitle, action: action)
                         .buttonStyle(.link)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.subheadline.weight(.medium))
                         .padding(.top, 2)
                 }
             }
