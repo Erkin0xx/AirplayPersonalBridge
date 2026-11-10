@@ -1512,18 +1512,20 @@ struct BridgeStateShutdownTests {
     func silentRestartIsBounded() async {
         let harness = BridgeHarness()
         let coreAudio = StubCoreAudioRestarter(.hang)
+        // La part des sorties est longue mais les faux senders s'arrêtent aussitôt : borner la relance
+        // par la mauvaise part prendrait plus de 10 s, hors de la marge laissée au MainActor.
         let budget = QuitSequence.Budget(
-            outputs: .milliseconds(300), coreAudioRestart: .milliseconds(100)
+            outputs: .seconds(10), coreAudioRestart: .milliseconds(100)
         )
         let lifecycle = lifecycle(harness, coreAudio: coreAudio, budget: budget)
 
         var replies = 0
         let start = ContinuousClock.now
         #expect(lifecycle.handleTerminationRequest { replies += 1 } == .terminateLater)
-        #expect(await eventually(timeout: .seconds(3)) { replies == 1 })
+        #expect(await eventually(timeout: .seconds(8)) { replies == 1 })
         let elapsed = start.duration(to: .now)
         #expect(elapsed >= budget.coreAudioRestart)
-        #expect(elapsed < budget.total + .milliseconds(500))
+        #expect(elapsed < budget.coreAudioRestart + QuitSequenceTests.mainActorSlack)
         #expect(coreAudio.timeouts == [budget.coreAudioRestart])
         coreAudio.release()
     }

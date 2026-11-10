@@ -53,10 +53,16 @@ struct QuitSequenceTests {
         var repliedAt: ContinuousClock.Instant?
     }
 
-    /// Délais courts : un test n'a pas à dormir 5 s.
+    /// La part de la relance est courte : un test n'a pas à dormir 5 s. Celle des sorties est longue,
+    /// mais l'arrêt simulé rend la main en 20 ms : elle ne coûte rien, et une séquence qui bornerait la
+    /// relance par la mauvaise part mettrait plus de 10 s, impossible à confondre avec de la latence.
     private static let budget = QuitSequence.Budget(
-        outputs: .milliseconds(400), coreAudioRestart: .milliseconds(120)
+        outputs: .seconds(10), coreAudioRestart: .milliseconds(120)
     )
+
+    /// Marge d'un plafond de temps. Toutes les suites de l'app partagent le MainActor : au départ d'une
+    /// suite complète, une reprise y attend jusqu'à ~2 s (relevé le 2026-11-10, 3 passages sur 3).
+    static let mainActorSlack = Duration.seconds(4)
 
     private func sequence(
         _ journal: Journal, coreAudio: StubCoreAudioRestarter
@@ -108,12 +114,12 @@ struct QuitSequenceTests {
         let running = Task {
             await sequence(journal, coreAudio: coreAudio).run { journal.repliedAt = .now }
         }
-        #expect(await eventually(timeout: .seconds(3)) { journal.repliedAt != nil })
+        #expect(await eventually(timeout: .seconds(8)) { journal.repliedAt != nil })
         let elapsed = journal.repliedAt.map { start.duration(to: $0) }
         let limit = Self.budget.coreAudioRestart
         #expect(elapsed.map { $0 >= limit } == true, "\(String(describing: elapsed))")
         #expect(
-            elapsed.map { $0 < limit + .milliseconds(500) } == true,
+            elapsed.map { $0 < limit + Self.mainActorSlack } == true,
             "\(String(describing: elapsed))"
         )
         coreAudio.release()
@@ -176,16 +182,17 @@ struct LiveCoreAudioRestarterTests {
             Issue.record("attendu un échec au lancement, obtenu \(outcome)")
             return
         }
-        #expect(start.duration(to: .now) < .seconds(2))
+        #expect(start.duration(to: .now) < QuitSequenceTests.mainActorSlack)
     }
 
-    /// Jamais `waitUntilExit` : l'échéance rend la main, le fils finit seul.
+    /// Jamais `waitUntilExit` : l'échéance rend la main, le fils finit seul. Il dort plus longtemps que
+    /// la marge du plafond : attendre le fils au lieu de l'échéance ne peut pas passer inaperçu.
     @Test("Commande figée : la main revient à l'échéance")
     func timeout() async {
         let start = ContinuousClock.now
-        let outcome = await restarter("/bin/sleep", "2").restart(timeout: .milliseconds(100))
+        let outcome = await restarter("/bin/sleep", "10").restart(timeout: .milliseconds(100))
         #expect(outcome == .timedOut)
-        #expect(start.duration(to: .now) < .seconds(1))
+        #expect(start.duration(to: .now) < QuitSequenceTests.mainActorSlack)
     }
 
     /// Un tube que personne ne lit se remplit à 64 Kio, et le fils s'y bloque : jusqu'à l'échéance.
