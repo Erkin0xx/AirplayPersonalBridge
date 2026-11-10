@@ -23,7 +23,7 @@ struct AirplayPersonalBridgeApp: App {
         }
         .defaultLaunchBehavior(.presented)
         // Pas de barre de titre visible : les vues mettent leurs commandes en verre par-dessus le fond, et
-        // seuls les boutons de la fenêtre restent en haut à gauche (`WindowChromeMetrics`).
+        // les boutons système sont masqués, remplacés par `WindowControls`.
         .windowStyle(.hiddenTitleBar)
         // Assez large pour la barre latérale, le plan et ses outils sans débordement de la barre d'outils.
         .defaultSize(width: 1200, height: 760)

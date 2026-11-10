@@ -5,19 +5,22 @@
 
 import SwiftUI
 
-/// Ce que les trois vues de la fenêtre partagent par-dessus leur contenu : la source en pastille en haut au
-/// centre, le bouton des options en haut à droite, et le choix de la vue. Pas de barre d'outils : tout flotte
+/// Ce que les trois vues de la fenêtre partagent par-dessus leur contenu : les commandes de fenêtre en haut
+/// à gauche (`WindowControls`), la source en pastille en haut au centre, le bouton des options en haut à
+/// droite, et le choix de la vue. Pas de barre d'outils : tout flotte
 /// au-dessus du fond (demande de Baptiste du 2026-11-10).
 enum WindowChromeMetrics {
-    /// Du haut de la fenêtre aux commandes flottantes, alignées sur les boutons de la fenêtre.
+    /// Du haut de la fenêtre aux commandes flottantes.
     static let topPadding: CGFloat = 8
     static let controlHeight: CGFloat = 36
     /// Du haut de la fenêtre au contenu, sous les commandes flottantes.
     static let contentTop: CGFloat = 56
     /// Des bords de la fenêtre aux éléments flottants.
     static let sideMargin: CGFloat = 14
-    /// La place des boutons rouge, orange et vert, à gauche des commandes flottantes.
-    static let trafficLightsWidth: CGFloat = 84
+    /// La place des commandes de fenêtre (`WindowControls`, qui remplacent les boutons rouge, orange et
+    /// vert), marge et écart compris : c'est là que commencent les outils du plan.
+    static let trafficLightsWidth: CGFloat =
+        sideMargin + WindowControlsMetrics.width + WindowControlsMetrics.trailingGap
 }
 
 /// Le choix de la vue de la fenêtre, en tête des options.
