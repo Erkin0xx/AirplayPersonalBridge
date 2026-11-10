@@ -26,6 +26,11 @@ enum PanelMetrics {
     static let columnGap: CGFloat = 10
     /// Le bord gauche des textes, depuis la marge.
     static let textColumn: CGFloat = pastille + columnGap
+    /// Du bord du panneau à la carte d'une fenêtre surgissante (`PanelPopup`).
+    static let popupInset: CGFloat = 8
+    static let popupRadius: CGFloat = 14
+    /// La hauteur de la pointe qui relie la carte à sa rangée.
+    static let popupBeak: CGFloat = 7
 }
 
 /// Les couleurs propres au panneau, toutes dérivées du premier plan sémantique : elles restent justes
@@ -60,6 +65,11 @@ enum PanelMotion {
     /// Courte et douce, ou rien du tout si l'utilisateur a demandé moins de mouvement.
     static func standard(reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : .smooth(duration: 0.22)
+    }
+
+    /// Pour une carte qui surgit : un ressort, à peine rebondi.
+    static func popup(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .spring(duration: 0.3, bounce: 0.22)
     }
 
     /// Pour ce qui répond à la main : survol, pression.
@@ -343,6 +353,8 @@ struct PanelMuteButton: View {
 
 /// Une ligne de type menu macOS : tout est cliquable, et le survol le dit.
 struct PanelMenuRowStyle: ButtonStyle {
+    /// La rangée garde sa surbrillance tant que ce qu'elle a ouvert est à l'écran.
+    var isActive = false
     @State private var isHovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -360,11 +372,12 @@ struct PanelMenuRowStyle: ButtonStyle {
                     .fill(
                         configuration.isPressed
                             ? PanelPalette.press
-                            : (isHovering ? PanelPalette.hover : .clear)
+                            : (isHovering || isActive ? PanelPalette.hover : .clear)
                     )
             }
             .onHover { isHovering = $0 }
             .animation(PanelMotion.quick(reduceMotion: reduceMotion), value: isHovering)
+            .animation(PanelMotion.quick(reduceMotion: reduceMotion), value: isActive)
     }
 }
 
