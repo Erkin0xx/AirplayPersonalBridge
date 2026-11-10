@@ -100,8 +100,7 @@ struct HaloVolumeRing: View {
 
     static let lineWidth: CGFloat = 5
     static let knobDiameter: CGFloat = 18
-    /// La demi-largeur de la bande qui répond à la souris, de part et d'autre du trait.
-    /// Assez large pour se saisir au doigt près, assez étroite pour laisser la plus petite sphère, inspirée,
+    /// La demi-largeur de la bande qui répond à la souris, de part et d'autre du trait. Assez large pour se saisir au doigt près, assez étroite pour laisser la plus petite sphère, inspirée,
     /// hors de la bande : un clic au bord de la sphère doit lancer la diffusion, pas régler le volume.
     static let grabHalfWidth: CGFloat = 13
     /// Le pas des flèches et de VoiceOver, celui du curseur du panneau.
