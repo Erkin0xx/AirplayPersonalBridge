@@ -187,13 +187,14 @@ struct HaloViewTests {
     func bandsTravelOutward() {
         var previous = HaloWaveGeometry.band(index: 0, progress: 0)
         #expect(abs(previous.radius - HaloWaveGeometry.birthRadius) < 1e-9)
-        var progress = 0.02
-        while progress <= 1 {
-            let band = HaloWaveGeometry.band(index: 0, progress: progress)
+        // Des pas entiers : une somme de 0,02 n'atteint jamais exactement 1.
+        var step = 1
+        while step <= 50 {
+            let band = HaloWaveGeometry.band(index: 0, progress: Double(step) / 50)
             #expect(band.radius > previous.radius)
             #expect(band.lineWidth > previous.lineWidth)
             previous = band
-            progress += 0.02
+            step += 1
         }
         #expect(abs(previous.radius - HaloWaveGeometry.reachRadius) < 1e-9)
         // Elle part de la sphère : au-delà de son bord, en deçà de l'anneau du volume.
@@ -240,7 +241,8 @@ struct HaloViewTests {
                 for angle in [0.0, 0.7, 2.1, 5.9] {
                     let here = HaloWaveGeometry.radius(of: band, angle: angle, time: time)
                     let around = HaloWaveGeometry.radius(of: band, angle: angle + 2 * Double.pi, time: time)
-                    #expect(abs(here - around) < 1e-9)
+                    // Au millionième : un sinus d'un angle augmenté de 2π perd quelques bits.
+                    #expect(abs(here - around) < 1e-6)
                 }
                 let outline = HaloWaveGeometry.outline(
                     of: band, time: time, center: center, sphereRadius: 140, samples: 72
