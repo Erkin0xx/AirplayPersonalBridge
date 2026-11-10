@@ -161,7 +161,13 @@ struct HaloViewTests {
             peak = max(peak, opacity)
             progress += 0.01
         }
-        #expect(peak > 0.4)
+        #expect(peak > HaloWaveGeometry.peakOpacity * 0.5)
+        // Un voile, pas un trait : Baptiste a trouvé les premières ondes, à 0,8, « trop présentes ».
+        #expect(HaloWaveGeometry.peakOpacity <= 0.35)
+        // L'apparition n'a pas de coin : au milieu de sa montée, la bande est à mi-chemin.
+        let half = HaloWaveGeometry.band(index: 0, progress: HaloWaveGeometry.fadeInShare / 2)
+        let full = HaloWaveGeometry.band(index: 0, progress: HaloWaveGeometry.fadeInShare)
+        #expect(half.opacity > 0 && half.opacity < full.opacity)
     }
 
     @Test("La boucle n'a pas de couture : une période plus tard, les mêmes bandes au même endroit")
@@ -244,25 +250,6 @@ struct HaloViewTests {
                     // Au millionième : un sinus d'un angle augmenté de 2π perd quelques bits.
                     #expect(abs(here - around) < 1e-6)
                 }
-                let outline = HaloWaveGeometry.outline(
-                    of: band, time: time, center: center, sphereRadius: 140, samples: 72
-                )
-                #expect(outline.count == 72)
-                #expect(outline.allSatisfy { $0.x.isFinite && $0.y.isFinite })
-                // Le dernier point ne répète pas le premier, et n'en est pas loin : le tracé se referme
-                // sur un segment comme les autres.
-                let first = outline[0]
-                let last = outline[71]
-                let closing = hypot(first.x - last.x, first.y - last.y)
-                let step = hypot(outline[1].x - first.x, outline[1].y - first.y)
-                #expect(closing > 0)
-                #expect(closing < step * 2)
-                // Tous les points restent dans la couronne permise.
-                let reach = band.radius * 140
-                for point in outline {
-                    let distance = hypot(point.x - center.x, point.y - center.y)
-                    #expect(abs(distance / reach - 1) <= HaloWaveGeometry.maxWobble + 1e-9)
-                }
             }
         }
     }
@@ -270,29 +257,150 @@ struct HaloViewTests {
     @Test("Le contour bouge sans à-coup d'une image à la suivante")
     func outlineMovesSmoothly() {
         let time = 2.0
-        let frame = 1.0 / 30
         let band = HaloWaveGeometry.band(index: 1, progress: 0.4)
-        let now = HaloWaveGeometry.outline(of: band, time: time, center: center, sphereRadius: 140)
-        let next = HaloWaveGeometry.outline(of: band, time: time + frame, center: center, sphereRadius: 140)
-        for (a, b) in zip(now, next) {
-            // À rayon égal, seule l'ondulation a bougé : une fraction de point par image.
-            #expect(hypot(a.x - b.x, a.y - b.y) < 1.5)
+        var sample = 0
+        while sample < 72 {
+            let angle = 2 * Double.pi * Double(sample) / 72
+            let now = HaloWaveGeometry.radius(of: band, angle: angle, time: time)
+            let next = HaloWaveGeometry.radius(of: band, angle: angle, time: time + HaloWaves.frameInterval)
+            // À rayon égal, seule l'ondulation a bougé : une fraction de point par image, pour une
+            // sphère de 140 pt de rayon.
+            #expect(abs(now - next) * 140 < 1.5)
+            sample += 1
         }
     }
 
-    @Test("Le tracé passe par le contour et l'enferme")
-    func closedPathEnclosesTheOutline() {
-        let band = HaloWaveGeometry.band(index: 0, progress: 0.5)
-        let outline = HaloWaveGeometry.outline(of: band, time: 3, center: center, sphereRadius: 100)
-        let path = HaloWaveGeometry.closedPath(through: outline)
-        #expect(!path.isEmpty)
-        #expect(path.contains(center))
-        let bounds = path.boundingRect
-        let reach = band.radius * 100 * (1 + HaloWaveGeometry.maxWobble)
-        #expect(bounds.width <= reach * 2 + 1 && bounds.height <= reach * 2 + 1)
-        #expect(bounds.width > band.radius * 100 && bounds.height > band.radius * 100)
-        // Trop peu de points pour une courbe : rien, plutôt qu'un tracé dégénéré.
-        #expect(HaloWaveGeometry.closedPath(through: Array(outline.prefix(2))).isEmpty)
+    // MARK: - Ondes en lumière
+
+    @Test("La cloche d'une bande n'a ni bord ni palier")
+    func profileIsSoft() {
+        #expect(HaloWaveField.profile(0) == 1)
+        #expect(HaloWaveField.profile(1) == 0)
+        #expect(HaloWaveField.profile(-1) == 0)
+        #expect(HaloWaveField.profile(1.7) == 0)
+        #expect(HaloWaveField.profile(-3) == 0)
+        // Symétrique, et la largeur à mi-hauteur est bien celle que la géométrie annonce.
+        #expect(HaloWaveField.profile(0.4) == HaloWaveField.profile(-0.4))
+        #expect(abs(HaloWaveField.profile(0.5 / HaloWaveField.reachPerWidth) - 0.5) < 0.01)
+        // Elle descend sans cesse du contour à sa portée, par pas minuscules : à l'arrivée elle se pose
+        // sans cassure, la pente s'annulant avec elle.
+        var previous = 1.0
+        var step = 1
+        while step <= 200 {
+            let value = HaloWaveField.profile(Double(step) / 200)
+            #expect(value < previous)
+            #expect(previous - value < 0.01)
+            previous = value
+            step += 1
+        }
+        #expect(HaloWaveField.profile(0.99) < 1e-4)
+    }
+
+    @Test("Les bandes sont larges : elles se fondent l'une dans l'autre")
+    func bandsAreWide() {
+        for index in 0..<HaloWaveGeometry.bandCount {
+            let end = HaloWaveGeometry.band(index: index, progress: 1)
+            // Au bout de sa course, une bande déborde de plus d'un demi-rayon de sphère de chaque côté.
+            #expect(HaloWaveField.reach(of: end) > 0.7)
+            #expect(HaloWaveField.reach(of: end) == end.lineWidth / 140 * HaloWaveField.reachPerWidth)
+        }
+        // Les teintes sont celles du fond, pas du blanc ni du gris : chacune a une dominante nette.
+        #expect(HaloWaveField.tints.count == HaloWaveGeometry.bandCount)
+        for tint in HaloWaveField.tints {
+            let high = max(tint.red, tint.green, tint.blue)
+            let low = min(tint.red, tint.green, tint.blue)
+            #expect(high - low > 0.35)
+        }
+    }
+
+    @Test("L'image des ondes suit les proportions de la vue")
+    func waveGridFollowsTheView() {
+        #expect(HaloWaveField.gridSize(for: CGSize(width: 1200, height: 760)) == (160, 101))
+        #expect(HaloWaveField.gridSize(for: CGSize(width: 960, height: 620)) == (160, 103))
+        // Bornée dans les deux sens, et une vue sans taille ne divise pas par zéro.
+        #expect(HaloWaveField.gridSize(for: CGSize(width: 4000, height: 300)) == (160, 40))
+        #expect(HaloWaveField.gridSize(for: CGSize(width: 300, height: 4000)) == (160, 240))
+        #expect(HaloWaveField.gridSize(for: .zero) == (160, 100))
+    }
+
+    private static let viewSize = CGSize(width: 1200, height: 760)
+    private static let grid = HaloWaveField.Grid(
+        viewSize: viewSize, center: CGPoint(x: 600, y: 300), sphereRadius: 140
+    )
+
+    @Test("Les ondes sont un voile discret, valide, et sans bord aux limites de la sphère")
+    func wavePixelsAreAFaintVeil() {
+        let grid = Self.grid
+        #expect(grid.width == 160 && grid.height == 101)
+        let ceiling = UInt8((HaloWaveField.maxAlpha * 255).rounded(.up))
+        var brightest: UInt8 = 0
+        for time in times {
+            let bytes = grid.pixels(at: time)
+            #expect(bytes.count == grid.width * grid.height * 4)
+            var index = 0
+            while index < grid.width * grid.height {
+                let alpha = bytes[index * 4 + 3]
+                // Prémultiplié : aucune composante ne dépasse l'alpha.
+                #expect(bytes[index * 4] <= alpha && bytes[index * 4 + 1] <= alpha && bytes[index * 4 + 2] <= alpha)
+                #expect(alpha <= ceiling)
+                brightest = max(brightest, alpha)
+                index += 1
+            }
+        }
+        // Elles existent, mais restent un voile : jamais le tiers de l'opacité.
+        #expect(brightest > 12)
+        #expect(HaloWaveField.maxAlpha <= 0.34)
+    }
+
+    @Test("D'un pixel à son voisin, le voile ne fait jamais de marche")
+    func waveLightHasNoSteps() {
+        let grid = Self.grid
+        for time in times {
+            let light = grid.light(at: time)
+            var largest: Float = 0
+            var row = 0
+            while row < grid.height {
+                var column = 0
+                while column < grid.width - 1 {
+                    let here = (row * grid.width + column) * 3
+                    var channel = 0
+                    while channel < 3 {
+                        largest = max(largest, abs(light[here + channel] - light[here + 3 + channel]))
+                        channel += 1
+                    }
+                    column += 1
+                }
+                row += 1
+            }
+            // Un pixel de l'image fait 7,5 pt à l'écran : moins de 4 % d'opacité d'écart d'un pixel au
+            // suivant, soit une pente douce et jamais un bord. Les anciens traits sautaient de 12 %.
+            #expect(largest < 0.04)
+            #expect(largest > 0)
+        }
+    }
+
+    @Test("Le désordre d'arrondi reste dans un demi-niveau et ne dépend que du pixel")
+    func ditherIsBoundedAndFixed() {
+        var lowest = 1.0
+        var highest = -1.0
+        var sum = 0.0
+        for index in 0..<16_000 {
+            let value = HaloWaveField.dither(index)
+            #expect(value >= -0.5 && value < 0.5)
+            #expect(value == HaloWaveField.dither(index))
+            lowest = min(lowest, value)
+            highest = max(highest, value)
+            sum += value
+        }
+        // Il couvre sa course et ne tire d'aucun côté : l'image n'est ni éclaircie ni assombrie.
+        #expect(lowest < -0.45 && highest > 0.45)
+        #expect(abs(sum / 16_000) < 0.02)
+    }
+
+    @Test("Les ondes ne se dessinent pas plus souvent qu'avant")
+    func wavesDrawNoFasterThanBefore() {
+        #expect(HaloWaves.frameInterval >= 1.0 / 30)
+        #expect(HaloWaves.stillTime > 0 && HaloWaves.stillTime < HaloWaveGeometry.period)
     }
 
     // MARK: - Sphère, égaliseur, mesures
@@ -361,17 +469,73 @@ struct HaloViewTests {
                 widths: Array(repeating: chip, count: count), available: available, spacing: spacing
             )
         }
-        // Quatre enceintes et le bouton de recherche tiennent sur une rangée à 1200 pt.
+        // Quatre enceintes et les deux commandes rondes tiennent sur une rangée à 1200 pt.
+        let controls = HaloChipMetrics.controlsWidth
         let wide = HaloFlowLayout.rows(
-            widths: Array(repeating: chip, count: 4) + [32], available: 1200 - 48, spacing: spacing
+            widths: Array(repeating: chip, count: 4) + [controls], available: 1200 - 48, spacing: spacing
         )
         #expect(wide == [[0, 1, 2, 3, 4]])
-        // À la largeur minimale, trois par rangée.
+        // À la largeur minimale, trois enceintes et les commandes.
+        let narrow = HaloFlowLayout.rows(
+            widths: Array(repeating: chip, count: 3) + [controls], available: 960 - 48, spacing: spacing
+        )
+        #expect(narrow == [[0, 1, 2, 3]])
         #expect(rows(4, 960 - 48) == [[0, 1, 2], [3]])
         #expect(rows(7, 960 - 48) == [[0, 1, 2], [3, 4, 5], [6]])
         // Plus étroit qu'une pastille : une par rangée, jamais une rangée vide.
         #expect(rows(2, 100) == [[0], [1]])
         #expect(rows(0, 500).isEmpty)
+    }
+
+    @Test("Les commandes rondes ont la taille du badge des enceintes")
+    func roundControlsMatchTheBadge() {
+        #expect(HaloChipMetrics.badge == 40)
+        #expect(HaloChipMetrics.controlsWidth == 2 * HaloChipMetrics.badge + HaloChipMetrics.controlSpacing)
+        #expect(HaloChipMetrics.badge < HaloChipMetrics.height)
+    }
+
+    @Test("Le silence général reste sous la main quand les pastilles défilent")
+    func controlsArePinnedWhenChipsScroll() {
+        let minimal: CGFloat = 960 - 48
+        let regular: CGFloat = 1200 - 48
+        // Tant que tout tient sur deux rangées, les commandes suivent la dernière pastille.
+        for count in 1...6 {
+            #expect(!HaloChipsArrangement.pinsControls(chipCount: count, available: minimal))
+        }
+        #expect(!HaloChipsArrangement.pinsControls(chipCount: 8, available: regular))
+        // Six pastilles remplissent deux rangées de trois, mais les commandes passeraient sur une
+        // troisième : pas à 960 pt, où elles tiennent au bout de la deuxième.
+        #expect(!HaloChipsArrangement.pinsControls(chipCount: 6, available: minimal))
+        // Au-delà, les pastilles défilent : les commandes sortent du défilement.
+        #expect(HaloChipsArrangement.pinsControls(chipCount: 7, available: minimal))
+        #expect(HaloChipsArrangement.pinsControls(chipCount: 9, available: regular))
+        // Deux rangées pleines sans place pour les commandes : elles sortent aussi.
+        #expect(HaloChipsArrangement.pinsControls(chipCount: 6, available: 3 * HaloChipMetrics.width + 24))
+        // Rien à épingler sans pastille, ni avant de connaître la largeur.
+        #expect(!HaloChipsArrangement.pinsControls(chipCount: 0, available: minimal))
+        #expect(!HaloChipsArrangement.pinsControls(chipCount: 12, available: .infinity))
+        #expect(!HaloChipsArrangement.pinsControls(chipCount: 12, available: 0))
+    }
+
+    @Test("Le silence général dit ce qu'il fait et le niveau, et ne disparaît jamais tant que le son est coupé")
+    func muteControlCopy() {
+        #expect(
+            HaloMuteControl.help(isMuted: false, level: "−52 dB")
+                == "Couper le son des enceintes, sans les déconnecter · volume général −52 dB"
+        )
+        #expect(
+            HaloMuteControl.help(isMuted: true, level: "−52 dB")
+                == "Rétablir le son des enceintes · volume général −52 dB"
+        )
+        #expect(HaloMuteControl.accessibilityValue(isMuted: true, level: "−24 dB") == "activé, volume général −24 dB")
+        #expect(
+            HaloMuteControl.accessibilityValue(isMuted: false, level: "−24 dB") == "désactivé, volume général −24 dB"
+        )
+        #expect(HaloMuteControl.isShown(hasSpeakers: true, isMuted: false))
+        #expect(HaloMuteControl.isShown(hasSpeakers: true, isMuted: true))
+        // Sans enceinte, rien à couper ; mais un son coupé doit pouvoir se rétablir.
+        #expect(!HaloMuteControl.isShown(hasSpeakers: false, isMuted: false))
+        #expect(HaloMuteControl.isShown(hasSpeakers: false, isMuted: true))
     }
 
     // MARK: - Mots et état

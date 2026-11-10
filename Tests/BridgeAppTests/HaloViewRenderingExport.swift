@@ -1,4 +1,5 @@
 import AppKit
+import AudioCore
 import Foundation
 import SwiftUI
 import Testing
@@ -97,10 +98,20 @@ struct HaloViewExport {
             )
         }
 
-        // Le son coupé : la sphère garde ses couleurs, voilées et immobiles, l'anneau s'éteint.
+        // Le son coupé : la sphère garde ses couleurs, voilées et immobiles, l'anneau s'éteint, et le
+        // silence général, au bout de la rangée, devient un rond blanc.
         let muted = Self.state(.streaming)
         muted.isMuted = true
         try writeWindow(ContentView(state: muted), to: directory.appending(path: "halo-son-coupe.png"))
+        try writeWindow(
+            ContentView(state: muted), size: Self.minimumSize,
+            to: directory.appending(path: "halo-son-coupe-minimale.png")
+        )
+
+        // Aucune enceinte, mais le son est resté coupé : le silence général reste là pour le rétablir.
+        let mutedEmpty = Self.state(.empty)
+        mutedEmpty.isMuted = true
+        try writeWindow(ContentView(state: mutedEmpty), to: directory.appending(path: "halo-vide-son-coupe.png"))
 
         // Un HomePod coupé seul, et la Geneva décochée.
         let speakers = Self.state(.streaming)
@@ -110,7 +121,8 @@ struct HaloViewExport {
         }
         try writeWindow(ContentView(state: speakers), to: directory.appending(path: "halo-enceinte-coupee.png"))
 
-        // L'Apple TV masquée : sa pastille s'en va, la ligne discrète le dit au pied de la vue.
+        // L'Apple TV masquée : sa pastille s'en va, sans mention au pied de la vue (les Réglages, par le
+        // bouton des options, disent ce qui est masqué).
         let hidden = Self.state(.streaming)
         if let appleTV = hidden.outputs.first(where: { $0.displayName == "Apple TV Salon" }) {
             hidden.setHidden(true, for: appleTV)
@@ -127,7 +139,7 @@ struct HaloViewExport {
             to: directory.appending(path: "halo-survol-masquer.png")
         )
 
-        // Les blocs masqués : ni ondes ni anneau, le bouton de silence reste seul sous le titre.
+        // Les blocs masqués : ni ondes ni anneau, le silence général reste au bout de la rangée.
         let bare = Self.state(.streaming)
         bare.setVisible(false, block: .haloWaves)
         bare.setVisible(false, block: .masterVolume)
@@ -139,9 +151,10 @@ struct HaloViewExport {
         try writeWindow(ContentView(state: none), to: directory.appending(path: "halo-toutes-masquees.png"))
 
         // La vue seule, sous une marge sûre factice à la place de la barre d'outils, que le rendu hors
-        // écran peint en opaque : les ondes doivent rester centrées sur la sphère et passer dessous.
+        // écran peint en opaque : les ondes doivent rester centrées sur la sphère et passer dessous. Sa
+        // propre marge haute (`topInset`) ne doit pas les rogner non plus.
         try writeWindow(
-            HaloView(state: Self.state(.streaming))
+            HaloView(state: Self.state(.streaming), topInset: 48)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background { GrainientBackground(isLive: true) }
                 .safeAreaPadding(.top, 90)
@@ -149,5 +162,42 @@ struct HaloViewExport {
             size: CGSize(width: 960, height: 700),
             to: directory.appending(path: "halo-ondes-sous-la-barre.png")
         )
+    }
+
+    @Test(
+        "Rend la vue Halo avec plus d'enceintes que deux rangées n'en montrent",
+        .enabled(if: ProcessInfo.processInfo.environment["WINDOW_PNG_DIR"] != nil)
+    )
+    func renderCrowd() async throws {
+        NovaGlassTextures.bakedNow()
+        let path = try #require(ProcessInfo.processInfo.environment["WINDOW_PNG_DIR"])
+        let directory = URL(fileURLWithPath: path)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try writeWindow(
+            Color.clear.frame(width: 10, height: 10), size: CGSize(width: 40, height: 40),
+            to: directory.appending(path: ".amorce.png")
+        )
+
+        // Neuf enceintes trouvées par la découverte : les pastilles défilent sur deux rangées, et les
+        // commandes rondes (silence général, recherche) sortent du défilement, épinglées à droite.
+        let harness = BridgeHarness()
+        let devices = (1...9).map { rank in
+            RAOPDevice(
+                serviceName: "AABBCCDDEE0\(rank)@Chambre \(rank)", host: "192.168.1.\(100 + rank)", port: 7000,
+                txt: ["et": "0,4", "cn": "0,1"]
+            )
+        }
+        await harness.discover(raop: devices)
+        let crowd = harness.state
+        crowd.windowLayout = .halo
+        #expect(crowd.outputs.count == 9)
+        try writeWindow(ContentView(state: crowd), to: directory.appending(path: "halo-beaucoup-d-enceintes.png"))
+        try writeWindow(
+            ContentView(state: crowd), size: Self.minimumSize,
+            to: directory.appending(path: "halo-beaucoup-d-enceintes-minimale.png")
+        )
+        // Huit tiennent encore sur deux rangées à 1200 pt, commandes comprises : rien n'est épinglé.
+        if let last = crowd.outputs.last { crowd.setHidden(true, for: last) }
+        try writeWindow(ContentView(state: crowd), to: directory.appending(path: "halo-huit-enceintes.png"))
     }
 }

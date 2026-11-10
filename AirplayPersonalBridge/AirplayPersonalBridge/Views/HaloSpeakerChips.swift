@@ -7,14 +7,53 @@ import SwiftUI
 
 /// Les mesures des pastilles d'enceintes de la vue « Halo ».
 nonisolated enum HaloChipMetrics {
-    static let width: CGFloat = 260
+    /// Quatre pastilles et les deux commandes rondes tiennent sur une rangée dans la fenêtre de 1200 pt,
+    /// trois et les commandes dans celle de 960 pt.
+    static let width: CGFloat = 252
     static let height: CGFloat = 64
     static let spacing: CGFloat = 12
     static let rowSpacing: CGFloat = 10
+    /// Le rond blanc qui porte l'icône de chaque enceinte, et les commandes rondes au bout de la rangée.
     static let badge: CGFloat = 40
+    /// Entre le silence général et la recherche, au bout de la rangée.
+    static let controlSpacing: CGFloat = 8
+    /// Les deux commandes rondes ensemble : elles passent à la ligne d'un bloc.
+    static var controlsWidth: CGFloat { 2 * badge + controlSpacing }
     /// Au-delà de deux rangées, les pastilles défilent : le halo garde sa place.
     static let maxRows = 2
     static var maxHeight: CGFloat { CGFloat(maxRows) * height + CGFloat(maxRows - 1) * rowSpacing }
+}
+
+/// Où vont les commandes rondes (silence général, recherche) : hors de la vue pour être testé.
+nonisolated enum HaloChipsArrangement {
+    /// Les commandes sortent-elles du défilement, épinglées à droite des pastilles ? Tant que tout tient
+    /// sur `maxRows` rangées, elles suivent la dernière pastille. Au-delà, les pastilles défilent : laissées
+    /// au bout, les commandes partiraient hors de vue, et le silence général doit rester sous la main.
+    static func pinsControls(chipCount: Int, available: CGFloat) -> Bool {
+        guard chipCount > 0, available.isFinite, available > 0 else { return false }
+        let widths = Array(repeating: HaloChipMetrics.width, count: chipCount) + [HaloChipMetrics.controlsWidth]
+        let rows = HaloFlowLayout.rows(widths: widths, available: available, spacing: HaloChipMetrics.spacing)
+        return rows.count > HaloChipMetrics.maxRows
+    }
+}
+
+/// Ce que dit et quand se montre le silence général de la vue « Halo » : hors de la vue pour être testé.
+nonisolated enum HaloMuteControl {
+    /// Le bouton suit la dernière enceinte. Sans aucune enceinte il n'a rien à couper, mais un son déjà
+    /// coupé doit toujours pouvoir se rétablir d'un clic.
+    static func isShown(hasSpeakers: Bool, isMuted: Bool) -> Bool {
+        hasSpeakers || isMuted
+    }
+
+    /// L'aide : ce que fait un clic, puis le niveau, que la vue n'écrit plus nulle part ailleurs.
+    static func help(isMuted: Bool, level: String) -> String {
+        let action = isMuted ? "Rétablir le son des enceintes" : "Couper le son des enceintes, sans les déconnecter"
+        return "\(action) · volume général \(level)"
+    }
+
+    static func accessibilityValue(isMuted: Bool, level: String) -> String {
+        "\(isMuted ? "activé" : "désactivé"), volume général \(level)"
+    }
 }
 
 extension OutputState {
@@ -39,44 +78,75 @@ struct HaloSpeakerChips: View {
     let isAudible: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var contentHeight: CGFloat = HaloChipMetrics.height
+    /// La largeur offerte à la rangée. Inconnue à la première passe : rien n'est épinglé.
+    @State private var availableWidth: CGFloat = .infinity
 
     var body: some View {
-        if state.outputs.isEmpty {
-            emptyOutputs
-        } else {
-            ScrollView(.vertical) {
-                HaloFlowLayout(spacing: HaloChipMetrics.spacing, rowSpacing: HaloChipMetrics.rowSpacing) {
-                    // L'ordre du panneau : celles qui exigent une intervention passent en dernier.
-                    // Les masquées n'y sont pas : elles jouent toujours si elles sont cochées.
-                    ForEach(PanelSpeakerOrder.sorted(state.visibleOutputs)) { output in
-                        HaloSpeakerChip(
-                            output: output,
-                            effectiveGainDB: state.effectiveGainDB(for: output),
-                            listeningCompensationMS: state.listeningCompensationMS(for: output),
-                            listeningPlaceName: state.listeningPlaceName,
-                            stereoPartnerNames: state.stereoPartners(of: output).map(\.displayName),
-                            isAudible: isAudible,
-                            toggle: { state.toggleEnabled(output) },
-                            hide: { hide(output) }
-                        )
+        Group {
+            if state.outputs.isEmpty {
+                HStack(spacing: HaloChipMetrics.spacing) {
+                    emptyOutputs
+                    if HaloMuteControl.isShown(hasSpeakers: false, isMuted: state.isMuted) {
+                        HaloMuteButton(state: state)
                     }
-                    if state.hidesEverySpeaker {
-                        AllSpeakersHiddenNotice()
-                            .glassButtonStyle()
-                            .padding(.horizontal, 20)
-                            .frame(height: HaloChipMetrics.height)
-                            .floatingGlass(in: Capsule(style: .circular))
-                    }
-                    searchButton
                 }
-                .frame(maxWidth: .infinity)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+            } else {
+                let pinsControls = HaloChipsArrangement.pinsControls(
+                    chipCount: state.visibleOutputs.count, available: availableWidth
+                )
+                HStack(spacing: HaloChipMetrics.spacing) {
+                    chips(withControls: !pinsControls)
+                    if pinsControls { controls }
+                }
             }
-            .scrollBounceBehavior(.basedOnSize)
-            .scrollIndicators(.never)
-            // La hauteur de ce qu'il contient, jusqu'à deux rangées : la vue ne réserve pas de vide.
-            .frame(height: min(max(contentHeight, HaloChipMetrics.height), HaloChipMetrics.maxHeight))
         }
+        .frame(maxWidth: .infinity)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableWidth = $0 }
+    }
+
+    /// Le silence général puis la recherche : au bout de la dernière rangée, ou épinglés à sa droite quand
+    /// les pastilles défilent (`HaloChipsArrangement`).
+    private var controls: some View {
+        HStack(spacing: HaloChipMetrics.controlSpacing) {
+            HaloMuteButton(state: state)
+            searchButton
+        }
+        .frame(height: HaloChipMetrics.height)
+    }
+
+    private func chips(withControls: Bool) -> some View {
+        ScrollView(.vertical) {
+            HaloFlowLayout(spacing: HaloChipMetrics.spacing, rowSpacing: HaloChipMetrics.rowSpacing) {
+                // L'ordre du panneau : celles qui exigent une intervention passent en dernier.
+                // Les masquées n'y sont pas : elles jouent toujours si elles sont cochées.
+                ForEach(PanelSpeakerOrder.sorted(state.visibleOutputs)) { output in
+                    HaloSpeakerChip(
+                        output: output,
+                        effectiveGainDB: state.effectiveGainDB(for: output),
+                        listeningCompensationMS: state.listeningCompensationMS(for: output),
+                        listeningPlaceName: state.listeningPlaceName,
+                        stereoPartnerNames: state.stereoPartners(of: output).map(\.displayName),
+                        isAudible: isAudible,
+                        toggle: { state.toggleEnabled(output) },
+                        hide: { hide(output) }
+                    )
+                }
+                if state.hidesEverySpeaker {
+                    AllSpeakersHiddenNotice()
+                        .glassButtonStyle()
+                        .padding(.horizontal, 20)
+                        .frame(height: HaloChipMetrics.height)
+                        .floatingGlass(in: Capsule(style: .circular))
+                }
+                if withControls { controls }
+            }
+            .frame(maxWidth: .infinity)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .scrollIndicators(.never)
+        // La hauteur de ce qu'il contient, jusqu'à deux rangées : la vue ne réserve pas de vide.
+        .frame(height: min(max(contentHeight, HaloChipMetrics.height), HaloChipMetrics.maxHeight))
     }
 
     private func hide(_ output: OutputState) {
@@ -85,8 +155,8 @@ struct HaloSpeakerChips: View {
         }
     }
 
-    /// La recherche, au bout des pastilles : le même cadre avec ou sans le témoin, elle revient
-    /// régulièrement et la rangée ne doit pas tressauter.
+    /// La recherche, au bout des pastilles, à côté du silence général et à sa taille : le même cadre avec
+    /// ou sans le témoin, elle revient régulièrement et la rangée ne doit pas tressauter.
     private var searchButton: some View {
         Group {
             if state.isBrowsing {
@@ -97,9 +167,9 @@ struct HaloSpeakerChips: View {
                     Task { await state.refreshOutputs() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
-                        .font(.callout.weight(.medium))
+                        .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(Color.primary.opacity(0.7))
-                        .frame(width: 32, height: 32)
+                        .frame(width: HaloChipMetrics.badge, height: HaloChipMetrics.badge)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -107,9 +177,8 @@ struct HaloSpeakerChips: View {
                 .accessibilityLabel("Rechercher les enceintes")
             }
         }
-        .frame(width: 32, height: 32)
+        .frame(width: HaloChipMetrics.badge, height: HaloChipMetrics.badge)
         .floatingGlass(in: Circle(), interactive: true)
-        .frame(height: HaloChipMetrics.height)
     }
 
     // MARK: - Aucune enceinte
@@ -155,6 +224,43 @@ struct HaloSpeakerChips: View {
         .padding(.vertical, 14)
         .floatingGlass(in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .accessibilityElement(children: .contain)
+    }
+}
+
+/// Le silence général de la vue « Halo » : un rond de verre au bout de la rangée, de la taille du badge
+/// des enceintes.
+///
+/// Il coupe et rétablit le son de toutes les enceintes sans rien déconnecter (`BridgeState.isMuted`,
+/// comme `PanelMuteButton`). Enclenché, le rond devient blanc et son icône sombre, comme le badge d'une
+/// enceinte cochée : jamais de rose sur une commande. Le bloc « Volume général » masqué
+/// (`WindowBlock.masterVolume`) retire l'anneau, jamais ce bouton : un son coupé doit toujours se voir, et
+/// se rétablir d'un clic. Le niveau, que l'anneau montre, se lit en chiffres dans son aide.
+struct HaloMuteButton: View {
+    @Bindable var state: BridgeState
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let isMuted = state.isMuted
+        let level = PanelFormat.decibels(state.masterVolumeDB)
+        Button {
+            state.isMuted.toggle()
+        } label: {
+            Image(systemName: PanelMuteButton.symbol)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(isMuted ? BridgeTheme.color(0x1D1D1F) : Color.primary.opacity(0.7))
+                .frame(width: HaloChipMetrics.badge, height: HaloChipMetrics.badge)
+                .background(isMuted ? Color.white : Color.clear, in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .floatingGlass(in: Circle(), interactive: true)
+        .animation(PanelMotion.standard(reduceMotion: reduceMotion), value: isMuted)
+        .help(HaloMuteControl.help(isMuted: isMuted, level: level))
+        .accessibilityLabel(PanelMuteButton.title)
+        .accessibilityValue(HaloMuteControl.accessibilityValue(isMuted: isMuted, level: level))
+        .accessibilityHint("Les enceintes restent connectées.")
+        .accessibilityAddTraits(.isToggle)
     }
 }
 
