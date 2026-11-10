@@ -147,7 +147,7 @@ struct ConsoleLiveBars: View {
         HStack(alignment: .bottom, spacing: 2) {
             ForEach(Array(levels.enumerated()), id: \.offset) { _, level in
                 Capsule()
-                    .fill(BridgeTheme.rose)
+                    .fill(Color.white)
                     .frame(width: 2.5, height: Self.height * level)
             }
         }
@@ -173,7 +173,7 @@ struct ConsoleRoundButton: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: diameter * 0.4, weight: .semibold))
-                .foregroundStyle(isOn ? Color.white : Color.white.opacity(0.82))
+                .foregroundStyle(isOn ? Color.black.opacity(0.85) : Color.white.opacity(0.82))
                 .frame(width: diameter, height: diameter)
                 .background(background, in: Circle())
                 .contentShape(Circle())
@@ -186,7 +186,8 @@ struct ConsoleRoundButton: View {
     }
 
     private var background: AnyShapeStyle {
-        if isOn { return AnyShapeStyle(BridgeTheme.accent) }
+        // Enclenché : blanc, comme les boutons du Centre de contrôle.
+        if isOn { return AnyShapeStyle(Color.white) }
         return AnyShapeStyle(Color.white.opacity(isHovering && isEnabled ? 0.2 : 0.12))
     }
 }

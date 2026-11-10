@@ -162,18 +162,14 @@ struct ConsoleFader: View {
 
     private var fillStyle: AnyShapeStyle {
         if isSilenced { return AnyShapeStyle(PanelPalette.silencedFill) }
-        switch look {
-        case .general:
-            return AnyShapeStyle(Color.white.opacity(0.94))
-        case .speaker:
-            // Un aplat : sur cette hauteur, un dégradé entre deux roses voisins se lit en bandes.
-            return AnyShapeStyle(BridgeTheme.accent)
-        }
+        // Blanc pour tous, comme les curseurs du Centre de contrôle : Baptiste ne veut pas de rose
+        // sur les curseurs (2026-11-10). Le rose reste à l'état, pas aux réglages.
+        return AnyShapeStyle(Color.white.opacity(look == .general ? 0.94 : 0.88))
     }
 
-    /// Ce qui se pose sur le remplissage : sombre sur le blanc du général, clair sur le reste.
+    /// Ce qui se pose sur le remplissage : sombre sur le blanc, clair sur le gris du silence.
     private var onFill: Color {
-        look == .general && !isSilenced ? .black : .white
+        isSilenced ? .white : .black
     }
 
     /// Un filet de lumière sur l'arête du remplissage coloré : il la détache du rail.
@@ -181,7 +177,7 @@ struct ConsoleFader: View {
     private var edge: some View {
         if look == .speaker && !isSilenced {
             Rectangle()
-                .fill(Color.white.opacity(0.28))
+                .fill(Color.white)
                 .frame(height: 1)
                 .accessibilityHidden(true)
         }
