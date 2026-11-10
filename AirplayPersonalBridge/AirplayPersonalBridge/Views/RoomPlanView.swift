@@ -134,6 +134,12 @@ struct RoomPlanView: View {
             layout: state.roomLayout, transform: transform, outputIDs: state.outputIDsDrawnOnPlan,
             selection: selection, hoveredObject: hoveredObject, hoveredVertex: hoveredVertex,
             showsAllLabels: showsAllLabels, showsVertexHandles: tool == .select,
+            speakerCaptions: Dictionary(
+                state.outputs.filter(\.isEnabled).map {
+                    ($0.id, PanelFormat.decibels($0.trimDB, fractionDigits: $0.trimDB.rounded() == $0.trimDB ? 0 : 1, signed: true))
+                },
+                uniquingKeysWith: { first, _ in first }
+            ),
             backgroundImage: backgroundImage
         )
     }
