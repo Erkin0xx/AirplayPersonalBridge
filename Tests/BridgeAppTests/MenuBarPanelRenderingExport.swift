@@ -79,13 +79,35 @@ struct MenuBarPanelExport {
             }
         }
 
-        // Ce que seule la souris fait apparaître : options dépliées, survol, valeur en dB.
+        // La fenêtre surgissante des options là où la place manque au-dessus de sa rangée : panneaux
+        // courts, puis message de l'ouverture de session, qui allonge son contenu. Le panneau garde
+        // la taille de la scène sans options.
+        let crampedCases: [(BridgeState.PanelScene, LoginItemStatus)] = [
+            (.searching, .disabled), (.empty, .disabled), (.startFailed, .requiresApproval),
+        ]
+        for (scene, status) in crampedCases {
+            for scheme in [ColorScheme.dark, .light] {
+                let suffix = scheme == .dark ? "sombre" : "clair"
+                try writeHosted(
+                    SimulatedGlass(scheme: scheme) {
+                        MenuBarPanelContent(
+                            state: .preview(scene),
+                            loginItem: LoginItemController(service: PreviewLoginItemService(status: status)),
+                            preview: PanelPreviewOptions(presentsOptions: true)
+                        )
+                    }, scheme: scheme,
+                    to: directory.appending(path: "panneau-options-\(scene.rawValue)-\(suffix).png")
+                )
+            }
+        }
+
+        // Ce que seule la souris fait apparaître : options ouvertes, survol, valeur en dB.
         for scheme in [ColorScheme.dark, .light] {
             let panel = MenuBarPanelContent(
                 state: .preview(.listeningPlaces),
                 loginItem: LoginItemController(service: PreviewLoginItemService()),
                 preview: PanelPreviewOptions(
-                    expandsOptions: true, hoveredSpeakerID: "airplay2/Salon", showsVolumeValue: true
+                    presentsOptions: true, hoveredSpeakerID: "airplay2/Salon", showsVolumeValue: true
                 )
             )
             let suffix = scheme == .dark ? "sombre" : "clair"
@@ -139,7 +161,7 @@ struct MenuBarPanelExport {
                     MenuBarPanelContent(
                         state: mutedWithDrawer,
                         loginItem: LoginItemController(service: PreviewLoginItemService()),
-                        preview: PanelPreviewOptions(expandsOptions: true, openDrawerSpeakerID: genevaID)
+                        preview: PanelPreviewOptions(presentsOptions: true, openDrawerSpeakerID: genevaID)
                     )
                 }, scheme: scheme,
                 to: directory.appending(path: "panneau-son-coupe-basses-aigus-options-\(suffix).png")
@@ -157,7 +179,7 @@ struct MenuBarPanelExport {
                         MenuBarPanelContent(
                             state: .preview(.streaming, environment: environment),
                             loginItem: LoginItemController(service: PreviewLoginItemService()),
-                            preview: PanelPreviewOptions(expandsOptions: true)
+                            preview: PanelPreviewOptions(presentsOptions: true)
                         )
                     }, scheme: scheme,
                     to: directory.appending(path: "panneau-options-\(name)-\(suffix).png")

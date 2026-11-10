@@ -35,6 +35,7 @@ extension SystemSettingsPane {
 struct MenuBarPanel: View {
     let lifecycle: AppLifecycle
     @Environment(\.openWindow) private var openWindow
+    @State private var openings = 0
 
     var body: some View {
         MenuBarPanelContent(
@@ -45,9 +46,15 @@ struct MenuBarPanel: View {
                     lifecycle.showMainWindow { openWindow(id: MainWindow.id) }
                 },
                 quit: { NSApplication.shared.terminate(nil) }
-            )
+            ),
+            panelOpenings: openings
         )
-        .background(PanelOpenObserver { lifecycle.panelDidOpen() })
+        .background(
+            PanelOpenObserver {
+                lifecycle.panelDidOpen()
+                openings += 1
+            }
+        )
     }
 }
 
@@ -105,7 +112,8 @@ struct MenuBarPanelActions {
 
 /// Ce que le rendu hors écran force, faute de souris : le panneau réel ne s'en sert jamais.
 struct PanelPreviewOptions {
-    var expandsOptions = false
+    /// La fenêtre surgissante des options, ouverte.
+    var presentsOptions = false
     var hoveredSpeakerID: String?
     var showsVolumeValue = false
     /// L'enceinte dont le tiroir est déplié.
@@ -117,9 +125,10 @@ struct PanelPreviewOptions {
 /// Le modèle est le module Son du Centre de contrôle et le sélecteur de sortie audio de macOS, pas un
 /// tableau de bord. D'où trois partis pris : **aucun fond maison**, le panneau hérite du matériau de
 /// `MenuBarExtra` et tout s'y pose en couleurs sémantiques ; des **rangées plutôt que des cases**, où
-/// c'est la pastille qui dit qu'une enceinte est retenue ; et **le reste en retrait**, derrière une
-/// section repliable. Les réglages fins (délai, plan) restent dans la fenêtre ; les basses et les aigus
-/// de la Geneva ont leur tiroir sous sa rangée, parce qu'ils se retouchent en écoutant.
+/// c'est la pastille qui dit qu'une enceinte est retenue ; et **le reste en retrait**, dans une
+/// fenêtre surgissante (`PanelPopup`) : le panneau ne grandit pas pour montrer ses options. Les
+/// réglages fins (délai, plan) restent dans la fenêtre principale ; les basses et les aigus de la
+/// Geneva ont leur tiroir sous sa rangée, parce qu'ils se retouchent en écoutant.
 ///
 /// Ce qui est propre au widget vit dans ses fichiers (`PanelControls`, `PanelSpeakerRow`,
 /// `MenuBarGlyph`). La fenêtre principale en reprend une partie, pour que les deux se ressemblent : la
@@ -129,9 +138,12 @@ struct MenuBarPanelContent: View {
     @Bindable var state: BridgeState
     let loginItem: LoginItemController
     var actions: MenuBarPanelActions
+    /// Le nombre d'ouvertures du panneau : à chacune, il se présente sans sa fenêtre surgissante,
+    /// comme un popover du système ne survit pas à la fermeture de sa fenêtre.
+    var panelOpenings = 0
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var isOptionsExpanded: Bool
+    @State private var isOptionsPresented: Bool
     /// Un seul tiroir ouvert à la fois : le panneau reste court.
     @State private var openDrawerSpeakerID: String?
     private let previewOptions: PanelPreviewOptions
@@ -142,14 +154,15 @@ struct MenuBarPanelContent: View {
     init(
         state: BridgeState, loginItem: LoginItemController,
         actions: MenuBarPanelActions = MenuBarPanelActions(),
+        panelOpenings: Int = 0,
         preview: PanelPreviewOptions = PanelPreviewOptions()
     ) {
         self.state = state
         self.loginItem = loginItem
         self.actions = actions
+        self.panelOpenings = panelOpenings
         self.previewOptions = preview
-        // Un message de l'ouverture de session demande une action : il ne doit pas rester caché.
-        _isOptionsExpanded = State(initialValue: preview.expandsOptions || loginItem.message != nil)
+        _isOptionsPresented = State(initialValue: preview.presentsOptions)
         _openDrawerSpeakerID = State(initialValue: preview.openDrawerSpeakerID)
     }
 
@@ -180,6 +193,9 @@ struct MenuBarPanelContent: View {
             }
         }
         .frame(width: PanelMetrics.width)
+        // Hors du conteneur de verre : la carte ne doit pas se fondre dans le bouton de l'en-tête.
+        .panelPopup("Options", isPresented: $isOptionsPresented) { optionRows }
+        .onChange(of: panelOpenings) { isOptionsPresented = false }
         .containerShape(.rect(cornerRadius: PanelMetrics.panelRadius))
         .background(alignment: .top) { streamingWash }
     }
@@ -437,41 +453,47 @@ struct MenuBarPanelContent: View {
 
     // MARK: - Options, en retrait
 
+    /// La rangée ouvre les options dans une fenêtre surgissante, au-dessus d'elle : le panneau garde sa
+    /// taille. Elle rappelle la source en cours, et signale un message qui attend dans les options.
     private var options: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(PanelMotion.standard(reduceMotion: reduceMotion)) {
-                    isOptionsExpanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Text("Options")
-                    Spacer(minLength: 4)
-                    if !isOptionsExpanded {
-                        Text(state.selectedSource.label)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(isOptionsExpanded ? 90 : 0))
-                }
+        Button {
+            withAnimation(PanelMotion.popup(reduceMotion: reduceMotion)) {
+                isOptionsPresented.toggle()
             }
-            .buttonStyle(PanelMenuRowStyle())
-            .accessibilityLabel("Options")
-            .accessibilityValue(isOptionsExpanded ? "dépliées" : "repliées")
-            .padding(.horizontal, PanelMetrics.rowInset)
-
-            if isOptionsExpanded {
-                optionRows
-                    .padding(.horizontal, PanelMetrics.margin)
-                    .padding(.vertical, 4)
-                    .transition(.opacity)
+        } label: {
+            HStack(spacing: 6) {
+                Text("Options")
+                Spacer(minLength: 4)
+                // Un message de l'ouverture de session demande une action : il ne doit pas rester caché
+                // derrière la rangée.
+                if loginItem.message != nil {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                }
+                Text(state.selectedSource.label)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                // Fixe : la rangée ouvre une fenêtre, elle ne se déplie pas.
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
             }
         }
+        .buttonStyle(PanelMenuRowStyle(isActive: isOptionsPresented))
+        .panelPopupAnchor()
+        .accessibilityLabel("Options")
+        .accessibilityValue(optionsAccessibilityValue)
+        .accessibilityHint("Ouvre les options dans une fenêtre surgissante.")
+        .padding(.horizontal, PanelMetrics.rowInset)
         .padding(.vertical, 4)
+    }
+
+    private var optionsAccessibilityValue: String {
+        let source = "Source : \(state.selectedSource.label)"
+        guard let message = loginItem.message else { return source }
+        return "\(source). \(message)"
     }
 
     private var optionRows: some View {
