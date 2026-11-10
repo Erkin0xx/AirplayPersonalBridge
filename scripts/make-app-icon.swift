@@ -25,13 +25,16 @@ private enum Grid {
 }
 
 private enum Ink {
-    static let top = color(0x2C3F49)
-    static let bottom = color(0x0C1519)
-    static let glow = color(0x2FD6C2, alpha: 0.36)
+    // La palette rose, choisie par Baptiste le 2026-11-10 parmi neuf (l'icône était bleu-vert avant).
+    static let top = color(0x4A2A40)
+    static let bottom = color(0x1A0A14)
+    /// La teinte de la lueur : pleine au centre, transparente au bord.
+    static let glowHex: UInt32 = 0xFF5FA2
+    static let glow = color(glowHex, alpha: 0.38)
     static let pylonTop = color(0xFFFFFF)
-    static let pylonBottom = color(0xD3F5EF)
-    static let hangerTop = color(0x8DF3E3)
-    static let hangerBottom = color(0x2CC7B6)
+    static let pylonBottom = color(0xFFE3EE)
+    static let hangerTop = color(0xFFB3D1)
+    static let hangerBottom = color(0xFF4F93)
 
     static func color(_ hex: UInt32, alpha: CGFloat = 1) -> CGColor {
         CGColor(
@@ -129,7 +132,7 @@ struct MakeAppIcon {
         let center = CGPoint(x: Grid.canvas / 2, y: Grid.canvas * 0.60)
         drawRadial(
             context, center: center, radius: 470,
-            inner: Ink.glow, outer: Ink.color(0x2FD6C2, alpha: 0)
+            inner: Ink.glow, outer: Ink.color(Ink.glowHex, alpha: 0)
         )
         context.restoreGState()
     }
