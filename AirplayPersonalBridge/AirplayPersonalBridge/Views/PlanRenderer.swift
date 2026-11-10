@@ -14,10 +14,13 @@ import SwiftUI
 /// reste du bois en mode clair comme en mode sombre, d'où des couleurs fixes ; seuls le mur, le tapis et
 /// le contour, qui se détachent du fond, changent avec lui.
 enum PlanPalette {
-    /// Le fond du plan, celui d'un document.
-    static let canvas = Color(nsColor: .textBackgroundColor)
-    /// La graduation au mètre : un filet, pas un quadrillage.
-    static let grid = Color(nsColor: .separatorColor)
+    /// Le fond du plan : une table, pas une page. Un gris à peine teinté, plus doux que le noir ou le
+    /// blanc purs d'un document, sur lequel le sol de la pièce se détache.
+    static let canvas = dynamic(dark: 0x151619, light: 0xE9E8E4)
+    /// Le sol de la pièce, posé sur la table : c'est lui la feuille.
+    static let floor = dynamic(dark: 0x202227, light: 0xFBFAF7)
+    /// La graduation au mètre : un point par mètre, pas un quadrillage.
+    static let grid = dynamic(dark: 0x3C3F45, light: 0xC2BFB7)
     /// Ce qui est sélectionné ou désigné : l'accent du système.
     static let selection = Color(nsColor: .controlAccentColor)
     /// Le mur en cours de tracé.
@@ -106,6 +109,7 @@ struct PlanRenderer {
     private var scale: Double { transform.scale }
 
     func draw(in context: inout GraphicsContext, size: CGSize) {
+        drawFloor(&context)
         drawBackground(&context)
         drawGrid(&context, size: size)
         let objects = layout.objectsInDrawingOrder
@@ -171,29 +175,108 @@ struct PlanRenderer {
         return image.size
     }
 
+    /// Le sol : l'intérieur des murs, un ton au-dessus du fond, avec l'ombre d'une feuille posée. Sans
+    /// lui, la pièce n'était qu'un trait sur un quadrillage. Pas sous une image de fond : elle est le sol.
+    private func drawFloor(_ context: inout GraphicsContext) {
+        guard layout.background == nil else { return }
+        var floor = Path()
+        for outline in Self.floorOutlines(of: layout.walls) { addPolygon(outline, to: &floor) }
+        guard !floor.isEmpty else { return }
+        context.drawLayer { layer in
+            layer.addFilter(.shadow(color: .black.opacity(0.22), radius: 22, y: 8))
+            layer.fill(floor, with: .color(PlanPalette.floor))
+        }
+    }
+
+    /// Les contours que dessinent les murs, face intérieure : une boucle fermée, ou une suite de murs
+    /// ouverte par une porte, qu'on referme d'un trait. Un mur isolé ou un embranchement n'en donnent pas :
+    /// mieux vaut aucun sol qu'un sol faux.
+    static func floorOutlines(of walls: [RoomLayout.WallSegment]) -> [[CGPoint]] {
+        struct Corner: Hashable {
+            let x: Int
+            let y: Int
+            init(_ point: CGPoint) {
+                // Au centimètre : deux murs tracés bout à bout partagent leur coin.
+                x = Int((point.x * 100).rounded())
+                y = Int((point.y * 100).rounded())
+            }
+        }
+        var points: [Corner: CGPoint] = [:]
+        var neighbours: [Corner: [Corner]] = [:]
+        var order: [Corner] = []
+        for wall in walls {
+            let a = Corner(wall.a)
+            let b = Corner(wall.b)
+            guard a != b else { continue }
+            for (corner, point) in [(a, wall.a), (b, wall.b)] where points[corner] == nil {
+                points[corner] = point
+                order.append(corner)
+            }
+            neighbours[a, default: []].append(b)
+            neighbours[b, default: []].append(a)
+        }
+
+        var visited: Set<Corner> = []
+        var outlines: [[CGPoint]] = []
+        // Les bouts d'abord : une suite ouverte se parcourt d'un bout à l'autre.
+        let starts = order.filter { neighbours[$0]?.count == 1 } + order
+        for start in starts where !visited.contains(start) {
+            var chain = [start]
+            var previous: Corner?
+            var current = start
+            var isValid = true
+            visited.insert(start)
+            while true {
+                let around = neighbours[current] ?? []
+                guard around.count <= 2 else {
+                    isValid = false
+                    break
+                }
+                guard let next = around.first(where: { $0 != previous && !visited.contains($0) }) else { break }
+                visited.insert(next)
+                chain.append(next)
+                previous = current
+                current = next
+            }
+            // Le reste d'un embranchement ne doit pas se présenter plus tard comme une pièce.
+            if !isValid {
+                var pending = chain
+                while let corner = pending.popLast() {
+                    for other in neighbours[corner] ?? [] where !visited.contains(other) {
+                        visited.insert(other)
+                        pending.append(other)
+                    }
+                }
+                continue
+            }
+            if chain.count >= 3 { outlines.append(chain.compactMap { points[$0] }) }
+        }
+        return outlines
+    }
+
     private func drawGrid(_ context: inout GraphicsContext, size: CGSize) {
         // Graduation au mètre : c'est l'unité dans laquelle on raisonne, et elle donne
-        // l'échelle sans avoir à écrire de cote partout. En dessous de 25 px/m elle
+        // l'échelle sans avoir à écrire de cote partout. Un point par mètre, comme le fond d'un
+        // tableau blanc : des lignes découpaient la pièce en carreaux. En dessous de 25 px/m elle
         // deviendrait un aplat, donc on l'espace.
         let step: Double = scale < 25 ? 5 : 1
-        var path = Path()
+        let radius = 1.25
+        var dots = Path()
         let topLeft = transform.toModel(.zero)
         let bottomRight = transform.toModel(CGPoint(x: size.width, y: size.height))
         var x = (topLeft.x / step).rounded(.down) * step
         while x <= bottomRight.x {
-            let viewX = transform.toView(CGPoint(x: x, y: 0)).x
-            path.move(to: CGPoint(x: viewX, y: 0))
-            path.addLine(to: CGPoint(x: viewX, y: size.height))
+            var y = (topLeft.y / step).rounded(.down) * step
+            while y <= bottomRight.y {
+                let center = transform.toView(CGPoint(x: x, y: y))
+                dots.addEllipse(
+                    in: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
+                )
+                y += step
+            }
             x += step
         }
-        var y = (topLeft.y / step).rounded(.down) * step
-        while y <= bottomRight.y {
-            let viewY = transform.toView(CGPoint(x: 0, y: y)).y
-            path.move(to: CGPoint(x: 0, y: viewY))
-            path.addLine(to: CGPoint(x: size.width, y: viewY))
-            y += step
-        }
-        context.stroke(path, with: .color(PlanPalette.grid), lineWidth: 1)
+        context.fill(dots, with: .color(PlanPalette.grid))
     }
 
     // MARK: - Murs

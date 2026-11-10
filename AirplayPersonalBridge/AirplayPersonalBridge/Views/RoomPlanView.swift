@@ -177,6 +177,26 @@ struct RoomPlanView: View {
 
     // MARK: - Zone de dessin
 
+    /// Les enceintes du plan qu'on entend en ce moment : rattachées à une sortie qui diffuse, sans
+    /// silence ni alerte de capture. Ce sont elles que l'onde anime.
+    private var playingSpeakers: [SpeakerPulse.Source] {
+        guard origin != nil, state.captureAlert == nil, !state.isMuted else { return [] }
+        let playing = Set(
+            state.outputs
+                .filter { $0.isEnabled && !$0.isMuted && $0.connection == .streaming }
+                .map(\.id)
+        )
+        guard !playing.isEmpty else { return [] }
+        return state.roomLayout.objects.compactMap { object in
+            guard let id = object.kind.outputID, playing.contains(id) else { return nil }
+            return SpeakerPulse.Source(
+                center: transform.toView(object.position),
+                // Du bord de l'écho dessiné autour de l'enceinte, pas de son centre.
+                radius: max(object.size.width, object.size.height) / 2 * scale + 6.5
+            )
+        }
+    }
+
     private var planArea: some View {
         Canvas { context, size in
             guard origin != nil else { return }
@@ -185,6 +205,7 @@ struct RoomPlanView: View {
             drawPendingWall(&context)
         }
         .background(PlanPalette.canvas)
+        .overlay { SpeakerPulse(sources: playingSpeakers, reach: 0.55 * scale) }
         .contentShape(Rectangle())
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
             let previous = viewSize
@@ -537,24 +558,31 @@ struct RoomPlanView: View {
     private var listeningPlacePicker: some View {
         let listeners = state.roomLayout.listeners
         if let active = state.roomLayout.listener {
-            Picker(
-                "Écoute",
-                selection: Binding(
-                    get: { active.id },
-                    set: { id in
-                        history.record(state.roomLayout)
-                        state.roomLayout.selectListener(id: id)
-                        state.persistRoomLayout()
+            // Un menu au libellé explicite : le nom du lieu en vigueur se lit dans la barre, là où un
+            // sélecteur sans libellé ne montrait qu'un chevron.
+            Menu {
+                Picker(
+                    "Lieu d'écoute",
+                    selection: Binding(
+                        get: { active.id },
+                        set: { id in
+                            history.record(state.roomLayout)
+                            state.roomLayout.selectListener(id: id)
+                            state.persistRoomLayout()
+                        }
+                    )
+                ) {
+                    ForEach(listeners) { listener in
+                        Text(listener.name.isEmpty ? listener.kind.label : listener.name).tag(listener.id)
                     }
-                )
-            ) {
-                ForEach(listeners) { listener in
-                    Text(listener.name.isEmpty ? listener.kind.label : listener.name).tag(listener.id)
                 }
+                .pickerStyle(.inline)
+            } label: {
+                Label(active.name.isEmpty ? active.kind.label : active.name, systemImage: "ear")
             }
-            .pickerStyle(.menu)
-            .fixedSize()
+            .labelStyle(.titleAndIcon)
             .help("Lieu d'écoute : recale les enceintes pour ce lieu, sans couper le son")
+            .accessibilityLabel("Lieu d'écoute")
         }
     }
 

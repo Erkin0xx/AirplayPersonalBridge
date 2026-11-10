@@ -5,44 +5,62 @@
 
 import SwiftUI
 
-/// La barre latérale de la fenêtre : tout ce qui règle le son, de la source aux sorties.
+/// La barre latérale de la fenêtre : ce qui joue, puis les enceintes, une carte chacune.
 ///
-/// Une liste de barre latérale, qui flotte en verre au-dessus du plan : ses rangées n'ont aucun fond
-/// propre, et les sections ont les titres discrets des barres latérales de macOS. Les options du Mac,
-/// que le panneau range dans ses options repliées, ferment la liste.
+/// Elle flotte en verre au-dessus du plan, et ne montre que ce qu'on règle en écoutant : l'état, la
+/// source, le volume général, puis le volume de chaque enceinte. Tout ce qui se règle une fois (délai,
+/// tonalité, options du Mac, diagnostic) est un clic plus loin, dans une fenêtre surgissante : une barre
+/// latérale qui montre tout ne montre plus rien.
 struct BridgeSidebar: View {
     @Bindable var state: BridgeState
-    /// La feuille de diagnostic, ouverte depuis l'en-tête d'état : c'est l'état qu'elle détaille.
+    /// La feuille de diagnostic, ouverte depuis le pied de la barre.
     var showDiagnostics: () -> Void = {}
+    @State private var showsMacOptions = false
 
     var body: some View {
-        List {
-            Section { status }
-            if state.startFailure != nil || state.captureAlert != nil {
-                Section { notices }
-            }
-            Section("Source") { source }
-            Section { master } header: { masterHeader }
-            Section { outputs } header: { outputsHeader }
-            Section("Ce Mac") { macOptions }
+        // Le pied sous la liste, pas dessus : une carte qui défile ne passe jamais derrière ses boutons.
+        VStack(spacing: 0) {
+            cards
+            footer
         }
-        .listStyle(.sidebar)
+    }
+
+    private var cards: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: WindowMetrics.cardSpacing) {
+                hero
+                if state.startFailure != nil || state.captureAlert != nil {
+                    notices
+                }
+                outputsHeader
+                    .padding(.top, 10)
+                    .padding(.horizontal, WindowMetrics.cardPadding)
+                outputs
+            }
+            .padding(.horizontal, WindowMetrics.margin)
+            .padding(.top, 4)
+            .padding(.bottom, 12)
+        }
         .scrollEdgeEffectStyle(.soft, for: .vertical)
     }
 
-    // MARK: - État
+    // MARK: - En-tête
 
-    /// L'en-tête du panneau, sans sa commande : la pastille et l'état en mots, puis le diagnostic qui le
-    /// détaille. La commande Diffuser est dans la barre d'outils, où rien ne la fait déborder.
-    private var status: some View {
+    /// Ce qui joue, d'où, et à quel volume : la carte qu'on lit en premier, et la seule qu'on lit si tout
+    /// va bien. La commande Diffuser est dans la barre d'outils, où rien ne la fait déborder.
+    private var hero: some View {
         let status = state.status
-        return HStack(spacing: 10) {
-            HStack(spacing: 10) {
-                PanelStatusChip(status: status.menuBar, isAudible: state.captureAlert == nil && !state.isMuted)
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: WindowMetrics.columnGap) {
+                PanelStatusChip(
+                    status: status.menuBar, isAudible: state.captureAlert == nil && !state.isMuted,
+                    diameter: WindowMetrics.heroPastille
+                )
                 VStack(alignment: .leading, spacing: 1) {
                     Text(status.title)
-                        .font(.headline)
+                        .font(.title3.weight(.semibold))
                         .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                     if let detail = status.detail {
                         Text(detail)
                             .font(.subheadline)
@@ -50,22 +68,30 @@ struct BridgeSidebar: View {
                             .lineLimit(1)
                     }
                 }
+                Spacer(minLength: 0)
             }
             .accessibilityElement(children: .combine)
-            Spacer(minLength: 4)
-            Button(action: showDiagnostics) {
-                Label("Diagnostic", systemImage: "waveform.path.ecg").labelStyle(.iconOnly)
-            }
-            .buttonStyle(.borderless)
-            .help("Diagnostic : compteurs de la capture et de chaque sortie")
+            .accessibilityAddTraits(.isHeader)
+
+            master
+            Divider()
+            source
         }
-        .padding(.vertical, 4)
+        .padding(WindowMetrics.cardPadding)
+        .windowCard()
     }
 
     // MARK: - Alertes
 
-    @ViewBuilder
+    /// Les alertes portent leur propre fond teinté : pas de carte autour, qui ferait une boîte dans une
+    /// boîte.
     private var notices: some View {
+        VStack(alignment: .leading, spacing: 8) { noticeRows }
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var noticeRows: some View {
         if let failure = state.startFailure {
             PanelNotice(
                 severity: .critical, title: "Démarrage impossible", detail: failure.message,
@@ -96,6 +122,10 @@ struct BridgeSidebar: View {
     @ViewBuilder
     private var source: some View {
         HStack(spacing: 6) {
+            Text("Source")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize()
             Picker("Source", selection: sourceSelection) {
                 ForEach(state.sources) { source in
                     Text(source.label).tag(source.id)
@@ -116,12 +146,9 @@ struct BridgeSidebar: View {
 
         if let awaited = state.awaitedSourceName {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                // La barre latérale limite ses rangées à une ligne : les textes qui en font plusieurs
-                // le disent.
                 Text("Passera sur \(awaited) dès que cette application jouera.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                    .lineLimit(nil)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Button("Annuler", action: state.forgetAwaitedSource)
@@ -143,49 +170,44 @@ struct BridgeSidebar: View {
         )
     }
 
-    /// La valeur dans le titre de la section : la rangée garde toute sa largeur au curseur.
-    private var masterHeader: some View {
-        HStack {
-            Text("Volume master")
-            Spacer()
-            Text(state.isMuted ? "Son coupé" : PanelFormat.decibels(state.masterVolumeDB))
-                .monospacedDigit()
-                .accessibilityHidden(true)
-        }
-    }
-
+    /// Le grand curseur du panneau, et la même grammaire : le niveau se lit à la longueur du remplissage,
+    /// la valeur en dB reste discrète au-dessus.
     private var master: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "speaker.fill")
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-            Slider(value: masterBinding, in: BridgeSettings.Limits.masterDB) {
-                Text("Volume master")
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Volume général")
+                Spacer()
+                Text(state.isMuted ? "Son coupé" : PanelFormat.decibels(state.masterVolumeDB))
+                    .monospacedDigit()
+                    .accessibilityHidden(true)
             }
-            .labelsHidden()
-            // Coupé, le curseur reste où il était, éteint : c'est ce niveau que le rétablissement rendra.
-            .opacity(state.isMuted ? 0.45 : 1)
-            .accessibilityValue(state.isMuted ? "son coupé" : PanelFormat.decibels(state.masterVolumeDB))
-            // Le double-clic du bouton rotatif d'avant : un curseur système n'en a pas, le menu le garde.
-            .contextMenu {
-                Button("Revenir à \(PanelFormat.decibels(BridgeState.defaultMasterVolumeDB))") {
-                    state.masterVolumeDB = BridgeState.defaultMasterVolumeDB
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                PanelVolumeSlider(
+                    decibels: masterBinding, isMuted: $state.isMuted, range: BridgeSettings.Limits.masterDB
+                )
+                // Le double-clic du bouton rotatif d'avant : le menu le garde.
+                .contextMenu {
+                    Button("Revenir à \(PanelFormat.decibels(BridgeState.defaultMasterVolumeDB))") {
+                        state.masterVolumeDB = BridgeState.defaultMasterVolumeDB
+                    }
                 }
+                .help("Volume de toutes les enceintes. Clic droit : revenir au niveau de départ.")
+                PanelMuteButton(isMuted: $state.isMuted)
             }
-            .help("Volume de toutes les enceintes. Clic droit : revenir au niveau de départ.")
-            Image(systemName: "speaker.wave.3.fill")
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-            PanelMuteButton(isMuted: $state.isMuted)
         }
-        .padding(.vertical, 2)
     }
 
     // MARK: - Sorties
 
     private var outputsHeader: some View {
         HStack(spacing: 6) {
-            Text("Sorties")
+            Text("Enceintes")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
             Spacer()
             // Le même cadre avec ou sans le témoin : la recherche revient régulièrement, et la ligne
             // ne doit pas tressauter à chaque fois.
@@ -211,16 +233,18 @@ struct BridgeSidebar: View {
     private var outputs: some View {
         if state.outputs.isEmpty {
             emptyOutputs
+                .windowCard(isRaised: false)
         } else {
-            ForEach(state.outputs) { output in
-                OutputRow(
+            // L'ordre du panneau : celles qui exigent une intervention passent en fin de liste.
+            ForEach(PanelSpeakerOrder.sorted(state.outputs)) { output in
+                SpeakerCard(
                     output: output,
                     effectiveGainDB: state.effectiveGainDB(for: output),
                     listeningCompensationMS: state.listeningCompensationMS(for: output),
                     listeningPlaceName: state.listeningPlaceName,
                     stereoPartnerNames: state.stereoPartners(of: output).map(\.displayName),
                     isAudible: state.captureAlert == nil && !state.isMuted,
-                    setEnabled: { state.setEnabled($0, for: output) }
+                    toggle: { state.toggleEnabled(output) }
                 )
             }
         }
@@ -261,24 +285,62 @@ struct BridgeSidebar: View {
         .padding(.vertical, 16)
     }
 
-    // MARK: - Ce Mac
+    // MARK: - Pied
 
-    @ViewBuilder
-    private var macOptions: some View {
-        // À ne pas confondre avec le silence des enceintes, à côté du master : celle-ci éteint la sortie
-        // du Mac, et les enceintes continuent de jouer.
-        PanelOptionToggle(
-            title: "Couper le son du Mac",
-            detail: "Les enceintes continuent de jouer.",
-            isOn: $state.muteLocalOutput
-        )
-        .disabled(state.selectedSource.tapMode == nil)
-        .help(
-            "Éteint la sortie de ce Mac, les enceintes continuent de jouer. Ne s'applique "
-                + "qu'à la capture du son système ou d'une application. Pendant une "
-                + "diffusion, le changer la relance."
-        )
-        PanelSystemVolumeOption(state: state)
-        PanelVideoSyncOption(state: state)
+    /// Ce qui se règle une fois : les options du Mac, et le diagnostic qui détaille l'état.
+    private var footer: some View {
+        HStack(spacing: 4) {
+            Button {
+                showsMacOptions.toggle()
+            } label: {
+                Label("Options", systemImage: "gearshape")
+            }
+            .help("Options du Mac : son du Mac, touches de volume, calage des vidéos")
+            .popover(isPresented: $showsMacOptions, arrowEdge: .top) {
+                MacOptions(state: state)
+            }
+            Spacer()
+            Button(action: showDiagnostics) {
+                Label("Diagnostic", systemImage: "waveform.path.ecg")
+            }
+            .help("Diagnostic : compteurs de la capture et de chaque enceinte")
+        }
+        .buttonStyle(.borderless)
+        .labelStyle(.titleAndIcon)
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, WindowMetrics.margin + WindowMetrics.cardPadding)
+        .padding(.vertical, 10)
+    }
+}
+
+/// Les options du Mac, dans la fenêtre surgissante du pied de la barre latérale : les mêmes que celles du
+/// panneau de la barre de menus, sur les mêmes réglages.
+struct MacOptions: View {
+    @Bindable var state: BridgeState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Ce Mac")
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+            // À ne pas confondre avec le silence des enceintes, à côté du volume général : celle-ci éteint
+            // la sortie du Mac, et les enceintes continuent de jouer.
+            PanelOptionToggle(
+                title: "Couper le son du Mac",
+                detail: "Les enceintes continuent de jouer.",
+                isOn: $state.muteLocalOutput
+            )
+            .disabled(state.selectedSource.tapMode == nil)
+            .help(
+                "Éteint la sortie de ce Mac, les enceintes continuent de jouer. Ne s'applique "
+                    + "qu'à la capture du son système ou d'une application. Pendant une "
+                    + "diffusion, le changer la relance."
+            )
+            PanelSystemVolumeOption(state: state)
+            PanelVideoSyncOption(state: state)
+        }
+        .padding(16)
+        .frame(width: 340)
     }
 }

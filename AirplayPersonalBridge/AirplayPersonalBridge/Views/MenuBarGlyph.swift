@@ -462,6 +462,8 @@ struct PanelStatusChip: View {
     let status: MenuBarStatus
     /// Rien ne signale de silence : on peut laisser le glyphe respirer.
     let isAudible: Bool
+    /// Celui du panneau par défaut ; la fenêtre le prend plus grand, en tête de sa barre latérale.
+    var diameter: CGFloat = PanelMetrics.pastille
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Le contenu d'un `MenuBarExtra` peut survivre à la fermeture du panneau : sans cette garde,
     /// l'animation continuerait de tourner pour personne.
@@ -473,12 +475,18 @@ struct PanelStatusChip: View {
             // Le point d'exclamation, seule marque du lot, se prend à plus grande échelle pour peser
             // autant que les cinq barres.
             marks
-                .frame(width: status == .trouble ? 24 : 18, height: status == .trouble ? 22 : 16)
+                .frame(
+                    width: (status == .trouble ? 24 : 18) * markScale,
+                    height: (status == .trouble ? 22 : 16) * markScale
+                )
                 .foregroundStyle(foreground)
         }
-        .frame(width: PanelMetrics.pastille, height: PanelMetrics.pastille)
+        .frame(width: diameter, height: diameter)
         .accessibilityHidden(true)
     }
+
+    /// Les marques gardent leur proportion dans la pastille, quelle que soit sa taille.
+    private var markScale: CGFloat { diameter / PanelMetrics.pastille }
 
     @ViewBuilder
     private var marks: some View {

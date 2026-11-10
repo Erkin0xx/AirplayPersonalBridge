@@ -161,6 +161,24 @@ struct MainWindowExport {
                 to: directory.appending(path: "fenetre-application-attendue-son-coupe-\(suffix).png")
             )
 
+            // Les fenêtres surgissantes, seules : un rendu hors écran ne les ouvre pas.
+            let settings = Self.state(.streaming)
+            if let geneva = settings.outputs.first(where: { $0.id == Self.genevaID }) {
+                try writeWindow(
+                    SpeakerSettings(
+                        output: geneva, effectiveGainDB: settings.effectiveGainDB(for: geneva),
+                        listeningCompensationMS: settings.listeningCompensationMS(for: geneva),
+                        listeningPlaceName: settings.listeningPlaceName
+                    ),
+                    scheme: scheme, size: CGSize(width: 330, height: 330),
+                    to: directory.appending(path: "reglages-enceinte-\(suffix).png")
+                )
+            }
+            try writeWindow(
+                MacOptions(state: settings), scheme: scheme, size: CGSize(width: 340, height: 300),
+                to: directory.appending(path: "options-mac-\(suffix).png")
+            )
+
             // La feuille de diagnostic, seule.
             try writeWindow(
                 DiagnosticsView(state: .preview()), scheme: scheme, size: CGSize(width: 520, height: 640),
