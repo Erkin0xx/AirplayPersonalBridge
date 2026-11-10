@@ -3,13 +3,13 @@
 Un AudioServerPlugIn (pilote Core Audio en espace utilisateur, chargé par `coreaudiod`) qui ajoute au Mac
 une sortie nommée **« AirPlay Personal Bridge »**. Elle se présente comme une sortie 48 kHz stéréo
 float32, **jette tout ce qu'on lui envoie**, et annonce dans `kAudioDevicePropertyLatency` le retard réel
-de la diffusion vers les enceintes (~2,3 s).
+de la diffusion vers les enceintes (~0,45 s depuis le 2026-11-10, ~2,3 s avant).
 
 ## Pourquoi
 
 Pendant une diffusion, les applications jouent sur une sortie du Mac qui annonce quelques millisecondes
-de latence, alors que le son sort des enceintes ~2,3 s plus tard. Les lecteurs vidéo calent l'image sur
-la latence annoncée : l'image part donc ~2,3 s avant le son. Chromium (donc Dia) retarde l'image de
+de latence, alors que le son sort des enceintes ~0,45 s plus tard. Les lecteurs vidéo calent l'image sur
+la latence annoncée : l'image part donc ~0,45 s avant le son. Chromium (donc Dia) retarde l'image de
 `kAudioUnitProperty_Latency` + `kAudioDevicePropertyLatency` + `kAudioStreamPropertyLatency`, **sans** le
 safety offset. Un agrégat Core Audio ne sait pas annoncer cette latence (il la range dans le safety
 offset) : d'où un pilote. Détails et mesures : `CLAUDE.md`, « Retard de bout en bout et vidéo », et l'ADR

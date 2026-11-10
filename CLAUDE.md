@@ -23,7 +23,8 @@ Ces règles valent pour tout le projet, à chaque session et à chaque jalon.
 - **Commit et push automatiques en fin de tour** (décidé le 2026-08-06) : un hook `Stop`
   déclare `.claude/auto-commit.sh`, qui commite et pousse tout ce qui a changé, sans
   confirmation. Conséquences à connaître :
-  - l'historique contient des commits `auto: …` intermédiaires, **qui ne sont pas des
+  - l'historique contient des commits intermédiaires `chore(auto): checkpoint …` (`auto: …` avant le
+    2026-11-09), **qui ne sont pas des
     commits de clôture de jalon** — `PROGRESS.md` reste la source de vérité sur l'état réel ;
   - le script ne fait rien si l'arbre est propre (jamais de commit vide) ;
   - `touch .claude/skip-auto-commit` suspend le mécanisme sans toucher au hook. **À poser dès que
@@ -579,7 +580,7 @@ Ce qui suit vient des commits 824f16d à 0cf8a31, puis de la session de test mat
   - **Une paire stéréo n'a qu'un seul volume** : le dernier `SET_PARAMETER volume` reçu par l'un vaut pour les deux (constaté par
     Baptiste). D'où les groupes de volume par `tsid` (`VolumeGroups`) : même volume AirPlay pour toute la paire, celui du plus fort, et
     l'écart en gain numérique sur la copie de chaque sender (`OutputGainStage`), **compté sur l'échelle du fil** (2 dB d'interface =
-    1 dB AirPlay). Le gain numérique s'entend après le délai de restitution de 2 s, le volume AirPlay sans doute aussitôt.
+    1 dB AirPlay). Le gain numérique s'entend après le délai de restitution (0,4 s depuis le 2026-11-10), le volume AirPlay sans doute aussitôt.
     **Jamais −144 pour couper un seul membre** : le silence par enceinte est numérique.
   - Accepte le transitoire, `/pair-pin-start` inutile. **Pas d'`Audio-Latency`** au `RECORD`. Annonces `0xD4` à
     NTP − émission ≈ 0. Aucune requête sur le canal d'événements en session.
@@ -680,7 +681,8 @@ Ce qui suit vient des commits 824f16d à 0cf8a31, puis de la session de test mat
   groupe est quelle enceinte. Le premier groupe est le son direct, les suivants des réflexions.
 - **Valeurs mesurées à table** (son direct, écart à l'instant attendu, constante commune comprise) : Geneva +298 ms
   (sans la compensation de 0cf8a31 ; +206 avec), Salon +290 ms, Salon (2) de +267 à ~+307 ms en ~40 s de convergence.
-  Écart entre enceintes ≤ 17 ms, mesuré enceinte par enceinte. Aucun écho entendu à trois.
+  Écart entre enceintes ≤ 17 ms, mesuré enceinte par enceinte. Aucun écho entendu à trois. **Depuis la compensation de
+  `4be98a9`, +40 à +47 ms**, écart 6,4 ms (2026-11-09, encore à 2 s de délai) : voir « Retard de bout en bout et vidéo ».
 - **Repère du script** : une salve sur cinq est doublée **250 ms** plus tard. Une enceinte en retard d'environ 250 ms
   se confond avec ces doublures : replier l'enregistrement modulo 2 s pour lever le doute.
 - **Pièce calme indispensable** : une vidéo, une télé, une conversation noient les salves dans la bande des 3 kHz.
@@ -690,24 +692,47 @@ Ce qui suit vient des commits 824f16d à 0cf8a31, puis de la session de test mat
   la seule forme sans ambiguïté pour Baptiste.
 - **`log` est une commande interne de zsh** : appeler `/usr/bin/log show …`, sinon « too many arguments ».
 - **Fausse alerte « SILENCE STRICT … autorisation perdue ? »** quand rien ne joue : des processus `python` gardent un
-  flux de sortie ouvert et muet, et sont réputés « jouer » (`./audiocap --list`).
+  flux de sortie ouvert et muet, et sont réputés « jouer » (`./audiocap --list`). Les démons et outils hors des dossiers
+  d'applications n'en déclenchent plus depuis le 2026-11-09 (`AudioProcessClassifier`).
 - **Pendant une session vers les HomePod, l'Apple TV perd sa sortie Home cinéma**, et la reprend ~1 s après la fin.
 
-## Retard de bout en bout et vidéo — relevés du 2026-11-03
+## Retard de bout en bout et vidéo
 
-Recherche seule : rien de cela n'est implémenté, ni essayé sur les enceintes.
+Relevés du 2026-11-03, implémentés et mesurés les 2026-11-09 et 10 : ADR `014` et `015`, détail dans `docs/retard_2s_notes.md`.
 
-- **Les 2 s sont un choix** : `latencyFrames` = 88 200 dans les deux senders et `playoutDelaySeconds` = 2 dans l'horloge. Ils se
-  compensent dans `syncAnchorUnixTime` : les changer exige de les bouger ensemble.
-- **Le +290 ms du micro vient probablement de 11 025 trames (0,25 s) que le récepteur ajoute à la latence annoncée** : décrit par
-  OwnTone (`AIRPLAY_AUDIO_LATENCY_MS`) d'après shairport-sync, et par libraop. Hypothèse, non isolée par une mesure.
+- **Une seule constante : `SharedPlaybackClock.defaultPlayoutDelaySeconds` = 0,4 s** (2 s jusqu'au 2026-11-10). Latence visée et
+  annoncée des deux senders (`SyncLatency`), ancrage et `VideoSyncLatency` (0,445 s) en découlent. Plus aucun `88_200` dans les
+  senders. `latencyMin`/`latencyMax` du `SETUP` AirPlay 2 restent en dur (11 025 et 88 200).
+- **Les récepteurs ajoutent 11 025 trames (0,25 s) à la latence annoncée, Geneva comme HomePod** : décrit par OwnTone et libraop,
+  vu dans Airfoil (1,75 s annoncées pour 2,0 s appliquées), **mesuré** au micro le 2026-11-09 (+290 → +40 à +47 ms). D'où
+  `ReceiverAddedLatency.default` = 11 025 pour les deux familles. Le paquet de synchro annonce la latence visée − 11 025, et
+  **l'instant NTP reste calculé sur la latence visée entière** : le calculer sur l'annoncée annulerait le gain. Compenser une
+  seule famille mettrait Geneva et HomePod à 0,25 s l'une de l'autre. Ainsi compensée, la Geneva démarre 8 à 20 ms en avance et
+  se cale en ~45 s, cause inconnue.
+- **Paliers du délai entendus le 2026-11-10** : 0,5 et 0,4 s tiennent, 0,3 s décroche, 0,25 s « bugue de fou ». Rien n'est mesuré
+  à 0,4 s (ni endurance, ni capture, ni clics). Au premier craquement, remonter à 0,5 s.
 - **Pourquoi l'image est en avance** : les applications jouent sur les haut-parleurs du Mac, qui annoncent 17 ms (`device` 60 +
-  `safety` 48 + `stream` 690 trames à 48 kHz). Elles ignorent les ~2,3 s de la diffusion.
+  `safety` 48 + `stream` 690 trames à 48 kHz). Elles ignorent le retard de la diffusion.
 - **Un agrégat ne sait pas annoncer de latence aux applications.** `kAudioSubDeviceExtraOutputLatencyKey` à 2,3 s (sonde sur fichier
   silencieux, agrégat privé et public) : la valeur va dans le `safety offset`, `kAudioDevicePropertyLatency` reste à 60, l'horodatage
   de sortie reste à 12 ms (IOProc et AUHAL), AVPlayer ne bouge pas (horloge partie à ~0,1 s, périphérique bien en marche). L'agrégat
   n'expose pas non plus de volume virtuel : les touches du Mac ne le piloteraient pas. Firefox lit `dev + stream` (`cubeb_audiounit`),
-  donc pas le `safety offset`. Reste à essayer : une sortie virtuelle (AudioServerPlugIn) qui annonce `kAudioDevicePropertyLatency`.
+  donc pas le `safety offset`. D'où la sortie virtuelle.
+- **La sortie virtuelle `Drivers/APBOutput`** (AudioServerPlugIn en C) jette le son et annonce dans `kAudioDevicePropertyLatency`
+  ce que l'app écrit dans la propriété `'apbL'` (`CFNumber`, trames, 0 à 480 000), gardée par le stockage de l'hôte : le
+  plug-in, dans le bac à sable de `coreaudiod`, ne lit aucun fichier. Pendant une diffusion par tap, l'app en fait la sortie par
+  défaut (`VideoSyncSwitch`), sortie d'origine mémorisée dans `settings.json` **avant**, rendue à l'arrêt ou au lancement suivant.
+  **Mesuré** : Chrome 157 journalise « Large rendering delay (2.34 s) » et retarde son horloge de 2,28 s, sans image perdue ;
+  AVPlayer 2,41 s. **Vu** par Baptiste dans Dia, sur les trois enceintes. Installation : `Drivers/APBOutput/build.sh`, puis
+  `sudo scripts/install-driver.sh` par Baptiste. État : `swift run audiocap --video-sync`.
+- **L'agrégat du tap a pour horloge la sortie des effets sonores** (`kAudioHardwarePropertyDefaultSystemOutputDevice`,
+  `ProcessTapCapture.currentClockDeviceUID`), pas la sortie par défaut : le pilote n'entre jamais dans l'agrégat, et le tap ne
+  prend aucun retard (clic capté en 47 à 65 ms, pilote en sortie par défaut ou non).
+- **Avant de toucher à la sortie par défaut, vérifier que rien ne joue** (`./audiocap --list`) : le son de Baptiste partirait
+  dans le pilote, qui le jette. C'est arrivé le 2026-11-09.
+- **Mesurer Chromium sans rien afficher** : Chrome 157 en `--headless=new`, profil temporaire, domaine CDP `Media`
+  (`scripts/video-sync/`). **Jamais une seconde instance de Dia** : même avec un profil temporaire, elle a ouvert chez Baptiste
+  l'écran de connexion.
 - **Dia (1.56, Chromium 157) retarde l'image de la latence annoncée par la sortie, safety offset exclu** (code Chromium lu le
   2026-11-09 : `media/audio/mac/core_audio_util_mac.cc`, `media/audio/apple/audio_auhal.cc`). Somme `kAudioUnitProperty_Latency` +
   `kAudioDevicePropertyLatency` + `kAudioStreamPropertyLatency` du premier flux, **lue à l'ouverture du flux** (`AUHALStream::Open`),
@@ -724,8 +749,10 @@ Recherche seule : rien de cela n'est implémenté, ni essayé sur les enceintes.
   | Geneva, 202 442 paquets (1 060) | 24 ms | 168 ms | 295 ms | 0 | 0 | 0 |
 
   **Rythme relevé avec un tampon de 2 s** : rien ne dit qu'un HomePod garderait les mêmes délais avec un tampon plus court.
-- **iPhone** : le récepteur AirPlay du Mac est éteint (rien sur 5000/7000). Audio Hijack a une source « AirPlay System Receiver », avec
-  un bug de capture sous macOS 26 contourné en 4.5.4. Que notre tap global voie ce son reste à essayer.
+- **Apple TV → Mac → enceintes** (entendu le 2026-11-10) : récepteur AirPlay du Mac allumé (Réglages > Général > AirDrop et
+  Continuité), l'Apple TV propose le Mac comme sortie et **le tap global capte ce son**, Geneva comprise. Écho si l'Apple TV sort
+  aussi sur les HomePod : ne cocher que le Mac. Ce récepteur occupe le port 5000 : **les mocks ne démarrent plus** tant qu'il est
+  allumé. L'iPhone passerait par le même chemin, pas essayé.
 
 ## Plan et capture de Baptiste
 
@@ -744,6 +771,18 @@ Recherche seule : rien de cela n'est implémenté, ni essayé sur les enceintes.
 ## Widget et app
 
 - **Barre de menus, pas WidgetKit** : la capture doit tourner dans un processus vivant. Voir l'ADR `005`.
+- **Fenêtre au style Liquid Glass** (2026-11-10) : `NavigationSplitView`, barre latérale `BridgeSidebar` en verre, plan prolongé
+  sous elle (`backgroundExtensionEffect`), inspecteur natif (`.inspector`, `PlanInspector`), Diffuser/Arrêter en
+  `.glassProminent`, diagnostic en `Form`. Le thème shadcn (`DesignSystem.swift`) et `RotaryKnob` sont retirés : couleurs, typos
+  et contrôles du système. Rendu : `WINDOW_PNG_DIR=<dossier> swift test --filter MainWindowExport`, verres de l'app et du système
+  remplacés par un aplat (`windowSimulatesGlass`, `WindowSnapshot`).
+- **Diffuser se déclenche par ⌘↩, jamais par `.defaultAction`** : Retour valide un champ de l'inspecteur, et cette validation ne
+  doit pas faire partir le son.
+- **Un agent ne peut pas faire de capture d'écran** sur ce Mac (`screencapture` : « could not create image from display ») : le
+  verre se juge par Baptiste, dans l'app. Le menu « Écoute » de la barre d'outils sort vide dans les rendus, sans qu'on sache
+  s'il l'est à l'écran.
+- **Paire stéréo** : un geste vaut pour les deux membres (`StereoPairs`), et la paire entre en session d'un seul coup. Un membre
+  qui apparaît rejoint sa paire si elle est cochée ; jamais l'inverse (`joinCheckedPairs`).
 - **`ImageRenderer` barre les contrôles AppKit** : le panneau se rend dans une fenêtre hors écran,
   `MENUBAR_PNG_DIR=<dossier> swift test --filter MenuBarPanelExport`. **`glassEffect` ne dessine rien avec
   `cacheDisplay`** : `panelSimulatesGlass` le remplace dans ces rendus, et le verre ne se juge que dans l'app réelle.
@@ -779,7 +818,9 @@ scripts/install-app.sh --open  # compile en Release, signe, remplace l'app dans 
 - **Xcode signe en ad-hoc** : le bundle Debug porte son propre identifiant (`….AirplayPersonalBridge.debug`), pour ne pas
   écraser l'autorisation de l'app installée.
 - **L'app installée quitte sur SIGTERM** (`TerminationSignal.swift`), l'AppleEvent `quit` exigeant un consentement
-  Automation (-1744). Arrêt propre borné à 5 s, avec `TEARDOWN`.
+  Automation (-1744). Arrêt propre borné à 5 s (`QuitSequence`) : `TEARDOWN` et capture, puis sortie, volume et silence du Mac
+  rendus, puis `sudo -n killall coreaudiod` (règle `/etc/sudoers.d/airplay-bridge` posée par `install-driver.sh`), 1 s au plus.
+  **Chaque réinstallation coupe donc le son du Mac une à deux secondes.** Sans la règle : une ligne OSLog, et l'app quitte.
 - **OpenSSL est lié en statique** (`libcrypto.a`) : plus de référence à `/opt/homebrew` à l'exécution, mais toujours requis à
   la compilation. Le lien exige de renommer `poly1305_init` dans `CChachaPoly`, seul symbole en conflit.
 
@@ -799,6 +840,10 @@ scripts/install-app.sh --open  # compile en Release, signe, remplace l'app dans 
   de source à une connexion reçue par un `NWListener` du même process est refusée 30 s (`EADDRINUSE`), `restart()` inutile ;
   et `NWListener` refuse parfois un port libre. Réessayer ou allonger une attente ne soigne rien. L'app n'a aucune écoute, elle
   n'y est pas exposée. Un `waitUntilExit` a figé un passage 14 min : attendre la fin de fichier du tube.
+- **Aucun plafond de temps serré sur ce qui reprend sur le MainActor** : toutes les suites de `BridgeAppTests` le partagent, et au
+  départ d'une suite complète une reprise y attend jusqu'à ~2 s. Trois tests de la fermeture échouaient ainsi 3 fois sur 3, verts
+  isolément. Plafond de quelques secondes (`QuitSequenceTests.mainActorSlack`), et le comportement fautif rendu bien plus lent
+  (part de 10 s, fils qui dort 10 s) pour qu'une mutation se voie encore.
 - **Un socket lié qui n'écoute pas ne simule pas un port fermé** : le noyau ignore le SYN au lieu de le refuser, et la connexion
   reste en préparation sans fin.
 - **Les annonces Bonjour des tests restent sur l'interface locale, sous un type privé** (`_apbtest._tcp`) : la suite ne fait

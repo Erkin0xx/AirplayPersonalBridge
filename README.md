@@ -6,7 +6,24 @@ Capture le son du Mac (système global, application précise, ou entrée physiqu
 diffuse **simultanément** vers une enceinte **AirPlay 1** (Geneva) et des enceintes
 **AirPlay 2** (HomePod), avec volume indépendant par sortie et compensation du décalage
 temporel entre elles. Elle se pilote depuis une icône dans la barre de menus : on coche une
-enceinte, et ça joue dessus.
+enceinte, et ça joue dessus. Les vidéos lues sur le Mac restent calées sur le son des enceintes.
+
+<p align="center">
+  <img src="docs/screenshots/panneau-diffusion-sombre.png" width="348" alt="Panneau de la barre de menus pendant une diffusion vers trois enceintes">
+  &nbsp;
+  <img src="docs/screenshots/panneau-options-sombre.png" width="348" alt="Le même panneau, options ouvertes">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/fenetre-diffusion-sombre.png" alt="Fenêtre principale : enceintes dans la barre latérale, plan du salon à l'échelle">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/fenetre-inspecteur-clair.png" alt="Fenêtre principale en clair, inspecteur ouvert sur la Geneva">
+</p>
+
+*Rendus hors écran tirés du code, avec des données d'exemple (voir « Développement »). Le verre Liquid Glass ne
+se rend pas hors écran : il y est remplacé par un aplat de même forme.*
 
 ## Pourquoi ce projet
 
@@ -25,18 +42,33 @@ l'approche reprise ici, avec deux senders AirPlay implémentés en interne.
 | 2 | Sender RAOP (Geneva) | ✅ validé sur la vraie Geneva |
 | 3 | Sender AirPlay 2 (HomePod) | ✅ validé sur les vrais HomePod, paire stéréo en deux sessions ; Apple TV appairée mais muette |
 | 4 | Synchronisation et dérive | ✅ validé sur le matériel : ≤ 17 ms entre enceintes au micro, aucun écho à l'oreille |
-| 5 | Interface et barre de menus | ✅ clos le 2026-11-02, avec des points ouverts (voir `PROGRESS.md`) |
+| 5 | Interface et barre de menus | ✅ clos le 2026-11-02 sur le matériel |
+| 5, suite | Calage vidéo, retard réduit à ~0,45 s, refonte Liquid Glass | 🔶 en cours depuis le 2026-11-09 : vu et entendu en partie, écoutes et mesures à finir |
 
 **Ce qui joue réellement** : le 2026-11-02, depuis l'app, la Geneva et les deux HomePod ensemble, en vraie stéréo,
 sans écho à l'oreille. Au micro, à table, les trois enceintes arrivent à moins de 17 ms les unes des autres, sous le
-seuil de perception de 20 à 30 ms, sans aucun réglage manuel. Une heure de diffusion continue vers les trois enceintes : 0 erreur, dérive résiduelle sous 0,05 ms, plus de
-5 000 paquets perdus sur le Wi-Fi tous renvoyés. La Geneva, mise en veille en cours de route par un signal d'essai trop
-faible, a repris seule à son retour, sans que les HomePod s'en aperçoivent.
+seuil de perception de 20 à 30 ms, sans aucun réglage manuel. Une heure de diffusion continue vers les trois enceintes :
+0 erreur, dérive résiduelle sous 0,05 ms, plus de 5 000 paquets perdus sur le Wi-Fi tous renvoyés.
 
-**Ce qui reste ouvert** : la paire stéréo supporte mal des sessions ouvertes à des moments différents (cocher un
-HomePod pendant que l'autre joue), l'Apple TV ne restitue rien, et les pannes provoquées (Geneva débranchée, Wi-Fi
-coupé) ainsi que l'écoute au canapé restent à essayer. Le détail, avec le niveau de preuve de chaque point, est dans
-[`PROGRESS.md`](PROGRESS.md).
+Depuis :
+
+- **Vidéo** (2026-11-09) : image et son calés dans Dia sur les trois enceintes, vus par Baptiste sur une vidéo
+  flash-bip et sur une vraie vidéo. Chrome 157 retarde bien son image de la latence que l'app annonce (mesuré).
+- **Retard de bout en bout** (2026-11-09 et 10) : ramené de ~2,3 s à ~0,45 s. Les 0,25 s que les récepteurs ajoutaient
+  sont compensés, mesuré au micro sur chaque enceinte (+290 ms → +40 à +47 ms, 6 ms d'écart entre enceintes). Le délai
+  de restitution passe de 2 s à 0,4 s, choisi à l'oreille (0,3 s décroche).
+- **Apple TV → Mac → enceintes** (2026-11-10) : avec le récepteur AirPlay du Mac allumé, l'Apple TV sort sur le Mac, et
+  l'app relaie ce son vers les trois enceintes, Geneva comprise (entendu).
+
+**Ce qui reste ouvert** :
+
+- le palier de 0,4 s n'a été jugé qu'à l'oreille, quelques minutes, sans endurance, capture réseau ni mesure aux clics ;
+- la nouvelle interface n'a été vue qu'en rendus hors écran ;
+- la paire stéréo ouverte d'un seul geste n'a été validée que par les tests ;
+- l'Apple TV ne restitue rien en direct ;
+- les pannes provoquées et l'écoute au canapé restent à essayer.
+
+Le détail, avec le niveau de preuve de chaque point, est dans [`PROGRESS.md`](PROGRESS.md).
 
 ## L'application
 
@@ -44,8 +76,12 @@ Prérequis : macOS 26+, Xcode, et l'OpenSSL de Homebrew pour compiler (`brew ins
 lié en statique : l'app n'en dépend plus à l'exécution.
 
 ```bash
-scripts/setup-signing.sh       # une fois : identité de signature stable, sans aucune fenêtre
-scripts/install-app.sh --open  # compile en Release, installe dans /Applications, lance
+scripts/setup-signing.sh            # une fois : identité de signature stable, sans aucune fenêtre
+scripts/install-app.sh --open       # compile en Release, installe dans /Applications, lance
+
+Drivers/APBOutput/build.sh          # pour caler les vidéos : compile et signe la sortie virtuelle
+sudo scripts/install-driver.sh      # l'installe (mot de passe administrateur), relance coreaudiod
+sudo scripts/uninstall-driver.sh    # la retire
 ```
 
 Deux autorisations à donner une fois : **Réseau local**, sans quoi aucune enceinte n'apparaît, et
@@ -57,22 +93,52 @@ l'autorisation de l'app installée.
 Dans la barre de menus :
 
 - **Enceintes** : cocher ou décocher pendant une diffusion n'affecte pas les autres. Une enceinte qui
-  exige un appairage est signalée, sans être cochée d'office.
+  exige un appairage est signalée, sans être cochée d'office. Une enceinte cochée mais éteinte reste affichée,
+  « Introuvable sur le réseau — éteinte ? ».
+- **Une paire stéréo de HomePod** se coche d'un seul geste, comme une enceinte : les deux membres entrent ensemble
+  dans la diffusion, chacun ne joue que son canal. Chacun garde son propre volume, bien que la paire n'en ait qu'un
+  côté HomePod : l'écart est appliqué dans le signal.
 - **Volume** : un master, un réglage et un bouton silence par enceinte, et un silence général. Aucun silence ne
   déconnecte les enceintes. Pendant une diffusion, les touches volume et silence du Mac règlent le master, le Mac
-  se tait, et il retrouve son réglage à l'arrêt (désactivable dans Options).
-- **Une paire stéréo de HomePod** : cocher les deux avant de lancer la diffusion. Chacun ne joue que son canal, et
-  chacun garde son propre volume, bien que la paire n'en ait qu'un côté HomePod : l'écart est appliqué dans le signal.
+  se tait, et il retrouve son réglage à l'arrêt.
 - **Tonalité de la Geneva** : un tiroir sous sa rangée règle les basses (0 à +12 dB, protégées sous 30 Hz, sans
   pompage) et les aigus (0 à −9 dB). À 0 dB, le son est intact.
 - **Icône** : elle ondule pendant une diffusion audible.
 - **Écoute** : deux lieux sélectionnables, « À table » par défaut et « Au canapé ». Le lieu choisi compense
   la distance de chaque enceinte, en plus du réglage manuel.
-- **Options** : source (système, application, entrée physique), « Couper le son du Mac », démarrage à
-  l'ouverture de session.
+- **Options** : source (système, application, entrée physique), « Couper le son du Mac », touches de volume du Mac,
+  « Caler l'image des vidéos », démarrage à l'ouverture de session.
 
-« Plan et réglages… » ouvre la fenêtre, avec le plan de la pièce à l'échelle, les réglages par enceinte et
-le diagnostic. L'app reste active fenêtre fermée et quitte alors le Dock.
+« Plan et réglages… » ouvre la fenêtre, au style Liquid Glass de macOS 26 :
+
+- une barre latérale en verre : état, source, volume master, et les réglages de chaque enceinte (trim, délai, tonalité,
+  silence) ;
+- le plan de la pièce à l'échelle, en pleine fenêtre ;
+- une barre d'outils native avec le bouton Diffuser/Arrêter (⌘↩) ;
+- l'inspecteur de macOS pour l'objet sélectionné ;
+- le diagnostic.
+
+L'app reste active fenêtre fermée et quitte alors le Dock.
+
+**En quittant**, l'app ferme les sessions des enceintes et arrête la capture. Elle rend ensuite au Mac sa sortie, son
+volume et son silence, puis relance `coreaudiod`. **Le son du Mac se coupe alors une à deux secondes**, y compris à chaque
+réinstallation par `install-app.sh`. Sans la règle sudoers que pose `install-driver.sh`, cette relance est sautée et l'app
+quitte quand même.
+
+## Caler l'image des vidéos
+
+Pendant une diffusion, les applications jouent sur une sortie du Mac qui annonce quelques millisecondes de latence, alors
+que le son sort des enceintes ~0,45 s plus tard : sans correction, l'image part en avance. Le pilote
+[`Drivers/APBOutput`](Drivers/APBOutput/README.md) ajoute une sortie virtuelle, « AirPlay Personal Bridge », qui jette le
+son et annonce ce retard aux applications. Pendant une diffusion, l'app en fait la sortie par défaut du Mac et rend
+l'ancienne à l'arrêt, ou au lancement qui suit un plantage. Le son réel est capté par le Process Tap, en amont : **rien ne
+change sur le fil**.
+
+- Chromium (Dia, Chrome) et AVFoundation retardent l'image de la latence annoncée.
+- Cette latence est lue à l'ouverture du flux : **une page ouverte avant la diffusion doit être rechargée**.
+- En capture d'une application précise, les autres applications jouent sur la sortie virtuelle, donc se taisent.
+- Option « Caler l'image des vidéos », active par défaut. Un choix de sortie fait en pleine diffusion (un casque) est
+  respecté.
 
 ## Architecture
 
@@ -103,13 +169,14 @@ Sources/AudioCore/          bibliothèque cœur (moteur, capture, senders) — s
   ├── RAOP/                 sender AirPlay 1 + socle partagé (RTSP, UDP, RTP, resampling)
   ├── AirPlay2/             sender AirPlay 2 (pairing, canal chiffré, RTSP, événements)
   │   └── Crypto/           wrappers Swift des primitives C
-  ├── DSP/                  renfort de basses de la Geneva
-  └── Sync/                 horloge commune, mesure de timing, correction de dérive
+  ├── DSP/                  tonalité de la Geneva
+  └── Sync/                 horloge commune, latences, mesure de timing, correction de dérive
 Sources/CCrypto/            bibliothèques C vendues (SRP, X25519, Ed25519, ChaCha20-Poly1305)
-Sources/audiocap/           exécutable CLI de validation (dump .wav, diffusion, logs)
+Sources/audiocap/           exécutable CLI de validation (dump .wav, diffusion, mesures)
+Drivers/APBOutput/          sortie virtuelle Core Audio (AudioServerPlugIn en C) du calage vidéo
 Tests/                      tests du cœur et de l'app
-scripts/                    signature, installation, génération de l'icône
-docs/                       cahier des charges, guide d'installation, prompt des tests matériels
+scripts/                    signature, installation de l'app et du pilote, mesures, icône
+docs/                       cahier des charges, guides, prompts des sessions de test, captures d'écran
 tools/                      émulateurs et venvs Python (gitignoré)
 ```
 
@@ -131,6 +198,13 @@ swift test       # tests du cœur et de l'app
 ```
 
 Seul `xcodebuild` compile le point d'entrée `@main` de l'app.
+
+Les images de ce README se régénèrent sans lancer l'app :
+
+```bash
+MENUBAR_PNG_DIR=<dossier> swift test --filter MenuBarPanelExport   # le panneau, chaque situation
+WINDOW_PNG_DIR=<dossier>  swift test --filter MainWindowExport     # la fenêtre, chaque situation
+```
 
 ### Lancer les émulateurs de récepteurs
 
@@ -162,6 +236,7 @@ Sans autorisation ni bundle, une sinusoïde à la place de la capture (−50 dBF
 swift run audiocap --tone --airplay Geneva-Mock --volume -30 10
 swift run audiocap --browse     # récepteurs AirPlay 1 (_raop._tcp)
 swift run audiocap --browse2    # récepteurs AirPlay 2 (_airplay._tcp), avec leurs bits
+swift run audiocap --video-sync # sortie virtuelle présente ? latence annoncée ? sortie par défaut ?
 ```
 
 `--browse2` affiche les **bits de fonctionnalité** annoncés par le récepteur, dont son mode
@@ -192,8 +267,13 @@ Mesurer le calage au micro du Mac, et tester gauche/droite :
 ```bash
 ./audiocap --clicks --airplay Geneva --airplay2 Salon --record-input mesure.wav 60   # salves datées
 scripts/measure-clicks.py mesure.wav                                                 # écart par enceinte
+VOLUME=-10 scripts/measure-receiver-latency.sh   # chaque enceinte, avec et sans compensation (~11 min)
 ./audiocap --channel-test --airplay2 Salon 30    # bip grave à gauche, deux aigus à droite
 ```
+
+`--receiver-latency` et `--receiver-latency2` règlent la compensation de l'ajout des récepteurs (0 rend le fil
+d'avant le 2026-11-09). `--video-latency <s|auto>` et `--default-output <uid|bridge>` pilotent la sortie virtuelle à la
+main.
 
 **Toujours passer par `./audiocap`**, jamais par le binaire interne du bundle : macOS
 attribue l'autorisation à l'identité de l'**app**, et un binaire lancé directement depuis le
@@ -229,8 +309,15 @@ mémoire du projet d'un jalon à l'autre.
 Les sorties partagent une **horloge de restitution commune** : elle traduit un numéro de trame de
 capture en instant de restitution attendu, et chaque sender en tire l'ancrage NTP qu'il annonce au
 récepteur. C'est le récepteur qui cale sa restitution dessus — le mécanisme natif d'AirPlay, pas une
-mesure de trajet réseau. Aucun sender ne sait que les autres existent. Reste à vérifier à l'écoute que
-les récepteurs réels honorent bien cet ancrage.
+mesure de trajet réseau. Aucun sender ne sait que les autres existent. Les vrais récepteurs honorent cet
+ancrage : moins de 17 ms entre enceintes au micro.
+
+**Le délai de restitution vaut 0,4 s**, et c'est la seule constante : la latence annoncée par chaque sender,
+l'ancrage et la latence de la sortie virtuelle en découlent. Les récepteurs ajoutent 11 025 trames (0,25 s) à la
+latence qu'on leur annonce : elles en sont retranchées. Le retard de bout en bout est donc d'environ 0,45 s, contre
+~2,3 s jusqu'au 2026-11-09. Si le son craque sur un Wi-Fi chargé, remonter le délai à 0,5 s
+(`SharedPlaybackClock.defaultPlayoutDelaySeconds`). Raisonnement et mesures :
+[`docs/retard_2s_notes.md`](docs/retard_2s_notes.md).
 
 Le décalage manuel et la compensation du lieu d'écoute n'insèrent aucun échantillon : ils décalent
 l'instant annoncé, donc s'appliquent sans rupture de flux. Ils restent un fine-tune et un filet de
@@ -248,6 +335,10 @@ un fondu de 32 trames — la technique de Snapcast.
   des émulateurs, checklists de validation par jalon.
 - [Prompt des tests matériels](docs/prompt_tests_materiel.md) — le déroulé des essais sur le vrai
   matériel et la clôture du jalon 5.
+- [Prompt vidéo, Dia et Airfoil](docs/prompt_video_dia_airfoil.md) et [prompt du retard](docs/prompt_retard_2s.md) —
+  les deux chantiers ouverts après la clôture, et [leurs notes de mesure](docs/retard_2s_notes.md).
+- [Sortie virtuelle](Drivers/APBOutput/README.md) — le pilote du calage vidéo : ce qu'il expose, installation, temps
+  réel.
 - [`CLAUDE.md`](CLAUDE.md) — invariants recopiés littéralement et faits vérifiés sur la
   machine de dev (formats, pièges d'API, chemins de config).
 - [`PROGRESS.md`](PROGRESS.md) — journal par jalon.
@@ -260,9 +351,17 @@ un fondu de 32 trames — la technique de Snapcast.
 - **Les émulateurs ne prouvent rien sur le matériel réel.** `airplay2-receiver` est
   expérimental de son propre aveu : un handshake qui passe contre lui est un signal de
   départ, pas une garantie contre le vrai firmware Apple.
-- **L'Apple TV ne joue pas** : elle exige `pair-verify`, qui n'a jamais abouti sur elle.
-- **Les deux HomePod forment une paire stéréo, et le comportement d'un membre adressé seul reste
-  inconnu.** Ils sont aujourd'hui deux sorties séparées, sans garantie d'image gauche/droite.
+- **0,4 s de délai laisse peu de marge aux retransmissions.** Avec un tampon de 2 s, les HomePod redemandaient un
+  paquet perdu ~95 ms après son envoi en médiane, jusqu'à ~1 s au pire : un Wi-Fi chargé peut faire craquer le son.
+- **L'Apple TV ne restitue rien en direct** : `pair-verify` aboutit et la session est acceptée, mais aucun son ne
+  sort, pas plus qu'avec pyatv. Le détour par le récepteur AirPlay du Mac fonctionne, mais ce récepteur occupe le
+  port 5000 et empêche alors les mocks de démarrer.
+- **Deux sessions vers une paire stéréo ouvertes à des moments différents s'expulsent mutuellement** : c'est pourquoi
+  la paire s'ouvre d'un seul geste.
+- **Le calage vidéo dépend de ce que lit le lecteur.** Une page ouverte avant la diffusion doit être rechargée. Si
+  Chromium passe un jour à son chemin AVFoundation (désactivé par défaut sous macOS 27), il ne retardera plus l'image.
+- **La sortie virtuelle s'installe avec le mot de passe administrateur**, et chaque installation comme chaque
+  fermeture de l'app coupe le son du Mac une à deux secondes.
 - **Le debug est limité au-delà du handshake** : le trafic AirPlay 2 est chiffré.
 - **La mesure de décalage d'horloge n'a jamais produit de valeur** : shairport-sync envoie ses
   requêtes de timing à zéro. Le code est en place et testé, il attend un récepteur qui

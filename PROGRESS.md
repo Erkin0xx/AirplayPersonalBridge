@@ -4,9 +4,11 @@ Journal de progression par jalon. Voir docs/cahier_des_charges_diffusion_audio.m
 Distinguer explicitement "validé contre mock" et "validé contre matériel réel".
 
 **Statut matériel réel.** La Geneva et les deux HomePod ont joué ensemble, à l'oreille et mesurés au
-micro, le 2026-11-02, sur le code clos par `7ba75f3` : voir la clôture du jalon 5. **Ce qui suit ce commit
-n'a pas été réentendu** : voir « Après la clôture », tout à la fin. L'Apple TV n'a jamais joué. Les sections
-des jalons 1 à 4 décrivent leur état à leur date, qui précède ces essais.
+micro, le 2026-11-02, sur le code clos par `7ba75f3` : voir la clôture du jalon 5. **Depuis, le fil a changé
+deux fois** (compensation de l'ajout des récepteurs, mesurée au micro ; délai de restitution de 0,4 s, entendu
+seulement) et l'interface a été refaite (vue en rendus seulement) : les sections « Après la clôture », tout à la
+fin, donnent le niveau de preuve de chaque point. L'Apple TV n'a jamais joué en direct. Les sections des jalons
+1 à 4 décrivent leur état à leur date, qui précède ces essais.
 
 ---
 
@@ -15,13 +17,15 @@ des jalons 1 à 4 décrivent leur état à leur date, qui précède ces essais.
 | | |
 |---|---|
 | **Dernier jalon terminé** | **Jalon 5 — intégration et interface, clos le 2026-11-02 sur le vrai matériel** |
-| **Jalon en cours** | Aucun : le projet atteint son objectif. Points ouverts listés en fin de jalon 5 |
-| **Étape suivante** | À décider avec Baptiste : paire stéréo présentée comme une seule enceinte, pannes de la phase 5, écoute au canapé |
+| **Jalon en cours** | Suite du jalon 5, ouverte le 2026-11-09 (`docs/prompt_video_dia_airfoil.md`, `docs/prompt_retard_2s.md`) : calage vidéo, retard réduit à ~0,45 s, refonte Liquid Glass. **Pas encore close** |
+| **Étape suivante** | Avec Baptiste : juger la nouvelle fenêtre dans l'app ; endurance et clics à 0,4 s ; non-régression du calage vidéo (phase 1.5) ; points ouverts de la phase 3 ; puis clôture (phase 4) |
 | **Dépôt** | `github.com/Erkin0xx/AirplayPersonalBridge`, branche `main` |
 
 **L'app diffuse depuis la barre de menus vers N enceintes en parallèle**, ce qui est l'objectif
 fonctionnel du projet (CDC section 2). **Le 2026-11-02, la Geneva et les deux HomePod ont joué ensemble, en vraie
-stéréo, sans écho à l'oreille et à moins de 17 ms au micro.** Installation et lancement :
+stéréo, sans écho à l'oreille et à moins de 17 ms au micro.** Depuis le 2026-11-10, le son sort des enceintes ~0,45 s
+après avoir été joué (~2,3 s avant), et les vidéos du Mac sont calées dessus par une sortie virtuelle. Installation et
+lancement :
 
 ```
 scripts/setup-signing.sh       # une fois : identité de signature stable
@@ -1237,3 +1241,41 @@ pendant 2 s les tâches MainActor des autres suites (`periodicRounds`, `saveIsDe
 **Reste ouvert** : écoute des basses et aigus, des volumes séparés de la paire et du décalage de 2 s qu'ils impliquent ; touches du Mac en
 vraie diffusion ; rendu de l'animation. Le seuil de 9 dB à 20 Hz du brief était irréalisable avec un ordre 2 à 30 Hz (7,83 dB) : 30 Hz
 gardé, ajustable par mesure.
+
+### Après la clôture : calage vidéo, retard réduit, refonte de l'interface (2026-11-09 et 10)
+
+Deux chantiers ouverts par Baptiste après la clôture : `docs/prompt_video_dia_airfoil.md` (image en avance de ~2 s dans Dia,
+analyse d'Airfoil, points ouverts, clôture) et `docs/prompt_retard_2s.md` (réduire le retard lui-même, mené dans une session
+parallèle). Puis deux demandes à l'usage : la fermeture qui relance `coreaudiod`, et une refonte de l'interface au style Liquid
+Glass. Niveaux de preuve : **test**, **mesuré** (micro, Chrome sans fenêtre), **vu** et **entendu** (Baptiste).
+
+| Ce qui est fait | Preuve |
+|---|---|
+| **Sortie virtuelle** `Drivers/APBOutput` (AudioServerPlugIn en C) : jette le son, annonce dans `kAudioDevicePropertyLatency` la latence écrite par l'app (`'apbL'`, gardée d'une relance de `coreaudiod` à l'autre). Installée par Baptiste (`sudo scripts/install-driver.sh`). ADR 014 | **mesuré** : Chrome 157 journalise « Large rendering delay (2.34 s) » et retarde son horloge de 2,28 s, 0 image perdue ; AVPlayer 2,41 s ; le tap ne prend aucun retard (clic capté en 47 à 65 ms, pilote en sortie par défaut ou non). **Vu** : flash-bip et vraie vidéo dans Dia, sur les trois enceintes, à 2 s de délai (« ça marche impec ») |
+| **Intégration** (`VideoSyncSwitch`) : pendant une diffusion par tap, la sortie par défaut bascule sur le pilote, mémorisée avant dans `settings.json`, rendue à l'arrêt ou au lancement après un plantage. Option « Caler l'image des vidéos », active par défaut | test ; **vu** le jour même dans l'app installée |
+| **Fermeture** : `TEARDOWN`, capture arrêtée, sortie, volume et silence du Mac rendus, puis `sudo -n killall coreaudiod` (règle sudoers posée par `install-driver.sh`), le tout dans la borne de 5 s | test (ordre, échec, relance figée) ; journal « coreaudiod relancé à la fermeture » relevé à une réinstallation |
+| **Paire stéréo comme une enceinte** (`StereoPairs`) : un geste vaut pour les deux membres, la paire entre en session d'un seul coup ; les reconnexions restent isolées (invariant section 12) | test seulement, **pas entendu dans l'app** |
+| **Enceinte éteinte** : « Introuvable sur le réseau — éteinte ? », sans chevaucher la rangée suivante | test, rendu ; le défaut avait été vu par Baptiste |
+| **Fausse alerte de silence** : les démons et outils qui gardent un flux ouvert ne comptent plus comme « jouant » | test |
+| **Retard, étape 1** : la latence annoncée perd les 11 025 trames que le récepteur ajoute, l'instant NTP reste celui de la latence visée (`SyncLatency`, `ReceiverAddedLatency`). ADR 015 | **mesuré** au micro, à 2 s, enceinte par enceinte : Geneva +292 → +43 ms, « Salon » +290 → +40 ms, « Salon (2) » +296 → +47 ms ; écart entre enceintes 6,4 ms. La Geneva met ~45 s à se caler |
+| **Retard, étape 2** : délai de restitution 0,4 s (`SharedPlaybackClock.defaultPlayoutDelaySeconds`, seule constante). Retard de bout en bout ~0,45 s | **entendu** quelques minutes par palier : 0,5 et 0,4 s tiennent, 0,3 s décroche. **Ni endurance, ni capture, ni clics** à ce palier |
+| **Apple TV → récepteur AirPlay du Mac → enceintes** : le tap global capte ce son, Geneva comprise | **entendu**. Écho si l'Apple TV sort aussi sur les HomePod ; 16 sessions fermées par les HomePod au premier essai |
+| **Refonte Liquid Glass** : fenêtre en `NavigationSplitView` (barre latérale en verre, plan en pleine fenêtre sous elle, barre d'outils native avec Diffuser/Arrêter en `.glassProminent`, inspecteur natif, diagnostic en `Form`), panneau aligné sur les styles du système, silence par enceinte dans la fenêtre. Thème shadcn et bouton rotatif retirés | test, rendus hors écran (`WINDOW_PNG_DIR`, `MENUBAR_PNG_DIR`). **Le verre n'a été vu par personne** : ni rendu hors écran, ni capture d'écran possible pour un agent |
+| **Analyse statique d'Airfoil 5.12.6** (vault `airfoil-analyse.md`), sans le lancer : émetteur RAOP pur, HomePod compris ; paire stéréo en deux sessions liées (partenaire à 0,125 s, ouvertures RTSP espacées de 0,5 s) ; 1,75 s annoncées pour 2,0 s appliquées, soit les 11 025 trames ; rien de générique pour la vidéo | lecture du binaire ; elle a confirmé l'hypothèse de l'étape 1 avant la mesure |
+
+Détail de l'étape 1 et des paliers : `docs/retard_2s_notes.md`, tenu par la session « retard » et à fusionner ici à la clôture.
+
+**Tests** : suite complète, 988 tests verts deux fois de suite le 2026-11-10. Elle échouait avant, 3 fois sur 3, sur trois tests de la
+fermeture verts isolément : leurs plafonds de 0,5 à 1 s ne tenaient pas compte du MainActor, partagé par toutes les suites de l'app,
+où une reprise attend jusqu'à ~2 s au départ d'une suite complète. Plafonds portés à quelques secondes, et le comportement fautif
+rendu plus lent encore : la mutation « relance bornée par la part des sorties » fait toujours échouer les deux tests concernés.
+
+**Reste ouvert** :
+
+- **Juger le verre** dans l'app : la barre latérale au-dessus du plan, la teinte de Diffuser. Le menu « Écoute » de la barre
+  d'outils sort vide dans les rendus, sans qu'on sache s'il l'est aussi à l'écran ; « −24 dB » touche le bord de la barre latérale.
+- **À 0,4 s** : endurance de 30 min avec capture sur `en0` (demandes de retransmission, réponses arrivées trop tard), clics enceinte
+  par enceinte, convergence de la Geneva. Remonter à 0,5 s au premier craquement.
+- **Phase 1.5** : non-régression aux clics, option vidéo active puis inactive. Safari, QuickTime et Firefox avec le pilote.
+- **Phase 3** : paire cochée en décalé et ouverte d'un geste, à l'oreille ; basses et aigus, volumes séparés de la paire, touches du
+  Mac en vraie diffusion, icône animée, ligne d'application attendue, à l'écran ; pannes provoquées ; tour de l'app ; canapé.
