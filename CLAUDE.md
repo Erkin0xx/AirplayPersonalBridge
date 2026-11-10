@@ -776,11 +776,22 @@ Relevés du 2026-11-03, implémentés et mesurés les 2026-11-09 et 10 : ADR `01
   `.glassProminent`, diagnostic en `Form`. Le thème shadcn (`DesignSystem.swift`) et `RotaryKnob` sont retirés : couleurs, typos
   et contrôles du système. Rendu : `WINDOW_PNG_DIR=<dossier> swift test --filter MainWindowExport`, verres de l'app et du système
   remplacés par un aplat (`windowSimulatesGlass`, `WindowSnapshot`).
+- **Barre latérale en cartes** (seconde passe, même jour) : une carte d'en-tête puis une `SpeakerCard` par enceinte, sur un voile
+  (`windowCard`), jamais un second verre. Ce qui se règle une fois est en fenêtre surgissante : `SpeakerSettings` (délai, tonalité,
+  gain, adresse) et `MacOptions`. Un rendu hors écran n'ouvre pas de popover : l'export les rend seuls
+  (`reglages-enceinte-*`, `options-mac-*`). `OutputRow` n'existe plus.
+- **Plan** : sol rempli à l'intérieur des murs (`PlanRenderer.floorOutlines` : boucle fermée, ou suite ouverte par une porte et
+  refermée d'un trait ; aucun sol sur un embranchement ni sous une image de fond), un point par mètre au lieu de lignes, et
+  `SpeakerPulse`, l'onde des enceintes qu'on entend, dans son propre `Canvas` pour ne pas redessiner le plan 30 fois par seconde.
+- **Options du panneau : une carte dessinée dans la fenêtre du panneau** (`PanelPopup`), pas un `.popover`. Rien ne garantit
+  qu'un popover présenté depuis un `MenuBarExtra` ne ferme pas le panneau, et la sonde n'a pas pu trancher (écran verrouillé).
+  Le panneau garde sa taille, options ouvertes ou non (`PanelPopupTests`). Sonde à rejouer écran déverrouillé :
+  `scratchpad/options-popup/probe/probe.swift` (non versionnée).
 - **Diffuser se déclenche par ⌘↩, jamais par `.defaultAction`** : Retour valide un champ de l'inspecteur, et cette validation ne
   doit pas faire partir le son.
-- **Un agent ne peut pas faire de capture d'écran** sur ce Mac (`screencapture` : « could not create image from display ») : le
-  verre se juge par Baptiste, dans l'app. Le menu « Écoute » de la barre d'outils sort vide dans les rendus, sans qu'on sache
-  s'il l'est à l'écran.
+- **Écran verrouillé, ni capture ni fenêtre** : `screencapture` échoue (« could not create image from display »), et une app
+  lancée par un agent n'ouvre aucune fenêtre visible ni ne devient active (sonde du 2026-11-10 : `screenLocked=1`). Le verre se
+  juge par Baptiste, dans l'app.
 - **Paire stéréo** : un geste vaut pour les deux membres (`StereoPairs`), et la paire entre en session d'un seul coup. Un membre
   qui apparaît rejoint sa paire si elle est cochée ; jamais l'inverse (`joinCheckedPairs`).
 - **`ImageRenderer` barre les contrôles AppKit** : le panneau se rend dans une fenêtre hors écran,

@@ -107,13 +107,17 @@ Dans la barre de menus :
 - **Écoute** : deux lieux sélectionnables, « À table » par défaut et « Au canapé ». Le lieu choisi compense
   la distance de chaque enceinte, en plus du réglage manuel.
 - **Options** : source (système, application, entrée physique), « Couper le son du Mac », touches de volume du Mac,
-  « Caler l'image des vidéos », démarrage à l'ouverture de session.
+  « Caler l'image des vidéos », démarrage à l'ouverture de session. Elles s'ouvrent dans une carte par-dessus le
+  panneau, qui garde sa taille.
 
 « Plan et réglages… » ouvre la fenêtre, au style Liquid Glass de macOS 26 :
 
-- une barre latérale en verre : état, source, volume master, et les réglages de chaque enceinte (trim, délai, tonalité,
-  silence) ;
-- le plan de la pièce à l'échelle, en pleine fenêtre ;
+- une barre latérale en verre : une carte pour ce qui joue (état, volume général, source), puis une carte par enceinte
+  (la pastille qui la coche, son état, son volume, son silence) ;
+- le délai, la tonalité et l'adresse d'une enceinte dans une fenêtre surgissante de sa carte, les options du Mac dans
+  une autre, au pied de la barre ;
+- le plan de la pièce à l'échelle, en pleine fenêtre : le sol posé sur un fond doux, un point par mètre, et une onde
+  autour des enceintes qu'on entend ;
 - une barre d'outils native avec le bouton Diffuser/Arrêter (⌘↩) ;
 - l'inspecteur de macOS pour l'objet sélectionné ;
 - le diagnostic.

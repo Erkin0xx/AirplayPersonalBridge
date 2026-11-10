@@ -1261,6 +1261,8 @@ Glass. Niveaux de preuve : **test**, **mesuré** (micro, Chrome sans fenêtre), 
 | **Retard, étape 2** : délai de restitution 0,4 s (`SharedPlaybackClock.defaultPlayoutDelaySeconds`, seule constante). Retard de bout en bout ~0,45 s | **entendu** quelques minutes par palier : 0,5 et 0,4 s tiennent, 0,3 s décroche. **Ni endurance, ni capture, ni clics** à ce palier |
 | **Apple TV → récepteur AirPlay du Mac → enceintes** : le tap global capte ce son, Geneva comprise | **entendu**. Écho si l'Apple TV sort aussi sur les HomePod ; 16 sessions fermées par les HomePod au premier essai |
 | **Refonte Liquid Glass** : fenêtre en `NavigationSplitView` (barre latérale en verre, plan en pleine fenêtre sous elle, barre d'outils native avec Diffuser/Arrêter en `.glassProminent`, inspecteur natif, diagnostic en `Form`), panneau aligné sur les styles du système, silence par enceinte dans la fenêtre. Thème shadcn et bouton rotatif retirés | test, rendus hors écran (`WINDOW_PNG_DIR`, `MENUBAR_PNG_DIR`). **Le verre n'a été vu par personne** : ni rendu hors écran, ni capture d'écran possible pour un agent |
+| **Seconde passe sur la fenêtre** (demande « plus premium ») : barre latérale en cartes (en-tête, puis une carte par enceinte), réglages fins et options du Mac en fenêtres surgissantes, sol de la pièce, un point par mètre, onde autour des enceintes qu'on entend, lieu d'écoute nommé dans la barre d'outils | test (1 002 tests), rendus hors écran. **Ni le verre ni les fenêtres surgissantes n'ont été vus à l'écran**. Installée le 2026-11-10 |
+| **Options du panneau en pop-up** : une carte par-dessus le panneau, qui ne grandit plus | test (taille du panneau identique, options ouvertes ou non, 11 situations), rendus. Clic à côté, Échap et le menu Source dans la carte : **jamais essayés à la main** |
 | **Analyse statique d'Airfoil 5.12.6** (vault `airfoil-analyse.md`), sans le lancer : émetteur RAOP pur, HomePod compris ; paire stéréo en deux sessions liées (partenaire à 0,125 s, ouvertures RTSP espacées de 0,5 s) ; 1,75 s annoncées pour 2,0 s appliquées, soit les 11 025 trames ; rien de générique pour la vidéo | lecture du binaire ; elle a confirmé l'hypothèse de l'étape 1 avant la mesure |
 
 Détail de l'étape 1 et des paliers : `docs/retard_2s_notes.md`, tenu par la session « retard » et à fusionner ici à la clôture.
@@ -1272,8 +1274,9 @@ rendu plus lent encore : la mutation « relance bornée par la part des sorties 
 
 **Reste ouvert** :
 
-- **Juger le verre** dans l'app : la barre latérale au-dessus du plan, la teinte de Diffuser. Le menu « Écoute » de la barre
-  d'outils sort vide dans les rendus, sans qu'on sache s'il l'est aussi à l'écran ; « −24 dB » touche le bord de la barre latérale.
+- **Juger la fenêtre et le pop-up des Options** dans l'app : le verre de la barre latérale au-dessus du plan, les cartes, les
+  fenêtres surgissantes, l'onde des enceintes, la teinte de Diffuser. Trois autres pistes de mise en page et huit pistes d'icône
+  sont proposées à Baptiste en maquettes : rien n'en est codé.
 - **À 0,4 s** : endurance de 30 min avec capture sur `en0` (demandes de retransmission, réponses arrivées trop tard), clics enceinte
   par enceinte, convergence de la Geneva. Remonter à 0,5 s au premier craquement.
 - **Phase 1.5** : non-régression aux clics, option vidéo active puis inactive. Safari, QuickTime et Firefox avec le pilote.
