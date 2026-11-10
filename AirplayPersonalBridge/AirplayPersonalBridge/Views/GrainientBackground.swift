@@ -62,11 +62,15 @@ nonisolated enum GrainientField {
 
     // MARK: - Réglages
 
-    /// La durée d'un cycle complet du mouvement, en secondes.
-    static let period: TimeInterval = 54
-    /// Les images-clés d'un cycle : une toutes les 1,5 s. Entre deux, les bandes bougent de moins d'un
-    /// centième de la largeur, et un fondu de l'une à l'autre ne se distingue pas d'une déformation.
-    static let keyframeCount = 36
+    /// La durée d'un cycle complet du mouvement, en secondes. À 54 s et avec des ampleurs trois fois
+    /// moindres, le fond tournait bien (sonde `BackgroundMotionProbe`) mais Baptiste le voyait fixe : une
+    /// bande n'avançait pas de plus de 10 points par seconde (fenêtre de 1200). Elle en fait jusqu'à 48.
+    static let period: TimeInterval = 36
+    /// Les images-clés d'un cycle : une toutes les 0,3 s. Entre deux, aucune bande ne bouge de plus de
+    /// 1,2 % de la largeur (14,3 points dans une fenêtre de 1200, test `keyframeStepStaysSmall`), comme
+    /// avant, et un fondu de l'une à l'autre ne se distingue pas d'une déformation. Plus espacées, le
+    /// filet violet, large d'une centaine de points, se dédoublerait à chaque fondu.
+    static let keyframeCount = 120
     /// La taille des images calculées, étirées ensuite à la taille de la vue : le dégradé est flou par
     /// nature, et son détail le plus fin (le filet violet) y fait encore une dizaine de pixels.
     static let pixelWidth = 160
@@ -117,12 +121,18 @@ nonisolated enum GrainientField {
     // MARK: - Bandes
 
     /// L'ampleur des deux ondulations des bandes, en fraction de la largeur.
-    static let slowWarp = 0.035
-    static let fineWarp = 0.02
+    static let slowWarp = 0.09
+    static let fineWarp = 0.045
+    /// La pente des bandes, en largeurs par hauteur, et ce dont elle balance de part et d'autre.
+    static let slope = 0.30
+    static let slopeSway = 0.06
 
-    /// La coordonnée en travers des bandes : elles penchent (0,30 par hauteur) et ondulent lentement.
+    /// La pente des bandes à cette phase : elles se redressent et se couchent une fois par cycle.
+    static func slope(phase: Double) -> Double { slope + slopeSway * sin(phase + 2.1) }
+
+    /// La coordonnée en travers des bandes : elles penchent, balancent et ondulent lentement.
     static func band(x: Double, y: Double, aspect: Double, phase: Double) -> Double {
-        x + 0.30 * y + slowWarp * sin(2.4 * Double.pi * y + phase)
+        x + slope(phase: phase) * y + slowWarp * sin(2.4 * Double.pi * y + phase)
             + fineWarp * sin(5 * y - 3 * x * aspect + 2 * phase + 1)
     }
 
@@ -146,10 +156,15 @@ nonisolated enum GrainientField {
     // MARK: - Nappe claire
 
     /// Jusqu'où le centre de la nappe dérive, en hauteurs de vue.
-    static let poolDrift = 0.04
-    /// Le rayon où la nappe s'éteint, et la largeur de sa montée, en hauteurs de vue.
+    static let poolDrift = 0.10
+    /// Le rayon où la nappe s'éteint, ce dont il respire, et la largeur de sa montée, en hauteurs de vue.
     static let poolRadius = 1.18
+    static let poolBreath = 0.05
     static let poolFalloff = 0.62
+
+    /// Le rayon de la nappe à cette phase : elle enfle et se retire une fois par cycle, à contretemps
+    /// de sa dérive.
+    static func poolRadius(phase: Double) -> Double { poolRadius + poolBreath * sin(phase + 0.9) }
 
     /// Le centre de la nappe, en hauteurs de vue : sous le coin bas droit, sur un petit cercle.
     static func poolCenter(aspect: Double, phase: Double) -> (x: Double, y: Double) {
@@ -160,7 +175,7 @@ nonisolated enum GrainientField {
     static func poolDepth(x: Double, y: Double, aspect: Double, phase: Double) -> Double {
         let center = poolCenter(aspect: aspect, phase: phase)
         let distance = hypot(x * aspect - center.x, y - center.y)
-        return min(max((poolRadius - distance) / poolFalloff, 0), 1)
+        return min(max((poolRadius(phase: phase) - distance) / poolFalloff, 0), 1)
     }
 
     /// La part de la nappe sur les bandes à cette profondeur : elle les recouvre tout à fait dès 0,45.
@@ -238,7 +253,7 @@ nonisolated enum GrainientField {
         )
     }
 
-    /// Toutes les images-clés d'un cycle, dans l'ordre. Une cinquantaine de millisecondes de calcul : à
+    /// Toutes les images-clés d'un cycle, dans l'ordre. Plus d'un dixième de seconde de calcul : à
     /// appeler hors du MainActor.
     static func keyframes(aspect: Double, width: Int = pixelWidth, height: Int = pixelHeight) -> [CGImage] {
         var frames: [CGImage] = []
@@ -500,9 +515,9 @@ final class GrainientMotionView: NSView {
         animation.repeatCount = .infinity
         animation.beginTime = start
         animation.isRemovedOnCompletion = false
-        // Un fondu de 1,5 s entre deux images presque pareilles : quinze images par seconde suffisent, le
-        // serveur de rendu n'a pas à recomposer la fenêtre au rythme de l'écran.
-        animation.preferredFrameRateRange = CAFrameRateRange(minimum: 8, maximum: 15, preferred: 12)
+        // Une bande avance de 48 points par seconde au plus : à vingt-quatre images par seconde, deux
+        // points par image. Le serveur de rendu n'a pas à recomposer la fenêtre au rythme de l'écran.
+        animation.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 30, preferred: 24)
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -525,6 +540,10 @@ final class GrainientMotionView: NSView {
                 stage.timeOffset = 0
                 stage.beginTime = 0
                 stage.beginTime = stage.convertTime(CACurrentMediaTime(), from: nil) - pausedAt
+                // Par précaution : un calque qui aurait perdu son animation pendant que la fenêtre était
+                // à l'arrière-plan la retrouve au retour, à la phase où il en était. La sonde ne l'a
+                // jamais vu la perdre, mais rien ne l'aurait signalé : le fond serait resté fixe.
+                if stage.animation(forKey: Self.animationKey) == nil { install() }
             }
         }
     }

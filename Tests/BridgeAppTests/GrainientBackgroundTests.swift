@@ -36,7 +36,7 @@ nonisolated struct GrainientBackgroundTests {
 
     @Test("Le fond revient exactement à lui-même à chaque période : aucune couture")
     func cycleIsSeamless() {
-        for time in [0.0, 3.7, 13.5, 26.9, 41.2, 53.99] {
+        for time in [0.0, 3.7, 13.5, 26.9, 41.2, Field.period - 0.01] {
             let now = Field.phase(at: time)
             let later = Field.phase(at: time + Field.period)
             for point in Self.grid(8) {
@@ -76,17 +76,22 @@ nonisolated struct GrainientBackgroundTests {
         }
     }
 
-    @Test("Les bandes ne s'écartent jamais de leur place de plus que leurs deux ondulations")
+    @Test("Les bandes ne s'écartent jamais de leur place de plus que leurs ondulations et leur balancement")
     func bandWarpIsBounded() {
-        let limit = Field.slowWarp + Field.fineWarp + 1e-12
         for aspect in Self.aspects {
             for index in 0..<Field.keyframeCount {
+                let phase = Field.keyframePhase(index)
+                #expect(abs(Field.slope(phase: phase) - Field.slope) <= Field.slopeSway + 1e-12)
                 for point in Self.grid(12) {
-                    let band = Field.band(x: point.x, y: point.y, aspect: aspect, phase: Field.keyframePhase(index))
-                    #expect(abs(band - (point.x + 0.30 * point.y)) <= limit)
+                    let band = Field.band(x: point.x, y: point.y, aspect: aspect, phase: phase)
+                    let limit = Field.slowWarp + Field.fineWarp + Field.slopeSway * point.y + 1e-12
+                    #expect(abs(band - (point.x + Field.slope * point.y)) <= limit)
                 }
             }
         }
+        // Les bandes restent penchées du même côté, sans jamais se coucher.
+        #expect(Field.slope - Field.slopeSway >= 0.2)
+        #expect(Field.slope + Field.slopeSway <= 0.4)
         // Et elles bougent bien : la même bande, un quart de cycle plus tard, n'est plus au même endroit.
         let before = Field.band(x: 0.4, y: 0.3, aspect: 1.58, phase: 0)
         let after = Field.band(x: 0.4, y: 0.3, aspect: 1.58, phase: .pi / 2)
@@ -102,6 +107,89 @@ nonisolated struct GrainientBackgroundTests {
                 #expect(abs(drift - Field.poolDrift) < 1e-12)
             }
         }
+        // Et elle respire : son rayon enfle et se retire autour de sa valeur, sans s'en éloigner.
+        var widest = -Double.infinity
+        var narrowest = Double.infinity
+        for index in 0..<Field.keyframeCount {
+            let radius = Field.poolRadius(phase: Field.keyframePhase(index))
+            widest = max(widest, radius)
+            narrowest = min(narrowest, radius)
+        }
+        #expect(abs(widest - (Field.poolRadius + Field.poolBreath)) < 1e-3)
+        #expect(abs(narrowest - (Field.poolRadius - Field.poolBreath)) < 1e-3)
+        // C'est bien ce rayon qui borne la nappe : à 0,9 hauteur de son centre, la profondeur le suit.
+        for phase in [Double.pi / 2 - 0.9, 1.5 * Double.pi - 0.9] {
+            let center = Field.poolCenter(aspect: 1.6, phase: phase)
+            let depth = Field.poolDepth(x: (center.x - 0.9) / 1.6, y: center.y, aspect: 1.6, phase: phase)
+            #expect(abs(depth - (Field.poolRadius(phase: phase) - 0.9) / Field.poolFalloff) < 1e-9)
+        }
+        #expect(Field.poolBreath > 0.02)
+    }
+
+    /// Le déplacement le plus grand d'une bande entre deux images-clés voisines, en fraction de la largeur.
+    private static func widestKeyframeStep(aspect: Double) -> Double {
+        var widest = 0.0
+        for index in 0..<Field.keyframeCount {
+            let now = Field.keyframePhase(index)
+            let next = Field.keyframePhase(index + 1)
+            for point in grid() {
+                let a = Field.band(x: point.x, y: point.y, aspect: aspect, phase: now)
+                let b = Field.band(x: point.x, y: point.y, aspect: aspect, phase: next)
+                widest = max(widest, abs(a - b))
+            }
+        }
+        return widest
+    }
+
+    @Test("Entre deux images-clés, aucune bande ne bouge de plus de 15 points d'une fenêtre de 1200")
+    func keyframeStepStaysSmall() {
+        for aspect in Self.aspects {
+            // Un fondu entre deux images décalées de davantage dédoublerait le filet violet.
+            #expect(Self.widestKeyframeStep(aspect: aspect) * 1200 <= 15)
+        }
+        // La nappe, elle, bouge moins encore : dérive et respiration, en points d'une fenêtre de 760 de haut.
+        let turn = 2 * Double.pi / Double(Field.keyframeCount)
+        #expect((Field.poolDrift + Field.poolBreath) * turn * 760 <= 8)
+    }
+
+    @Test("Le mouvement se remarque : en cinq secondes, une bande avance de plusieurs dizaines de points")
+    func motionIsNoticeable() {
+        let aspect = 1200.0 / 760
+        // Le chemin d'une bande sur un cycle, au milieu de la fenêtre : d'un extrême à l'autre.
+        var low = Double.infinity
+        var high = -Double.infinity
+        for index in 0..<Field.keyframeCount {
+            let band = Field.band(x: 0.4, y: 0.5, aspect: aspect, phase: Field.keyframePhase(index))
+            low = min(low, band)
+            high = max(high, band)
+        }
+        #expect((high - low) * 1200 >= 200)
+        #expect((high - low) * 1200 <= 400)
+
+        // En cinq secondes, à n'importe quel moment du cycle : la part de l'image qui a changé d'au moins
+        // 6 niveaux sur 255, ce qu'on voit sans chercher : la moitié au moins, mesurée à 51 % au pire.
+        var smallest = 1.0
+        for start in stride(from: 0.0, to: Field.period, by: 3) {
+            let before = Field.pixels(
+                width: 80, height: 50, aspect: aspect, phase: Field.phase(at: start), gain: Field.liveGain
+            )
+            let after = Field.pixels(
+                width: 80, height: 50, aspect: aspect, phase: Field.phase(at: start + 5), gain: Field.liveGain
+            )
+            var changed = 0
+            var pixel = 0
+            while pixel < before.count {
+                let gap = max(
+                    abs(Int(before[pixel]) - Int(after[pixel])), abs(Int(before[pixel + 1]) - Int(after[pixel + 1])),
+                    abs(Int(before[pixel + 2]) - Int(after[pixel + 2]))
+                )
+                if gap >= 6 { changed += 1 }
+                pixel += 4
+            }
+            smallest = min(smallest, Double(changed) / Double(before.count / 4))
+        }
+        #expect(smallest >= 0.30)
+        #expect(Field.period >= 30 && Field.period <= 40)
     }
 
     @Test("Le fond ne bouge que si un son part, et jamais sous « Réduire les animations »")
@@ -157,10 +245,11 @@ nonisolated struct GrainientBackgroundTests {
         for aspect in Self.aspects {
             for index in 0..<Field.keyframeCount {
                 let phase = Field.keyframePhase(index)
-                #expect(Field.poolDepth(x: 1, y: 1, aspect: aspect, phase: phase) > 0.85)
+                // Au plus loin de sa dérive et au plus étroit de sa respiration, elle tient encore le coin.
+                #expect(Field.poolDepth(x: 1, y: 1, aspect: aspect, phase: phase) > 0.75)
                 #expect(Field.poolDepth(x: 0, y: 0, aspect: aspect, phase: phase) == 0)
                 #expect(Field.poolDepth(x: 1, y: 0, aspect: aspect, phase: phase) == 0)
-                #expect(Field.poolDepth(x: 0.5, y: 0.4, aspect: aspect, phase: phase) == 0)
+                #expect(Field.poolDepth(x: 0.4, y: 0.3, aspect: aspect, phase: phase) == 0)
             }
         }
         #expect(Field.poolCover(depth: 0) == 0)
@@ -323,7 +412,7 @@ struct GrainientMotionLayerTests {
         #expect((values.first as AnyObject?) === motion.frames[0])
         #expect((view.stage.contents as AnyObject?) === motion.frames[0])
         // Le serveur de rendu n'a pas à suivre le rythme de l'écran.
-        #expect(animation.preferredFrameRateRange.maximum <= 15)
+        #expect(animation.preferredFrameRateRange.maximum <= 30)
         #expect(view.hitTest(CGPoint(x: 10, y: 10)) == nil)
     }
 
@@ -369,5 +458,25 @@ struct GrainientMotionLayerTests {
         #expect(resumed >= frozen - 1e-6)
         #expect(resumed - frozen < 0.5)
         #expect(view.stage.animation(forKey: GrainientMotionView.animationKey) != nil)
+    }
+
+    @Test("Un calque qui a perdu son animation à l'arrière-plan la retrouve au retour, à la même phase")
+    func layerRecoversItsAnimationOnResume() throws {
+        let view = GrainientMotionView(frame: CGRect(x: 0, y: 0, width: 320, height: 200))
+        view.show(Self.motion())
+        let first = try #require(view.stage.animation(forKey: GrainientMotionView.animationKey))
+
+        view.isPaused = true
+        // Ce que ferait Core Animation en sortant le calque de l'arbre de rendu.
+        view.stage.removeAllAnimations()
+        #expect(view.stage.animation(forKey: GrainientMotionView.animationKey) == nil)
+
+        view.isPaused = false
+        let back = try #require(
+            view.stage.animation(forKey: GrainientMotionView.animationKey) as? CAKeyframeAnimation
+        )
+        #expect(back.beginTime == first.beginTime)
+        #expect(back.values?.count == GrainientField.keyframeCount + 1)
+        #expect(view.stage.speed == 1)
     }
 }

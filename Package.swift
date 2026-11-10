@@ -137,6 +137,15 @@ let package = Package(
             path: "Tests/TerminationProbe",
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
+        // Sonde manuelle, jamais installée ni lancée par les tests : la vraie vue du fond dans une vraie
+        // fenêtre d'un vrai process AppKit, pour vérifier qu'il bouge (`Tests/BackgroundMotionProbe`).
+        // Le process de `swift test` ne peut pas prendre le premier plan, et le fond s'y fige.
+        .executableTarget(
+            name: "BackgroundMotionProbe",
+            dependencies: ["BridgeApp"],
+            path: "Tests/BackgroundMotionProbe",
+            swiftSettings: [.defaultIsolation(MainActor.self)]
+        ),
         .testTarget(
             name: "BridgeAppTests",
             dependencies: ["BridgeApp", "AudioCore"],
