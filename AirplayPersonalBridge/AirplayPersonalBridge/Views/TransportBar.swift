@@ -6,7 +6,8 @@
 import SwiftUI
 
 /// La barre de lecture : ce qui joue, le volume général, et la commande Diffuser/Arrêter, dans une seule
-/// capsule de verre. Sous les curseurs de la vue Console, comme sur la maquette « Scène » qu'a choisie
+/// capsule de verre. Le curseur et le bouton de silence sont ceux du panneau, dans la matière de la console
+/// (`ControlLook.darkshell`) : la prise reste ronde, le niveau est un voile. Sous les curseurs de la vue Console, comme sur la maquette « Scène » qu'a choisie
 /// Baptiste (2026-11-10).
 struct TransportBar: View {
     @Bindable var state: BridgeState
@@ -51,7 +52,7 @@ struct TransportBar: View {
             if state.isVisible(.masterVolume) {
                 PanelVolumeSlider(
                     decibels: Self.master(of: state), isMuted: $state.isMuted,
-                    range: BridgeSettings.Limits.masterDB
+                    range: BridgeSettings.Limits.masterDB, look: .darkshell
                 )
                 .frame(minWidth: 160)
                 .contextMenu {
@@ -76,7 +77,7 @@ struct TransportBar: View {
                 }
             }
 
-            PanelMuteButton(isMuted: $state.isMuted)
+            PanelMuteButton(isMuted: $state.isMuted, look: .darkshell)
 
             StreamingRoundButton(state: state, diameter: 52)
         }

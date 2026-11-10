@@ -8,9 +8,9 @@ import SwiftUI
 /// La correspondance entre un point du curseur vertical et sa valeur : hors de la vue pour être testée.
 ///
 /// Le bas du rail vaut le minimum, le haut le maximum, linéairement en dB comme les autres curseurs de
-/// l'app. Le remplissage garde un socle (`floor`) : au minimum il reste un trait de couleur, et l'icône
-/// du volume général reste posée sur du blanc. Le haut du remplissage suit la main : c'est lui qu'on
-/// attrape, pas un bouton.
+/// l'app. Le remplissage garde un socle (`floor`) : au minimum il reste un pied de voile sous le trait du
+/// niveau, et la place de l'icône du volume général. Le haut du remplissage suit la main : c'est lui
+/// qu'on attrape.
 enum ConsoleFaderScale {
     /// La part de la course parcourue : 0 au minimum, 1 au maximum, bornée.
     static func fraction(of value: Double, in range: ClosedRange<Double>) -> Double {
@@ -57,16 +57,17 @@ enum ConsoleFaderScale {
     }
 }
 
-/// Le curseur vertical de la console : un rail arrondi qui se remplit par le bas.
+/// Le curseur vertical de la console : une coque noire à liseré (`Darkshell`), où le niveau est un voile
+/// gris sous un trait blanc qui porte la prise.
 ///
 /// Écrit à la main, un `Slider` macOS ne se dressant pas à cette largeur. Ce qu'on perd en quittant le
 /// contrôle système est rétabli explicitement, comme pour `PanelVolumeSlider` : flèches du clavier,
 /// VoiceOver, anneau de focus. On le saisit n'importe où : la valeur va sous la main.
 struct ConsoleFader: View {
     enum Look {
-        /// Le volume général : blanc, l'icône du son posée dans le remplissage.
+        /// Le volume général : l'icône du son posée au pied du rail.
         case general
-        /// Le volume d'une enceinte : la couleur de l'app.
+        /// Le volume d'une enceinte.
         case speaker
     }
 
@@ -77,7 +78,8 @@ struct ConsoleFader: View {
     /// Le pas d'une flèche du clavier, et d'un geste de VoiceOver.
     var keyStep: Double
     var look: Look = .speaker
-    /// Le son ne passe pas (coupé, ou enceinte décochée) : le remplissage reste à sa place, éteint. C'est
+    /// Le son ne passe pas (coupé, ou enceinte décochée) : le voile reste à sa place, éteint, sous un trait
+    /// gris. C'est
     /// ce niveau-là que le rétablissement rendra, et le voir évite de se demander s'il a été perdu.
     var isSilenced = false
     /// Une valeur repérée d'un trait de chaque côté du rail : le 0 dB d'une enceinte.
@@ -100,36 +102,61 @@ struct ConsoleFader: View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
     }
 
-    /// Ce qui reste rempli au minimum : la place de l'icône pour le général, un trait pour une enceinte.
+    /// Ce qui reste rempli au minimum : la place de l'icône pour le général, un pied de voile pour une
+    /// enceinte.
     private var floor: CGFloat { look == .general ? 58 : 26 }
 
     var body: some View {
         GeometryReader { geometry in
             let height = geometry.size.height
             let fill = ConsoleFaderScale.fillHeight(for: value, in: range, trackHeight: height, floor: floor)
-            ZStack(alignment: .bottom) {
-                Color.white.opacity(isEnabled && (isHovering || isDragging) ? 0.19 : 0.14)
-                Rectangle()
-                    .fill(fillStyle)
-                    .frame(height: fill)
-                    .overlay(alignment: .top) { edge }
-                    .overlay(alignment: .top) { grip }
-                    .overlay(alignment: .bottom) { glyph }
-                if let mark {
-                    marks(
-                        at: ConsoleFaderScale.fillHeight(for: mark, in: range, trackHeight: height, floor: floor)
-                    )
+            let level = DarkshellFaderGeometry.levelY(fill: fill, trackHeight: height)
+            ZStack(alignment: .top) {
+                shape.fill(Darkshell.ground)
+                // Tout ce qui vit dans la coque s'arrête au liseré, qui reste entier quel que soit le niveau.
+                ZStack(alignment: .top) {
+                    if isEnabled && (isHovering || isDragging) { Darkshell.hoverLift }
+                    Rectangle()
+                        .fill(Darkshell.veilGradient(isSilenced: isSilenced, from: .top, to: .bottom))
+                        .frame(height: DarkshellFaderGeometry.veilHeight(fill: fill, trackHeight: height))
+                        .offset(y: level)
+                    if let mark {
+                        marks(
+                            atY: DarkshellFaderGeometry.markY(
+                                fill: ConsoleFaderScale.fillHeight(
+                                    for: mark, in: range, trackHeight: height, floor: floor
+                                ),
+                                trackHeight: height
+                            )
+                        )
+                    }
+                    Rectangle()
+                        .fill(levelColor)
+                        .frame(height: DarkshellFaderGeometry.lineThickness)
+                        .offset(y: level)
+                    grip(centerY: DarkshellFaderGeometry.gripCenterY(levelY: level, trackHeight: height))
                 }
+                .frame(width: geometry.size.width, height: height, alignment: .top)
+                .overlay(alignment: .bottom) { glyph }
+                .clipShape(shape.inset(by: Darkshell.lipWidth))
+                shape.strokeBorder(Darkshell.lipGradient(.fader), lineWidth: Darkshell.lipWidth)
             }
-            .clipShape(shape)
             .contentShape(shape)
             .gesture(drag(height: height))
+        }
+        // L'ombre portée de la coque sur la tuile : dessous, elle ne change rien à la place prise.
+        .background {
+            shape
+                .fill(Color.black)
+                .shadow(color: .black.opacity(0.32), radius: 11, y: 10)
+                .accessibilityHidden(true)
         }
         .frame(width: width)
         .overlay {
             shape
                 .inset(by: -3)
-                .strokeBorder(BridgeTheme.rose, lineWidth: 2)
+                // Blanc : pas de rose sur une commande, même pour dire qu'elle a le focus.
+                .strokeBorder(Color.white.opacity(0.9), lineWidth: 2)
                 .opacity(isFocused && !isPointerFocus ? 1 : 0)
         }
         .onHover { isHovering = $0 }
@@ -160,35 +187,19 @@ struct ConsoleFader: View {
 
     // MARK: Dessin
 
-    private var fillStyle: AnyShapeStyle {
-        if isSilenced { return AnyShapeStyle(PanelPalette.silencedFill) }
-        // Blanc pour tous, comme les curseurs du Centre de contrôle : Baptiste ne veut pas de rose
-        // sur les curseurs (2026-11-10). Le rose reste à l'état, pas aux réglages.
-        return AnyShapeStyle(Color.white.opacity(look == .general ? 0.94 : 0.88))
+    /// Le trait du niveau et sa prise : blancs, gris quand le son ne passe pas.
+    private var levelColor: Color {
+        Darkshell.levelColor(isSilenced: isSilenced)
     }
 
-    /// Ce qui se pose sur le remplissage : sombre sur le blanc, clair sur le gris du silence.
-    private var onFill: Color {
-        isSilenced ? .white : .black
-    }
-
-    /// Un filet de lumière sur l'arête du remplissage coloré : il la détache du rail.
-    @ViewBuilder
-    private var edge: some View {
-        if look == .speaker && !isSilenced {
-            Rectangle()
-                .fill(Color.white)
-                .frame(height: 1)
-                .accessibilityHidden(true)
-        }
-    }
-
-    /// La prise, en haut du remplissage : elle dit qu'il se saisit, là où un bord droit ne dit rien.
-    private var grip: some View {
+    /// La prise, à cheval sur le trait du niveau : elle dit qu'il se saisit, là où un trait seul ne dit
+    /// rien.
+    private func grip(centerY: CGFloat) -> some View {
         Capsule()
-            .fill(onFill.opacity(isSilenced ? 0.22 : 0.34))
-            .frame(width: 22, height: 4)
-            .padding(.top, 8)
+            .fill(levelColor)
+            .shadow(color: .black.opacity(0.6), radius: 4, y: 2)
+            .frame(width: DarkshellFaderGeometry.grip.width, height: DarkshellFaderGeometry.grip.height)
+            .offset(y: centerY - DarkshellFaderGeometry.grip.height / 2)
             .accessibilityHidden(true)
     }
 
@@ -206,24 +217,24 @@ struct ConsoleFader: View {
                 }
             }
             .font(.title2.weight(.medium))
-            .foregroundStyle(onFill.opacity(isSilenced ? 0.55 : 0.72))
+            .foregroundStyle(Color.white.opacity(isSilenced ? 0.5 : 0.9))
             .frame(height: 26)
             .padding(.bottom, 14)
             .accessibilityHidden(true)
         }
     }
 
-    /// Deux traits au bord du rail, à la hauteur de la valeur repérée : lisibles sur le rail comme sur le
-    /// remplissage, sans barrer celui-ci.
-    private func marks(at height: CGFloat) -> some View {
+    /// Deux tirets au bord du rail, à la hauteur de la valeur repérée : lisibles sur le noir comme sur le
+    /// voile, sans barrer celui-ci.
+    private func marks(atY y: CGFloat) -> some View {
         HStack {
-            Capsule().frame(width: 7, height: 1.5)
+            Rectangle().frame(width: DarkshellFaderGeometry.mark.width, height: DarkshellFaderGeometry.mark.height)
             Spacer()
-            Capsule().frame(width: 7, height: 1.5)
+            Rectangle().frame(width: DarkshellFaderGeometry.mark.width, height: DarkshellFaderGeometry.mark.height)
         }
-        .foregroundStyle(Color.white.opacity(0.5))
-        .padding(.horizontal, 6)
-        .padding(.bottom, max(height - 0.75, 0))
+        .foregroundStyle(Darkshell.markColor.opacity(isSilenced ? 0.5 : 1))
+        .padding(.horizontal, Darkshell.lipWidth + DarkshellFaderGeometry.markInset)
+        .offset(y: y)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }

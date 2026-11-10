@@ -156,8 +156,9 @@ struct ConsoleLiveBars: View {
 
 // MARK: - Bouton rond
 
-/// Un bouton rond de la console. L'icône ne change pas d'un état à l'autre : elle dit ce que fait le
-/// bouton, et c'est le fond qui dit s'il est enclenché, comme dans le panneau.
+/// Un bouton rond de la console, dans la coque noire à liseré (`DarkshellDisc`). L'icône ne change pas d'un
+/// état à l'autre : elle dit ce que fait le bouton, et c'est le fond qui dit s'il est enclenché : blanc,
+/// comme les boutons du Centre de contrôle.
 struct ConsoleRoundButton: View {
     let symbol: String
     var isOn = false
@@ -172,9 +173,9 @@ struct ConsoleRoundButton: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: diameter * 0.4, weight: .semibold))
-                .foregroundStyle(isOn ? Color.black.opacity(0.85) : Color.white.opacity(0.82))
+                .foregroundStyle(isOn ? Color.black.opacity(0.85) : Color.white.opacity(0.9))
                 .frame(width: diameter, height: diameter)
-                .background(background, in: Circle())
+                .background { DarkshellDisc(isOn: isOn, isHovering: isHovering && isEnabled) }
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -182,11 +183,5 @@ struct ConsoleRoundButton: View {
         .onHover { isHovering = $0 }
         .animation(PanelMotion.quick(reduceMotion: reduceMotion), value: isHovering)
         .animation(PanelMotion.standard(reduceMotion: reduceMotion), value: isOn)
-    }
-
-    private var background: AnyShapeStyle {
-        // Enclenché : blanc, comme les boutons du Centre de contrôle.
-        if isOn { return AnyShapeStyle(Color.white) }
-        return AnyShapeStyle(Color.white.opacity(isHovering && isEnabled ? 0.2 : 0.12))
     }
 }
