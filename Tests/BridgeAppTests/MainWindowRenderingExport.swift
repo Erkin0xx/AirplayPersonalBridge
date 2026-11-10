@@ -82,6 +82,8 @@ struct MainWindowExport {
     /// L'installation de Baptiste, plan du salon compris, enceintes rattachées.
     private static func state(_ scene: BridgeState.PanelScene) -> BridgeState {
         let state = BridgeState.preview(scene)
+        // Ces scènes sont celles de la vue « Plan » : la vue par défaut en est une autre.
+        state.windowLayout = .plan
         state.roomLayout = RoomLayout.salon.bindingSpeakers(
             toOutputs: state.outputs.map { (id: $0.id, name: $0.displayName) }
         )

@@ -525,7 +525,7 @@ struct PanelStatusChip: View {
     private var background: Color {
         switch status {
         case .idle, .connecting: PanelPalette.quietFill
-        case .streaming: .accentColor
+        case .streaming: BridgeTheme.accent
         case .trouble: .red
         }
     }

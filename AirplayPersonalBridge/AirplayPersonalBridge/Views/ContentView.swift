@@ -24,23 +24,66 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
-            BridgeSidebar(state: state, showDiagnostics: { showsDiagnostics = true })
-                .navigationSplitViewColumnWidth(min: 290, ideal: 330, max: 420)
-        } detail: {
-            RoomPlanView(state: state, initialSelection: preview.planSelection)
-        }
+        layout
         .navigationTitle("AirPlay Personal Bridge")
         // Le titre reste celui de la fenêtre (menu Fenêtre, Mission Control), mais la barre d'outils
         // garde sa place aux outils : l'état en mots est en tête de la barre latérale.
         .toolbar(removing: .title)
         .frame(minWidth: 960, minHeight: 620)
+        // Le thème de l'app : sombre et rose, dans les trois vues.
+        .tint(BridgeTheme.accent)
+        .preferredColorScheme(.dark)
         // Les applications qui jouent changent sans prévenir : la liste doit être juste à
         // l'ouverture. La découverte, elle, tourne déjà sans fenêtre (`AppLifecycle`).
         .onAppear { state.refreshSources() }
         .sheet(isPresented: $showsDiagnostics) {
             DiagnosticsView(state: state, onClose: { showsDiagnostics = false })
         }
+    }
+}
+
+extension ContentView {
+    /// Les trois vues de la fenêtre (`WindowLayout`), sur le même état.
+    @ViewBuilder
+    fileprivate var layout: some View {
+        switch state.windowLayout {
+        case .plan:
+            NavigationSplitView {
+                BridgeSidebar(state: state, showDiagnostics: { showsDiagnostics = true })
+                    .navigationSplitViewColumnWidth(min: 290, ideal: 330, max: 420)
+            } detail: {
+                RoomPlanView(state: state, initialSelection: preview.planSelection)
+            }
+        case .halo:
+            immersive { HaloView(state: state) }
+        case .console:
+            immersive { ConsoleView(state: state) }
+        }
+    }
+
+    /// Une vue sans barre latérale : son contenu sur le fond de nappes, qui passe sous la barre de titre ;
+    /// la source et les options dans la barre d'outils, en verre.
+    private func immersive(@ViewBuilder _ content: () -> some View) -> some View {
+        content()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background { AuroraBackground(isLive: state.isAudiblyStreaming) }
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    SourceMenu(state: state)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    WindowOptionsButton(state: state, showDiagnostics: { showsDiagnostics = true })
+                }
+            }
+            .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+    }
+}
+
+extension BridgeState {
+    /// Un son part vraiment vers les enceintes : la diffusion tourne, rien ne signale de silence, et le
+    /// son n'est pas coupé. C'est ce qui anime le fond, le halo et les ondes.
+    var isAudiblyStreaming: Bool {
+        streamingPhase == .running && captureAlert == nil && !isMuted
     }
 }
 
@@ -71,7 +114,7 @@ struct StreamingCommand: View {
             .frame(minWidth: 84)
         }
         .glassButtonStyle(prominent: true)
-        .tint(isStopSide ? .red : .accentColor)
+        .tint(isStopSide ? .red : BridgeTheme.accent)
         // ⌘↩ et non `.defaultAction` : Retour valide un champ de l'inspecteur du plan, et cette
         // validation ne doit pas faire partir le son vers les enceintes.
         .keyboardShortcut(.return, modifiers: .command)

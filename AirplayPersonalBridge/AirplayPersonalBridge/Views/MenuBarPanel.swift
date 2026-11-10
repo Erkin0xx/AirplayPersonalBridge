@@ -204,7 +204,7 @@ struct MenuBarPanelContent: View {
     /// d'accent qui descend du haut et s'éteint avant les enceintes.
     private var streamingWash: some View {
         LinearGradient(
-            colors: [Color.accentColor.opacity(0.2), Color.accentColor.opacity(0)],
+            colors: [BridgeTheme.accent.opacity(0.2), BridgeTheme.accent.opacity(0)],
             startPoint: .top, endPoint: .bottom
         )
         .frame(height: 120)
@@ -263,7 +263,7 @@ struct MenuBarPanelContent: View {
             // La largeur du mot le plus long : le titre à côté ne se décale pas au changement d'état.
             .frame(minWidth: 64)
         }
-        .buttonStyle(PanelCommandButtonStyle(tint: isStopSide ? nil : .accentColor))
+        .buttonStyle(PanelCommandButtonStyle(tint: isStopSide ? nil : BridgeTheme.accent))
         .disabled(!state.canToggleStreaming)
         .fixedSize()
         .accessibilityLabel(isStopSide ? "Arrêter la diffusion" : "Lancer la diffusion")

@@ -60,7 +60,7 @@ struct PanelSpeakerMuteButton: View {
     }
 
     private var background: AnyShapeStyle {
-        if output.isMuted { return AnyShapeStyle(Color.accentColor) }
+        if output.isMuted { return AnyShapeStyle(BridgeTheme.accent) }
         return AnyShapeStyle(isHovering ? PanelPalette.press : Color.clear)
     }
 }

@@ -313,6 +313,15 @@ final class BridgeState {
         }
     }
 
+    /// La vue de la fenêtre, au choix dans les options. Purement visuelle : aucune ne change ce qui
+    /// joue ni ce qui se règle.
+    var windowLayout = WindowLayout.default {
+        didSet {
+            guard oldValue != windowLayout else { return }
+            scheduleSettingsSave()
+        }
+    }
+
     /// La bascule de la sortie du Mac vers le pilote (`BridgeState+VideoSync.swift`).
     @ObservationIgnored let videoSync: VideoSyncSwitch
 
@@ -505,6 +514,7 @@ final class BridgeState {
         self.muteLocalOutput = settings.muteLocalOutput
         self.followsSystemVolume = settings.followsSystemVolume
         self.syncsVideo = settings.syncsVideo
+        self.windowLayout = settings.windowLayout
         self.preferredSourceID = settings.sourceID
         if settings.sourceID == CaptureSource.inputDevice.id { selectedSource = .inputDevice }
 
@@ -1388,6 +1398,7 @@ final class BridgeState {
         result.followsSystemVolume = followsSystemVolume
         result.systemVolumeMemory = systemVolume.memory
         result.syncsVideo = syncsVideo
+        result.windowLayout = windowLayout
         result.videoSyncMemory = videoSync.memory
         for output in outputs {
             result.outputs[output.id] = BridgeSettings.Output(

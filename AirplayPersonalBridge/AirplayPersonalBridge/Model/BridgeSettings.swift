@@ -94,12 +94,16 @@ struct BridgeSettings: Codable, Equatable {
     /// La sortie du Mac à lui rendre, tant qu'une diffusion le tient sur le pilote. Présente au
     /// lancement, elle vient d'une diffusion interrompue sans arrêt propre.
     var videoSyncMemory: VideoSyncMemory?
+    /// La vue de la fenêtre (`WindowLayout`). Un fichier d'avant ce choix, ou une valeur inconnue,
+    /// donne la vue par défaut.
+    var windowLayout = WindowLayout.default
     var outputs: [String: Output] = [:]
 
     private enum CodingKeys: String, CodingKey {
         case masterVolumeDB, isMuted, sourceID, muteLocalOutput, outputs
         case followsSystemVolume, systemVolumeMemory
         case syncsVideo, videoSyncMemory
+        case windowLayout
     }
 
     init() {}
@@ -119,6 +123,7 @@ struct BridgeSettings: Codable, Equatable {
         systemVolumeMemory = fields.value(.systemVolumeMemory, default: nil)
         syncsVideo = fields.value(.syncsVideo, default: true)
         videoSyncMemory = fields.value(.videoSyncMemory, default: nil)
+        windowLayout = fields.value(.windowLayout, default: .default)
         // Entrée par entrée : une sortie abîmée ne doit pas coûter les réglages des autres.
         let entries = fields.value(.outputs, default: [String: TolerantOutput]())
         outputs = entries.compactMapValues(\.output)

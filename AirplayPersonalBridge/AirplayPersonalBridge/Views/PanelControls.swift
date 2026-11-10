@@ -207,7 +207,7 @@ struct PanelVolumeSlider: View {
         }
         .overlay {
             Capsule()
-                .strokeBorder(Color.accentColor, lineWidth: 2)
+                .strokeBorder(BridgeTheme.accent, lineWidth: 2)
                 .padding(-3)
                 .opacity(isFocused && !isPointerFocus ? 1 : 0)
         }
@@ -344,7 +344,7 @@ struct PanelMuteButton: View {
     }
 
     private var background: AnyShapeStyle {
-        if isMuted { return AnyShapeStyle(Color.accentColor) }
+        if isMuted { return AnyShapeStyle(BridgeTheme.accent) }
         return AnyShapeStyle(isHovering ? PanelPalette.press : PanelPalette.quietFill)
     }
 }

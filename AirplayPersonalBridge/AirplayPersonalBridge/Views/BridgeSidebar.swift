@@ -321,6 +321,8 @@ struct MacOptions: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            WindowLayoutPicker(state: state)
+            Divider()
             Text("Ce Mac")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)

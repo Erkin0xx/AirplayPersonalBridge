@@ -199,7 +199,7 @@ struct SpeakerCard: View {
         .frame(width: WindowMetrics.pastille, height: WindowMetrics.pastille)
         .background(
             output.isEnabled
-                ? AnyShapeStyle(Color.accentColor.gradient) : AnyShapeStyle(PanelPalette.quietFill),
+                ? AnyShapeStyle(BridgeTheme.accent.gradient) : AnyShapeStyle(PanelPalette.quietFill),
             in: Circle()
         )
         // Retenue mais absente du réseau, ou en attente d'une intervention : elle ne peut pas jouer, et
@@ -224,7 +224,7 @@ struct SpeakerCard: View {
             // Elle reçoit, et un son passe : le seul cas où le témoin a le droit de bouger.
             Image(systemName: "waveform")
                 .font(.body.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(BridgeTheme.accent)
                 .symbolEffect(.variableColor.iterative, isActive: !reduceMotion && appearsActive)
                 .accessibilityHidden(true)
         case .idle, .streaming:
