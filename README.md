@@ -110,7 +110,7 @@ Dans la barre de menus :
   « Caler l'image des vidéos », démarrage à l'ouverture de session. Elles s'ouvrent dans une carte par-dessus le
   panneau, qui garde sa taille.
 
-« Plan et réglages… » ouvre la fenêtre, au style Liquid Glass de macOS 26 :
+« Ouvrir la fenêtre… » ouvre la fenêtre, au style Liquid Glass de macOS 26 :
 
 - une barre latérale en verre : une carte pour ce qui joue (état, volume général, source), puis une carte par enceinte
   (la pastille qui la coche, son état, son volume, son silence) ;

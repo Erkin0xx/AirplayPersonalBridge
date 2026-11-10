@@ -619,7 +619,7 @@ struct MenuBarPanelContent: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button("Plan et réglages…", action: actions.openMainWindow)
+            Button("Ouvrir la fenêtre…", action: actions.openMainWindow)
             // La fenêtre Réglages de l'app (⌘,) : la vue, et ce qui est masqué.
             Button(action: actions.openSettings) {
                 HStack(spacing: 6) {
