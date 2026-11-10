@@ -25,8 +25,6 @@ import UniformTypeIdentifiers
 /// l'infini. L'échelle et le cadrage sont donc de l'état, que seul l'utilisateur change.
 struct RoomPlanView: View {
     @Bindable var state: BridgeState
-    /// La feuille de diagnostic : la barre d'outils de la fenêtre est celle de cette colonne.
-    var showDiagnostics: () -> Void = {}
 
     enum Tool: String, CaseIterable, Identifiable {
         case select = "Sélection"
@@ -125,11 +123,8 @@ struct RoomPlanView: View {
         PlanTransform(scale: scale, origin: origin ?? .zero)
     }
 
-    init(
-        state: BridgeState, initialSelection: Set<PlanElement> = [], showDiagnostics: @escaping () -> Void = {}
-    ) {
+    init(state: BridgeState, initialSelection: Set<PlanElement> = []) {
         self.state = state
-        self.showDiagnostics = showDiagnostics
         _selection = State(initialValue: initialSelection)
         _showsInspector = State(initialValue: !initialSelection.isEmpty)
     }
@@ -147,9 +142,17 @@ struct RoomPlanView: View {
     /// pilote sur place. Les outils sont dans la barre d'outils, l'objet sélectionné dans l'inspecteur.
     var body: some View {
         planArea
-            .overlay(alignment: .bottomTrailing) { zoomControls }
-            // L'aide passe en bas à gauche : en haut elle recouvrait la première rangée du plan.
-            .overlay(alignment: .bottomLeading) { hint }
+            // L'aide en bas à gauche — en haut elle recouvrait la première rangée du plan —, le zoom en
+            // bas à droite, sur une même ligne : quand l'inspecteur resserre le plan, c'est l'aide qui
+            // cède sa place, jamais les boutons.
+            .overlay(alignment: .bottom) {
+                HStack(alignment: .bottom, spacing: 8) {
+                    hint
+                    Spacer(minLength: 0)
+                    zoomControls
+                }
+                .padding(12)
+            }
             .overlay(alignment: .top) { wallDrawingControls }
             .toolbar { planToolbar }
             .inspector(isPresented: $showsInspector) {
@@ -288,7 +291,7 @@ struct RoomPlanView: View {
                 .accessibilityValue(showsAllLabels ? "affichées" : "masquées")
             }
         }
-        .padding(12)
+        .fixedSize()
     }
 
     @ViewBuilder
@@ -311,10 +314,13 @@ struct RoomPlanView: View {
             Text(text)
                 .font(.callout)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
                 .padding(.horizontal, 12)
                 .frame(height: 28)
                 .floatingGlass(in: Capsule())
-                .padding(12)
+                .help(text)
+                .layoutPriority(-1)
         }
     }
 
@@ -422,16 +428,13 @@ struct RoomPlanView: View {
 
     }
 
-    /// Ce qui vaut pour toute la fenêtre ferme la barre : le diagnostic, puis l'action principale.
+    /// L'action principale de la fenêtre ferme la barre : la barre d'outils de la fenêtre est celle de
+    /// cette colonne. Seule dans son verre, teinté. La barre est comptée pour tenir à la largeur minimale,
+    /// inspecteur ouvert : ce qui déborde part dans le menu de débordement, en commençant par la fin, et
+    /// Diffuser n'a pas à s'y cacher. D'où le diagnostic dans l'en-tête de la barre latérale, et le lieu
+    /// d'écoute en menu.
     @ToolbarContentBuilder
     private var windowTools: some ToolbarContent {
-        ToolbarSpacer(.fixed)
-        ToolbarItem {
-            Button(action: showDiagnostics) {
-                Label("Diagnostic", systemImage: "waveform.path.ecg")
-            }
-            .help("Compteurs de la capture et de chaque sortie")
-        }
         ToolbarSpacer(.fixed)
         ToolbarItem {
             StreamingCommand(state: state)
@@ -549,7 +552,8 @@ struct RoomPlanView: View {
                     Text(listener.name.isEmpty ? listener.kind.label : listener.name).tag(listener.id)
                 }
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.menu)
+            .fixedSize()
             .help("Lieu d'écoute : recale les enceintes pour ce lieu, sans couper le son")
         }
     }

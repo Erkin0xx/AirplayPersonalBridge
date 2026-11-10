@@ -25,13 +25,10 @@ struct ContentView: View {
 
     var body: some View {
         NavigationSplitView {
-            BridgeSidebar(state: state)
+            BridgeSidebar(state: state, showDiagnostics: { showsDiagnostics = true })
                 .navigationSplitViewColumnWidth(min: 290, ideal: 330, max: 420)
         } detail: {
-            RoomPlanView(
-                state: state, initialSelection: preview.planSelection,
-                showDiagnostics: { showsDiagnostics = true }
-            )
+            RoomPlanView(state: state, initialSelection: preview.planSelection)
         }
         .navigationTitle("AirPlay Personal Bridge")
         // Le titre reste celui de la fenêtre (menu Fenêtre, Mission Control), mais la barre d'outils

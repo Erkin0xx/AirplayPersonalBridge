@@ -12,6 +12,8 @@ import SwiftUI
 /// que le panneau range dans ses options repliées, ferment la liste.
 struct BridgeSidebar: View {
     @Bindable var state: BridgeState
+    /// La feuille de diagnostic, ouverte depuis l'en-tête d'état : c'est l'état qu'elle détaille.
+    var showDiagnostics: () -> Void = {}
 
     var body: some View {
         List {
@@ -30,26 +32,34 @@ struct BridgeSidebar: View {
 
     // MARK: - État
 
-    /// L'en-tête du panneau, sans sa commande : la pastille et l'état en mots. La commande Diffuser
-    /// est dans la barre d'outils.
+    /// L'en-tête du panneau, sans sa commande : la pastille et l'état en mots, puis le diagnostic qui le
+    /// détaille. La commande Diffuser est dans la barre d'outils, où rien ne la fait déborder.
     private var status: some View {
         let status = state.status
         return HStack(spacing: 10) {
-            PanelStatusChip(status: status.menuBar, isAudible: state.captureAlert == nil && !state.isMuted)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(status.title)
-                    .font(.headline)
-                    .lineLimit(1)
-                if let detail = status.detail {
-                    Text(detail)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                PanelStatusChip(status: status.menuBar, isAudible: state.captureAlert == nil && !state.isMuted)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(status.title)
+                        .font(.headline)
                         .lineLimit(1)
+                    if let detail = status.detail {
+                        Text(detail)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
+            .accessibilityElement(children: .combine)
+            Spacer(minLength: 4)
+            Button(action: showDiagnostics) {
+                Label("Diagnostic", systemImage: "waveform.path.ecg").labelStyle(.iconOnly)
+            }
+            .buttonStyle(.borderless)
+            .help("Diagnostic : compteurs de la capture et de chaque sortie")
         }
         .padding(.vertical, 4)
-        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Alertes

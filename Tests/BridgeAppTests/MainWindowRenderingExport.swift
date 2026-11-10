@@ -61,7 +61,8 @@ struct MainWindowExport {
 
     /// La fenêtre entière, colonnes de verre comprises.
     private func writeMainWindow(
-        _ state: BridgeState, selection: Set<PlanElement> = [], scheme: ColorScheme, to url: URL
+        _ state: BridgeState, selection: Set<PlanElement> = [], scheme: ColorScheme, size: CGSize = Self.size,
+        to url: URL
     ) throws {
         let inspector = PlanInspector(
             state: state, selection: selection, history: .constant(PlanHistory()),
@@ -69,7 +70,7 @@ struct MainWindowExport {
         )
         try writeWindow(
             ContentView(state: state, preview: MainWindowPreviewOptions(planSelection: selection)),
-            scheme: scheme,
+            scheme: scheme, size: size,
             columns: WindowSnapshot.Columns(
                 leading: AnyView(BridgeSidebar(state: state)),
                 trailing: selection.isEmpty ? nil : AnyView(inspector)
@@ -122,6 +123,15 @@ struct MainWindowExport {
             try writeMainWindow(
                 room, selection: geneva.map { [.object($0.id)] } ?? [], scheme: scheme,
                 to: directory.appending(path: "fenetre-inspecteur-\(suffix).png")
+            )
+
+            // Le cas le plus serré : la fenêtre à sa largeur minimale, inspecteur ouvert.
+            let narrow = Self.state(.listeningPlaces)
+            let narrowGeneva = narrow.roomLayout.objects.first { $0.kind.outputID == Self.genevaID }
+            try writeMainWindow(
+                narrow, selection: narrowGeneva.map { [.object($0.id)] } ?? [], scheme: scheme,
+                size: CGSize(width: 960, height: 640),
+                to: directory.appending(path: "fenetre-etroite-inspecteur-\(suffix).png")
             )
 
             // Plusieurs murs : le résumé de la sélection.
