@@ -25,10 +25,30 @@ struct ContentView: View {
 
     var body: some View {
         layout
+        // Par-dessus chaque vue, sans barre d'outils : la source en pastille au centre, les options à droite.
+        .overlay(alignment: .top) {
+            SourcePill(state: state)
+                .padding(.top, WindowChromeMetrics.topPadding)
+        }
+        .overlay(alignment: .topTrailing) {
+            HStack(spacing: 8) {
+                // Le lieu d'écoute de la console, en haut à droite à côté des options ; la vue Plan a le sien
+                // dans ses outils.
+                if state.windowLayout == .console {
+                    ConsoleListeningPlaces(state: state)
+                }
+                WindowOptionsButton(state: state, showDiagnostics: { showsDiagnostics = true })
+            }
+            .padding(.top, WindowChromeMetrics.topPadding)
+            .padding(.trailing, WindowChromeMetrics.sideMargin)
+        }
+        // Le contenu passe sous la barre de titre, que la scène rend transparente (`hiddenTitleBar`) : seuls
+        // les boutons de la fenêtre y restent.
+        .ignoresSafeArea()
         .navigationTitle("AirPlay Personal Bridge")
-        // Le titre reste celui de la fenêtre (menu Fenêtre, Mission Control), mais la barre d'outils
-        // garde sa place aux outils : l'état en mots est en tête de la barre latérale.
+        // Le titre reste celui de la fenêtre (menu Fenêtre, Mission Control), sans s'afficher.
         .toolbar(removing: .title)
+        .toolbar(.hidden, for: .windowToolbar)
         .frame(minWidth: 960, minHeight: 620)
         // Le thème de l'app : sombre et rose, dans les trois vues.
         .tint(BridgeTheme.accent)
@@ -48,11 +68,20 @@ extension ContentView {
     fileprivate var layout: some View {
         switch state.windowLayout {
         case .plan:
-            NavigationSplitView {
-                BridgeSidebar(state: state, showDiagnostics: { showsDiagnostics = true })
-                    .navigationSplitViewColumnWidth(min: 290, ideal: 330, max: 420)
-            } detail: {
-                RoomPlanView(state: state, initialSelection: preview.planSelection)
+            RoomPlanView(
+                state: state, initialSelection: preview.planSelection,
+                contentInsets: EdgeInsets(
+                    top: WindowChromeMetrics.contentTop, leading: Self.panelInset,
+                    bottom: 60, trailing: WindowChromeMetrics.sideMargin
+                )
+            )
+            .overlay(alignment: .topLeading) {
+                BridgeSidebar(state: state)
+                    .frame(width: BridgeSidebar.panelWidth)
+                    .floatingGlass(in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                    .padding(.leading, WindowChromeMetrics.sideMargin)
+                    .padding(.top, WindowChromeMetrics.contentTop)
+                    .padding(.bottom, WindowChromeMetrics.sideMargin)
             }
         case .halo:
             immersive { HaloView(state: state) }
@@ -61,21 +90,15 @@ extension ContentView {
         }
     }
 
-    /// Une vue sans barre latérale : son contenu sur le fond de nappes, qui passe sous la barre de titre ;
-    /// la source et les options dans la barre d'outils, en verre.
+    /// Le bord gauche de ce que le panneau des enceintes laisse visible du plan.
+    private static let panelInset = WindowChromeMetrics.sideMargin + BridgeSidebar.panelWidth + 18
+
+    /// Une vue sans plan : son contenu sur le fond de nappes, sous les commandes flottantes.
     private func immersive(@ViewBuilder _ content: () -> some View) -> some View {
         content()
+            .padding(.top, WindowChromeMetrics.contentTop - 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background { AuroraBackground(isLive: state.isAudiblyStreaming) }
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    SourceMenu(state: state)
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    WindowOptionsButton(state: state, showDiagnostics: { showsDiagnostics = true })
-                }
-            }
-            .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
     }
 }
 

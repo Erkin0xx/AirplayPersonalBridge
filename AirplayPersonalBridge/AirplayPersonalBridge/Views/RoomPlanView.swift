@@ -123,11 +123,19 @@ struct RoomPlanView: View {
         PlanTransform(scale: scale, origin: origin ?? .zero)
     }
 
-    init(state: BridgeState, initialSelection: Set<PlanElement> = []) {
+    /// Ce que recouvrent les panneaux qui flottent au-dessus du plan : le cadrage s'en écarte, pour que la
+    /// pièce tombe dans la partie visible, et l'aide du bas commence après le panneau de gauche.
+    private let contentInsets: EdgeInsets
+
+    init(state: BridgeState, initialSelection: Set<PlanElement> = [], contentInsets: EdgeInsets = EdgeInsets()) {
         self.state = state
+        self.contentInsets = contentInsets
         _selection = State(initialValue: initialSelection)
         _showsInspector = State(initialValue: !initialSelection.isEmpty)
     }
+
+    /// La largeur de l'inspecteur flottant.
+    static let inspectorWidth: CGFloat = 300
 
     private var renderer: PlanRenderer {
         PlanRenderer(
@@ -144,26 +152,47 @@ struct RoomPlanView: View {
         )
     }
 
-    /// Le plan plein cadre, prolongé sous la barre latérale de verre ; par-dessus, en verre, ce qui le
-    /// pilote sur place. Les outils sont dans la barre d'outils, l'objet sélectionné dans l'inspecteur.
+    /// Le plan plein cadre ; par-dessus, en verre, tout ce qui le pilote : les outils en haut, l'aide et le
+    /// zoom en bas, l'objet sélectionné dans un inspecteur qui flotte à droite. Ni barre d'outils ni
+    /// colonne : Baptiste veut que les éléments volent au-dessus du fond (2026-11-10).
     var body: some View {
         planArea
-            // L'aide en bas à gauche — en haut elle recouvrait la première rangée du plan —, le zoom en
-            // bas à droite, sur une même ligne : quand l'inspecteur resserre le plan, c'est l'aide qui
-            // cède sa place, jamais les boutons.
+            // L'aide en bas, après le panneau des enceintes, le zoom en bas à droite, sur une même ligne :
+            // quand la fenêtre se resserre, c'est l'aide qui cède sa place, jamais les boutons.
             .overlay(alignment: .bottom) {
                 HStack(alignment: .bottom, spacing: 8) {
                     hint
                     Spacer(minLength: 0)
                     zoomControls
                 }
-                .padding(12)
+                .padding(.leading, contentInsets.leading)
+                .padding([.trailing, .bottom], WindowChromeMetrics.sideMargin)
             }
-            .overlay(alignment: .top) { wallDrawingControls }
-            .toolbar { planToolbar }
-            .inspector(isPresented: $showsInspector) {
-                inspector
-                    .inspectorColumnWidth(min: 270, ideal: 300, max: 380)
+            .overlay(alignment: .topLeading) {
+                drawingTools
+                    .padding(.leading, WindowChromeMetrics.trafficLightsWidth)
+                    .padding(.top, WindowChromeMetrics.topPadding)
+            }
+            .overlay(alignment: .topTrailing) {
+                planTools
+                    .padding(.trailing, WindowChromeMetrics.sideMargin + WindowChromeMetrics.controlHeight + 8)
+                    .padding(.top, WindowChromeMetrics.topPadding)
+            }
+            .overlay(alignment: .top) {
+                wallDrawingControls
+                    .padding(.top, WindowChromeMetrics.contentTop - 12)
+            }
+            .overlay(alignment: .topTrailing) {
+                if showsInspector {
+                    inspector
+                        .scrollContentBackground(.hidden)
+                        .frame(width: Self.inspectorWidth)
+                        .frame(maxHeight: 560)
+                        .floatingGlass(in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                        .padding(.top, WindowChromeMetrics.contentTop)
+                        .padding(.trailing, WindowChromeMetrics.sideMargin)
+                        .padding(.bottom, 72)
+                }
             }
             .onDeleteCommand(perform: deleteSelection)
             // Changer d'objet clôt les retouches en cours : les réglages d'un autre meuble sont
@@ -388,16 +417,9 @@ struct RoomPlanView: View {
         Tool.allCases.filter { $0 != .calibrate || state.roomLayout.background != nil }
     }
 
-    @ToolbarContentBuilder
-    private var planToolbar: some ToolbarContent {
-        editingTools
-        historyAndViewTools
-        windowTools
-    }
-
-    @ToolbarContentBuilder
-    private var editingTools: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
+    /// Les outils de tracé et l'historique, en haut à gauche, après les boutons de la fenêtre.
+    private var drawingTools: some View {
+        HStack(spacing: 6) {
             Picker("Outil", selection: $tool) {
                 ForEach(availableTools) { tool in
                     Label(tool.rawValue, systemImage: tool.symbol).tag(tool)
@@ -405,71 +427,59 @@ struct RoomPlanView: View {
             }
             .pickerStyle(.segmented)
             .labelStyle(.iconOnly)
+            .labelsHidden()
+            .fixedSize()
             .help("Outil : Sélection, Murs" + (availableTools.contains(.calibrate) ? ", Calibrer" : ""))
             .onChange(of: tool) { _, _ in commitPendingWall() }
-        }
 
-        // Les outils de tracé à gauche, contre la barre latérale ; tout le reste au bord droit.
-        ToolbarSpacer(.flexible)
-        ToolbarItem {
-            addMenu
-        }
-
-        if state.roomLayout.listeners.count >= 2 {
-            ToolbarSpacer(.fixed)
-            ToolbarItem {
-                listeningPlacePicker
-            }
-        }
-
-    }
-
-    @ToolbarContentBuilder
-    private var historyAndViewTools: some ToolbarContent {
-        ToolbarSpacer(.fixed)
-        ToolbarItemGroup {
             Button(action: undo) {
-                Label("Annuler", systemImage: "arrow.uturn.backward")
+                Label("Annuler", systemImage: "arrow.uturn.backward").labelStyle(.iconOnly)
             }
             .keyboardShortcut("z", modifiers: .command)
             .disabled(!canUndo)
             .help("Annuler (⌘Z)")
 
             Button(action: redo) {
-                Label("Rétablir", systemImage: "arrow.uturn.forward")
+                Label("Rétablir", systemImage: "arrow.uturn.forward").labelStyle(.iconOnly)
             }
             .keyboardShortcut("z", modifiers: [.command, .shift])
             .disabled(!history.canRedo)
             .help("Rétablir (⇧⌘Z)")
         }
+        .buttonStyle(.borderless)
+        // Blancs : le rose de l'app est réservé à l'état, pas aux commandes.
+        .tint(.white)
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8)
+        .frame(height: WindowChromeMetrics.controlHeight)
+        .floatingGlass(in: Capsule())
+    }
 
-        ToolbarSpacer(.fixed)
-        ToolbarItemGroup {
+    /// Le lieu d'écoute, la bibliothèque, les commandes du plan et l'inspecteur, en haut à droite, avant le
+    /// bouton des options.
+    private var planTools: some View {
+        HStack(spacing: 6) {
+            if state.roomLayout.listeners.count >= 2 {
+                listeningPlacePicker
+            }
+            addMenu
             moreMenu
-
             Button {
                 showsInspector.toggle()
                 isInspectorPinned = showsInspector
             } label: {
-                Label("Inspecteur", systemImage: "sidebar.trailing")
+                Label("Inspecteur", systemImage: "sidebar.trailing").labelStyle(.iconOnly)
             }
+            .buttonStyle(.borderless)
             .help(showsInspector ? "Masquer l'inspecteur" : "Afficher l'inspecteur du plan")
         }
-
-    }
-
-    /// L'action principale de la fenêtre ferme la barre : la barre d'outils de la fenêtre est celle de
-    /// cette colonne. Seule dans son verre, teinté. La barre est comptée pour tenir à la largeur minimale,
-    /// inspecteur ouvert : ce qui déborde part dans le menu de débordement, en commençant par la fin, et
-    /// Diffuser n'a pas à s'y cacher. D'où le diagnostic dans l'en-tête de la barre latérale, et le lieu
-    /// d'écoute en menu.
-    @ToolbarContentBuilder
-    private var windowTools: some ToolbarContent {
-        ToolbarSpacer(.fixed)
-        ToolbarItem {
-            StreamingCommand(state: state)
-        }
-        .sharedBackgroundVisibility(.hidden)
+        .menuStyle(.borderlessButton)
+        .tint(.white)
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12)
+        .frame(height: WindowChromeMetrics.controlHeight)
+        .floatingGlass(in: Capsule())
+        .fixedSize()
     }
 
     /// La bibliothèque de meubles, plus un raccourci par sortie découverte.
@@ -785,17 +795,20 @@ struct RoomPlanView: View {
 
     private func fitToContent(in size: CGSize) {
         guard size.width > 0, size.height > 0 else { return }
-        let fitted = PlanTransform.fitting(state.roomLayout, in: size)
+        // La partie visible : ce que les panneaux flottants ne recouvrent pas. Une fenêtre trop étroite
+        // pour en laisser garde tout le plan.
+        let visible = PlanTransform.visibleRect(in: size, insets: contentInsets)
+        let fitted = PlanTransform.fitting(state.roomLayout, in: visible.size)
         // L'échelle proposée est bornée — un mur droit a une emprise de hauteur nulle et
         // ferait diverger le calcul — puis le centrage est refait avec l'échelle retenue.
         scale = min(max(fitted.scale, scaleRange.lowerBound), scaleRange.upperBound)
         if let bounds = state.roomLayout.bounds {
             origin = CGPoint(
-                x: (size.width - bounds.width * scale) / 2 - bounds.minX * scale,
-                y: (size.height - bounds.height * scale) / 2 - bounds.minY * scale
+                x: visible.minX + (visible.width - bounds.width * scale) / 2 - bounds.minX * scale,
+                y: visible.minY + (visible.height - bounds.height * scale) / 2 - bounds.minY * scale
             )
         } else {
-            origin = CGPoint(x: size.width / 2 - 3 * scale, y: size.height / 2 - 3 * scale)
+            origin = CGPoint(x: visible.midX - 3 * scale, y: visible.midY - 3 * scale)
         }
     }
 

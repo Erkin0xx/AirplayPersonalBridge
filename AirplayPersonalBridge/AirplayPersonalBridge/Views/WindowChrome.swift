@@ -5,8 +5,20 @@
 
 import SwiftUI
 
-/// Ce que les trois vues de la fenêtre partagent autour de leur contenu : le choix de la vue, la source,
-/// et le bouton des options.
+/// Ce que les trois vues de la fenêtre partagent par-dessus leur contenu : la source en pastille en haut au
+/// centre, le bouton des options en haut à droite, et le choix de la vue. Pas de barre d'outils : tout flotte
+/// au-dessus du fond (demande de Baptiste du 2026-11-10).
+enum WindowChromeMetrics {
+    /// Du haut de la fenêtre aux commandes flottantes, alignées sur les boutons de la fenêtre.
+    static let topPadding: CGFloat = 8
+    static let controlHeight: CGFloat = 36
+    /// Du haut de la fenêtre au contenu, sous les commandes flottantes.
+    static let contentTop: CGFloat = 56
+    /// Des bords de la fenêtre aux éléments flottants.
+    static let sideMargin: CGFloat = 14
+    /// La place des boutons rouge, orange et vert, à gauche des commandes flottantes.
+    static let trafficLightsWidth: CGFloat = 84
+}
 
 /// Le choix de la vue de la fenêtre, en tête des options.
 struct WindowLayoutPicker: View {
@@ -29,14 +41,12 @@ struct WindowLayoutPicker: View {
     }
 }
 
-/// La source, en menu : pour les vues qui n'ont pas de barre latérale où la loger.
-struct SourceMenu: View {
+/// La source, en pastille de verre : son nom et un chevron, qui ouvrent la liste des sources.
+struct SourcePill: View {
     @Bindable var state: BridgeState
 
     var body: some View {
-        // Un menu au libellé explicite : la source en vigueur se lit dans la barre, là où un sélecteur
-        // sans libellé ne montrait qu'un chevron. Des identifiants, pas des valeurs : les PID d'une
-        // application varient d'un relevé à l'autre.
+        // Des identifiants, pas des valeurs : les PID d'une application varient d'un relevé à l'autre.
         Menu {
             Picker(
                 "Source",
@@ -50,16 +60,31 @@ struct SourceMenu: View {
             Divider()
             Button("Rafraîchir la liste") { state.refreshSources() }
         } label: {
-            Label(state.selectedSource.label, systemImage: "waveform")
+            HStack(spacing: 7) {
+                Text(state.selectedSource.label)
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.bold))
+                    .accessibilityHidden(true)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 18)
+            .frame(height: WindowChromeMetrics.controlHeight)
+            .floatingGlass(in: Capsule(), interactive: true)
+            .contentShape(Capsule())
         }
-        .labelStyle(.titleAndIcon)
-        .accessibilityLabel("Source")
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
         .help("Source du son. Pendant une diffusion, en changer la relance.")
+        .accessibilityLabel("Source")
+        .accessibilityValue(state.selectedSource.label)
     }
 }
 
-/// Le bouton des options des vues sans barre latérale : la vue de la fenêtre, les options du Mac, et le
-/// diagnostic.
+/// Le bouton des options, rond, en verre : la vue de la fenêtre, les options du Mac, et le diagnostic.
 struct WindowOptionsButton: View {
     @Bindable var state: BridgeState
     var showDiagnostics: () -> Void
@@ -69,9 +94,16 @@ struct WindowOptionsButton: View {
         Button {
             isPresented.toggle()
         } label: {
-            Label("Options", systemImage: "ellipsis")
+            Image(systemName: "ellipsis")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: WindowChromeMetrics.controlHeight, height: WindowChromeMetrics.controlHeight)
+                .floatingGlass(in: Circle(), interactive: true)
+                .contentShape(Circle())
         }
+        .buttonStyle(.plain)
         .help("Options : vue de la fenêtre, options du Mac, diagnostic")
+        .accessibilityLabel("Options")
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 0) {
                 MacOptions(state: state)

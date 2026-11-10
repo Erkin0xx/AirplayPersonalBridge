@@ -45,6 +45,9 @@ struct MainWindowExport {
         )
         window.isReleasedWhenClosed = false
         window.title = "AirPlay Personal Bridge"
+        // Comme la scène de l'app (`hiddenTitleBar`) : barre de titre transparente, boutons seuls.
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
         window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
         window.contentView = hosting
         window.setContentSize(size)
@@ -59,22 +62,15 @@ struct MainWindowExport {
         window.close()
     }
 
-    /// La fenêtre entière, colonnes de verre comprises.
+    /// La fenêtre entière. Plus de colonne de verre à repeindre : le panneau des enceintes et l'inspecteur
+    /// flottent, et leur verre a sa doublure (`windowSimulatesGlass`).
     private func writeMainWindow(
         _ state: BridgeState, selection: Set<PlanElement> = [], scheme: ColorScheme, size: CGSize = Self.size,
         to url: URL
     ) throws {
-        let inspector = PlanInspector(
-            state: state, selection: selection, history: .constant(PlanHistory()),
-            showsAllLabels: .constant(false), onDelete: {}, onImportBackground: {}, onRemoveBackground: {}
-        )
         try writeWindow(
             ContentView(state: state, preview: MainWindowPreviewOptions(planSelection: selection)),
             scheme: scheme, size: size,
-            columns: WindowSnapshot.Columns(
-                leading: AnyView(BridgeSidebar(state: state)),
-                trailing: selection.isEmpty ? nil : AnyView(inspector)
-            ),
             to: url
         )
     }

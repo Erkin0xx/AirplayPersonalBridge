@@ -131,7 +131,7 @@ struct ConsoleViewTests {
     func masterFaderUnmutes() {
         let state = BridgeState.preview(.streaming)
         state.isMuted = true
-        let binding = ConsoleGeneralTile.master(of: state)
+        let binding = TransportBar.master(of: state)
         binding.wrappedValue = state.masterVolumeDB
         #expect(!state.isMuted)
         #expect(state.masterVolumeDB == BridgeState.defaultMasterVolumeDB)
@@ -149,8 +149,8 @@ struct ConsoleViewTests {
         let layout = ConsoleLayout.make(size: minimum, speakerCount: 4)
         #expect(!layout.scrolls)
         #expect(layout.rowWidth <= minimum.width - 2 * ConsoleMetrics.margin)
-        // L'en-tête prend la largeur de la rangée : le titre part du bord de la première tuile.
-        #expect(layout.columnWidth == layout.rowWidth)
+        // La barre de lecture prend la largeur de la rangée, sans descendre sous la sienne.
+        #expect(layout.columnWidth == max(layout.rowWidth, ConsoleLayout.minimumColumnWidth))
     }
 
     @Test("Chaque enceinte ajoute une tuile et son intervalle ; la rangée défile quand elle déborde")
@@ -174,7 +174,7 @@ struct ConsoleViewTests {
         #expect(!ConsoleLayout.make(size: CGSize(width: 1400, height: 848), speakerCount: 6).scrolls)
     }
 
-    @Test("Une ou deux enceintes : l'en-tête garde la place de son titre et de sa commande")
+    @Test("Une ou deux enceintes : la barre de lecture garde la place de son titre et de sa commande")
     func narrowRowKeepsAWideHeader() {
         let layout = ConsoleLayout.make(size: CGSize(width: 1200, height: 700), speakerCount: 1)
         #expect(layout.rowWidth < ConsoleLayout.minimumColumnWidth)
@@ -184,7 +184,7 @@ struct ConsoleViewTests {
     @Test("Sans enceinte, une tuile d'attente tient leur place")
     func emptyRow() {
         let empty = ConsoleLayout.rowWidth(speakerCount: 0)
-        #expect(empty == ConsoleMetrics.generalWidth + ConsoleMetrics.tileSpacing + ConsoleMetrics.placeholderWidth)
+        #expect(empty == ConsoleMetrics.placeholderWidth)
         #expect(!ConsoleLayout.make(size: minimum, speakerCount: 0).scrolls)
         // Un compte absurde ne retire rien à la rangée.
         #expect(ConsoleLayout.rowWidth(speakerCount: -3) == empty)

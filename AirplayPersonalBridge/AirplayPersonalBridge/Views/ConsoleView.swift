@@ -17,7 +17,7 @@ struct ConsoleLayout: Equatable {
     /// Le plafond de la hauteur des tuiles : un curseur n'a pas à faire toute la hauteur d'un grand écran.
     var maxTileHeight: CGFloat
 
-    /// En deçà, l'en-tête n'a plus la place de son titre et de sa commande.
+    /// En deçà, la barre de lecture n'a plus la place de son titre, de son curseur et de sa commande.
     static let minimumColumnWidth: CGFloat = 720
     static let minimumTileHeight: CGFloat = 250
     static let tileHeightCeiling: CGFloat = 480
@@ -36,20 +36,17 @@ struct ConsoleLayout: Equatable {
 
     static func rowWidth(speakerCount: Int) -> CGFloat {
         let count = max(speakerCount, 0)
-        let rest =
-            count == 0
-            ? ConsoleMetrics.placeholderWidth + ConsoleMetrics.tileSpacing
-            : CGFloat(count) * (ConsoleMetrics.speakerWidth + ConsoleMetrics.tileSpacing)
-        return ConsoleMetrics.generalWidth + rest
+        guard count > 0 else { return ConsoleMetrics.placeholderWidth }
+        return CGFloat(count) * ConsoleMetrics.speakerWidth + CGFloat(count - 1) * ConsoleMetrics.tileSpacing
     }
 }
 
-/// La vue « Console » de la fenêtre : ce qui joue en tête, puis une tuile et un curseur vertical par
-/// enceinte, le volume général en premier.
+/// La vue « Console » de la fenêtre : une tuile et un curseur vertical par enceinte, puis, en grand dessous,
+/// la barre de lecture (ce qui joue, le volume général, Diffuser/Arrêter).
 ///
 /// La mise en page de la maquette 2, aux couleurs du thème : du verre sur le fond de nappes, le rose de
-/// l'app aux curseurs. Elle ne montre que ce qu'on règle en écoutant ; la source et les options sont dans
-/// la barre d'outils (`WindowChrome`), le plan est une autre vue.
+/// l'app réservé à l'état, les curseurs en blanc. La source, le lieu d'écoute et les options flottent en haut
+/// de la fenêtre (`WindowChrome`) ; le plan est une autre vue.
 struct ConsoleView: View {
     @Bindable var state: BridgeState
 
@@ -62,19 +59,20 @@ struct ConsoleView: View {
         GeometryReader { proxy in
             let layout = ConsoleLayout.make(size: proxy.size, speakerCount: state.outputs.count)
             VStack(spacing: 0) {
-                header
-                    .frame(width: layout.columnWidth)
                 if state.startFailure != nil || state.captureAlert != nil {
                     notices
                         .frame(width: layout.columnWidth)
-                        .padding(.top, 16)
+                        .padding(.bottom, 18)
                 }
                 console(layout)
                     .frame(minHeight: ConsoleLayout.minimumTileHeight, maxHeight: layout.maxTileHeight)
-                    .padding(.top, 22)
                 footer
                     .frame(width: layout.columnWidth)
                     .padding(.top, 12)
+                // Le volume général et la commande, en grand sous les curseurs des enceintes.
+                TransportBar(state: state)
+                    .frame(width: layout.columnWidth)
+                    .padding(.top, 14)
             }
             .padding(.top, 12)
             .padding(.bottom, 16)
@@ -82,46 +80,6 @@ struct ConsoleView: View {
         }
         .animation(PanelMotion.standard(reduceMotion: reduceMotion), value: state.captureAlert != nil)
         .animation(PanelMotion.standard(reduceMotion: reduceMotion), value: state.startFailure != nil)
-    }
-
-    // MARK: - En-tête
-
-    /// Ce qui joue, puis le lieu d'écoute et la commande.
-    private var header: some View {
-        let status = state.status
-        return HStack(spacing: 16) {
-            HStack(spacing: 16) {
-                PanelStatusChip(
-                    status: status.menuBar, isAudible: state.captureAlert == nil && !state.isMuted, diameter: 58
-                )
-                .shadow(color: .black.opacity(0.3), radius: 10, y: 5)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(status.title)
-                        .font(.system(size: 30, weight: .bold))
-                        .tracking(-0.5)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                    if let detail = status.detail {
-                        Text(detail)
-                            .font(.system(size: 15))
-                            // Sur les nappes et non sur du verre : le secondaire du système s'y perdrait.
-                            .foregroundStyle(Color.white.opacity(0.78))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                }
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isHeader)
-
-            Spacer(minLength: 8)
-
-            ConsoleListeningPlaces(state: state)
-                .layoutPriority(1)
-            StreamingCommand(state: state)
-                .controlSize(.large)
-                .layoutPriority(1)
-        }
     }
 
     // MARK: - Alertes
@@ -166,7 +124,6 @@ struct ConsoleView: View {
         GeometryReader { proxy in
             ScrollView(.horizontal) {
                 HStack(spacing: ConsoleMetrics.tileSpacing) {
-                    ConsoleGeneralTile(state: state)
                     if speakers.isEmpty {
                         ConsoleEmptyTile(state: state)
                     } else {

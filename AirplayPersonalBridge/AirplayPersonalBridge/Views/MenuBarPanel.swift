@@ -516,6 +516,8 @@ struct MenuBarPanelContent: View {
                         .font(.callout)
                 }
                 .menuStyle(.borderlessButton)
+                // Blanc : le rose de l'app est réservé à l'état, pas aux commandes.
+                .tint(.primary)
                 .fixedSize()
                 .help("Pendant une diffusion, changer de source la relance.")
             }

@@ -7,7 +7,6 @@ import SwiftUI
 
 /// Les mesures de la console : des tuiles de largeur fixe, sur une seule ligne.
 enum ConsoleMetrics {
-    static let generalWidth: CGFloat = 172
     static let speakerWidth: CGFloat = 160
     /// La tuile qui tient lieu d'enceintes quand il n'y en a aucune.
     static let placeholderWidth: CGFloat = 380

@@ -132,7 +132,16 @@ Console, et au pied de la barre latérale de la vue Plan.
 - Persisté dans `settings.json` par identifiant de sortie (`OutputState.id`), avec décodage tolérant ; un identifiant
   qui ne correspond plus à aucune enceinte reste dans la liste, sans gêner.
 
-### C. La source en pastille, sans barre d'outils
+### C. La source en pastille, sans barre d'outils — **fait le 2026-11-10, ne pas refaire**
+
+Fait juste après la rédaction de ce prompt, pour les trois vues : plus de barre d'outils ni de barre latérale
+(scène en `.windowStyle(.hiddenTitleBar)`), source en pastille (`SourcePill`) et options (`WindowOptionsButton`)
+flottantes, `WindowChromeMetrics` pour les marges. Vue Plan : panneau des enceintes et inspecteur flottants, outils du
+plan en deux capsules. Vue Console : plus de tuile « Général » ni d'en-tête, une barre de lecture (`TransportBar`) en
+bas, le lieu d'écoute en haut à droite. L'agent 5 du § 4 n'a donc plus lieu d'être. Ce qui suit est la demande
+d'origine, pour mémoire.
+
+#### Demande d'origine
 
 - Vues Halo et Console : **plus de barre d'outils**. La pastille de la source flotte en haut au centre, comme sur la
   capture : fond sombre translucide, liseré clair, texte blanc, chevron. Elle ouvre le même menu qu'aujourd'hui
@@ -172,11 +181,10 @@ tout relancer.
      les ondes doivent suivre la matière).
    - **Agent 4, masquage et fenêtre Réglages** : modèle et persistance (`BridgeSettings`, `BridgeState`), nouvelle vue de
      réglages, commandes « Masquer » dans les trois vues et le panneau, scène `Settings`.
-   - **Agent 5, pastille de source sans barre d'outils** : `Views/ContentView.swift` (`immersive`),
-     `Views/WindowChrome.swift`.
+   - ~~Agent 5, pastille de source sans barre d'outils~~ : fait (§ 3.C).
 
-   Les agents 4 et 5 touchent tous deux `ContentView.swift`, `HaloView.swift` ou `ConsoleView.swift`. Découpe pour
-   qu'un fichier n'ait qu'un propriétaire, ou fais-les passer l'un après l'autre.
+   Les agents 3 et 4 peuvent toucher tous deux `HaloView.swift` ou les pastilles d'enceintes : découpe pour qu'un
+   fichier n'ait qu'un propriétaire, ou fais-les passer l'un après l'autre.
 3. **Toi** : relis chaque branche, regarde ses rendus, fusionne dans `main`, lance la suite complète, et corrige les
    conflits et les défauts.
 

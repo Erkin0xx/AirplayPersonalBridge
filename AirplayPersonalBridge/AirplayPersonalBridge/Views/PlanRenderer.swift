@@ -86,6 +86,23 @@ enum PlanPalette {
     }
 }
 
+extension PlanTransform {
+    /// La partie d'une vue que des panneaux flottants laissent visible. Quand ils ne laissent pas au moins
+    /// le tiers de la largeur ou de la hauteur, c'est la vue entière : mieux vaut un plan sous un panneau
+    /// qu'un plan minuscule.
+    static func visibleRect(in size: CGSize, insets: EdgeInsets) -> CGRect {
+        let width = size.width - insets.leading - insets.trailing
+        let height = size.height - insets.top - insets.bottom
+        let x = width >= size.width / 3 ? insets.leading : 0
+        let y = height >= size.height / 3 ? insets.top : 0
+        return CGRect(
+            x: x, y: y,
+            width: width >= size.width / 3 ? width : size.width,
+            height: height >= size.height / 3 ? height : size.height
+        )
+    }
+}
+
 /// Le dessin du plan, sans vue ni état d'interface.
 ///
 /// Séparé de l'éditeur pour pouvoir être **rendu hors de l'app** : un test produit un PNG du

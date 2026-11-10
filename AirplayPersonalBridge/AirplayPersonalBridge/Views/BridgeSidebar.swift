@@ -5,29 +5,26 @@
 
 import SwiftUI
 
-/// La barre latérale de la fenêtre : ce qui joue, puis les enceintes, une carte chacune.
-///
-/// Elle flotte en verre au-dessus du plan, et ne montre que ce qu'on règle en écoutant : l'état, la
-/// source, le volume général, puis le volume de chaque enceinte. Tout ce qui se règle une fois (délai,
-/// tonalité, options du Mac, diagnostic) est un clic plus loin, dans une fenêtre surgissante : une barre
-/// latérale qui montre tout ne montre plus rien.
+/// Le panneau des enceintes de la vue Plan, qui flotte en verre au-dessus du plan : ce qui joue (état,
+/// commande Diffuser, volume général), puis une carte par enceinte. Ce qui se règle une fois (délai, tonalité,
+/// options du Mac, diagnostic) est un clic plus loin, dans une fenêtre surgissante.
 struct BridgeSidebar: View {
     @Bindable var state: BridgeState
-    /// La feuille de diagnostic, ouverte depuis le pied de la barre.
-    var showDiagnostics: () -> Void = {}
-    @State private var showsMacOptions = false
 
+    static let panelWidth: CGFloat = 330
+
+    /// À sa hauteur naturelle quand tout tient, sinon une liste qui défile : un panneau flottant ne doit
+    /// pas descendre jusqu'en bas de la fenêtre pour trois enceintes.
     var body: some View {
-        // Le pied sous la liste, pas dessus : une carte qui défile ne passe jamais derrière ses boutons.
-        VStack(spacing: 0) {
-            cards
-            footer
+        ViewThatFits(in: .vertical) {
+            content
+            ScrollView { content }
+                .scrollEdgeEffectStyle(.soft, for: .vertical)
         }
     }
 
-    private var cards: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: WindowMetrics.cardSpacing) {
+    private var content: some View {
+        VStack(alignment: .leading, spacing: WindowMetrics.cardSpacing) {
                 hero
                 if state.startFailure != nil || state.captureAlert != nil {
                     notices
@@ -36,12 +33,8 @@ struct BridgeSidebar: View {
                     .padding(.top, 10)
                     .padding(.horizontal, WindowMetrics.cardPadding)
                 outputs
-            }
-            .padding(.horizontal, WindowMetrics.margin)
-            .padding(.top, 4)
-            .padding(.bottom, 12)
         }
-        .scrollEdgeEffectStyle(.soft, for: .vertical)
+        .padding(WindowMetrics.margin)
     }
 
     // MARK: - En-tête
@@ -58,9 +51,9 @@ struct BridgeSidebar: View {
                 )
                 VStack(alignment: .leading, spacing: 1) {
                     Text(status.title)
-                        .font(.title3.weight(.semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
+                        .font(.headline)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                     if let detail = status.detail {
                         Text(detail)
                             .font(.subheadline)
@@ -69,13 +62,12 @@ struct BridgeSidebar: View {
                     }
                 }
                 Spacer(minLength: 0)
+                StreamingRoundButton(state: state, diameter: 40)
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isHeader)
+            .accessibilityElement(children: .contain)
 
             master
-            Divider()
-            source
+            awaitedSource
         }
         .padding(WindowMetrics.cardPadding)
         .windowCard()
@@ -110,40 +102,10 @@ struct BridgeSidebar: View {
 
     // MARK: - Source
 
-    /// Le sélecteur porte des identifiants : les PID d'une application varient d'un relevé à
-    /// l'autre, et une valeur complète ne correspondrait plus à aucune entrée de la liste.
-    private var sourceSelection: Binding<String> {
-        Binding(
-            get: { state.selectedSource.id },
-            set: { state.selectSource(id: $0) }
-        )
-    }
-
+    /// Une application choisie qui ne joue pas encore : elle reprendra la main. La source elle-même est dans
+    /// la pastille en haut de la fenêtre.
     @ViewBuilder
-    private var source: some View {
-        HStack(spacing: 6) {
-            Text("Source")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .fixedSize()
-            Picker("Source", selection: sourceSelection) {
-                ForEach(state.sources) { source in
-                    Text(source.label).tag(source.id)
-                }
-            }
-            .labelsHidden()
-            .help("Pendant une diffusion, changer de source la relance.")
-
-            Button {
-                state.refreshSources()
-            } label: {
-                Label("Rafraîchir les sources", systemImage: "arrow.clockwise")
-                    .labelStyle(.iconOnly)
-            }
-            .buttonStyle(.borderless)
-            .help("Rafraîchir la liste des applications qui jouent du son")
-        }
-
+    private var awaitedSource: some View {
         if let awaited = state.awaitedSourceName {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("Passera sur \(awaited) dès que cette application jouera.")
@@ -222,6 +184,7 @@ struct BridgeSidebar: View {
                         Label("Rechercher", systemImage: "arrow.clockwise").labelStyle(.iconOnly)
                     }
                     .buttonStyle(.borderless)
+                    .tint(.secondary)
                     .help("Rechercher les enceintes sur le réseau local")
                 }
             }
@@ -285,33 +248,6 @@ struct BridgeSidebar: View {
         .padding(.vertical, 16)
     }
 
-    // MARK: - Pied
-
-    /// Ce qui se règle une fois : les options du Mac, et le diagnostic qui détaille l'état.
-    private var footer: some View {
-        HStack(spacing: 4) {
-            Button {
-                showsMacOptions.toggle()
-            } label: {
-                Label("Options", systemImage: "gearshape")
-            }
-            .help("Options du Mac : son du Mac, touches de volume, calage des vidéos")
-            .popover(isPresented: $showsMacOptions, arrowEdge: .top) {
-                MacOptions(state: state)
-            }
-            Spacer()
-            Button(action: showDiagnostics) {
-                Label("Diagnostic", systemImage: "waveform.path.ecg")
-            }
-            .help("Diagnostic : compteurs de la capture et de chaque enceinte")
-        }
-        .buttonStyle(.borderless)
-        .labelStyle(.titleAndIcon)
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, WindowMetrics.margin + WindowMetrics.cardPadding)
-        .padding(.vertical, 10)
-    }
 }
 
 /// Les options du Mac, dans la fenêtre surgissante du pied de la barre latérale : les mêmes que celles du
