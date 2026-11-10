@@ -204,6 +204,9 @@ struct RoomPlanView: View {
             drawCalibration(&context)
             drawPendingWall(&context)
         }
+        // Le fond des autres vues, éteint : le même grain et une trace des mêmes couleurs, immobiles sous
+        // un plan qu'on édite.
+        .background { AuroraBackground(isLive: false) }
         .background(PlanPalette.canvas)
         .overlay { SpeakerPulse(sources: playingSpeakers, reach: 0.55 * scale) }
         .contentShape(Rectangle())

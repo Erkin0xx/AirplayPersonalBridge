@@ -196,6 +196,8 @@ struct MenuBarPanelContent: View {
         // Hors du conteneur de verre : la carte ne doit pas se fondre dans le bouton de l'en-tête.
         .panelPopup("Options", isPresented: $isOptionsPresented) { optionRows }
         .onChange(of: panelOpenings) { isOptionsPresented = false }
+        // L'accent de l'app, pour les contrôles du système aussi (interrupteurs, menus).
+        .tint(BridgeTheme.accent)
         .containerShape(.rect(cornerRadius: PanelMetrics.panelRadius))
         .background(alignment: .top) { streamingWash }
     }

@@ -16,15 +16,15 @@ import SwiftUI
 enum PlanPalette {
     /// Le fond du plan : une table, pas une page. Un gris à peine teinté, plus doux que le noir ou le
     /// blanc purs d'un document, sur lequel le sol de la pièce se détache.
-    static let canvas = dynamic(dark: 0x151619, light: 0xE9E8E4)
+    static let canvas = dynamic(dark: 0x0E0C12, light: 0xE9E8E4)
     /// Le sol de la pièce, posé sur la table : c'est lui la feuille.
-    static let floor = dynamic(dark: 0x202227, light: 0xFBFAF7)
+    static let floor = dynamic(dark: 0x1D1A22, light: 0xFBFAF7)
     /// La graduation au mètre : un point par mètre, pas un quadrillage.
-    static let grid = dynamic(dark: 0x3C3F45, light: 0xC2BFB7)
-    /// Ce qui est sélectionné ou désigné : l'accent du système.
-    static let selection = Color(nsColor: .controlAccentColor)
+    static let grid = dynamic(dark: 0x3D3846, light: 0xC2BFB7)
+    /// Ce qui est sélectionné ou désigné : l'accent de l'app.
+    static let selection = BridgeTheme.accent
     /// Le mur en cours de tracé.
-    static let drawing = Color(nsColor: .controlAccentColor)
+    static let drawing = BridgeTheme.accent
     /// La mesure de calibrage.
     static let measure = Color(nsColor: .systemRed)
     /// Le lieu d'écoute et les distances qui en partent.
@@ -55,10 +55,10 @@ enum PlanPalette {
     static let amber = fixed(0xF0B64D)
 
     /// L'unique accent des enceintes, le même pour tous les modèles : c'est le sujet du plan, il doit
-    /// se repérer en premier, mais par un trait fin plutôt que par une couleur criarde. Un bleu-vert,
-    /// parce que le reste est déjà pris : l'ambre aux lampes et aux distances, le bleu à la sélection,
-    /// le vert aux plantes.
-    static let speakerAccent = dynamic(dark: 0x63D8C8, light: 0x0B8F82)
+    /// se repérer en premier, mais par un trait fin plutôt que par une couleur criarde. Le violet du
+    /// thème, parce que le reste est déjà pris : l'ambre aux lampes et aux distances, le rose à la
+    /// sélection, le vert aux plantes.
+    static let speakerAccent = dynamic(dark: 0xB69CFF, light: 0x6A4BD8)
     /// Le tissu maillé, vu du dessus : le flanc qui fuit vers le bord s'assombrit.
     static let meshLight = fixed(0x5C625E)
     static let meshDark = fixed(0x2A2E2C)
