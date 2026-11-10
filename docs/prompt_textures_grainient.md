@@ -49,6 +49,9 @@ Les trois chantiers :
 - **B. Masquer** un élément de la fenêtre (une enceinte comme l'Apple TV, ou un autre bloc), le réafficher depuis les
   réglages.
 - **C. Source en pastille** dans les vues Halo et Console : la pastille flotte en haut au centre, **sans barre d'outils**.
+  Fait depuis (§ 3.C).
+- **D. Propositions de style en maquettes** (ajouté par Baptiste le 2026-11-10, § 3.D) : le style des curseurs et des
+  commandes peut évoluer, le layout des vues non.
 
 ## 2. L'état de l'app, pour ne rien redécouvrir
 
@@ -58,12 +61,12 @@ fenêtre », enregistrées dans `settings.json`. Halo est la vue par défaut. Fi
 
 | Sujet | Fichiers |
 |---|---|
-| Aiguillage des vues, barre d'outils des vues Halo et Console (`immersive`) | `Views/ContentView.swift` |
+| Aiguillage des vues ; par-dessus chacune, la source en pastille au centre et les options en haut à droite ; contenu sous la barre de titre (`ignoresSafeArea`, scène en `hiddenTitleBar`) | `Views/ContentView.swift`, `Views/WindowChrome.swift` (`SourcePill`, `WindowOptionsButton`, `WindowChromeMetrics`) |
 | Thème (accent rose `0xDF3880`, rose, violet, bleu, orange, fond) et **le fond, dessiné à un seul endroit** (`AuroraBackground` : quatre nappes radiales qui dérivent, carreau de grain fixe de 256 px) | `Views/BridgeTheme.swift` |
 | Vue Halo : sphère (bouton Diffuser/Arrêter), ondes organiques, anneau du volume, pastilles d'enceintes | `Views/HaloView.swift`, `HaloSphere.swift`, `HaloWaves.swift`, `HaloVolumeRing.swift`, `HaloSpeakerChips.swift` |
-| Vue Console : tuiles et curseurs verticaux | `Views/ConsoleView.swift`, `ConsoleFader.swift`, `ConsoleTiles.swift`, `ConsoleParts.swift`, `ConsoleChrome.swift` |
-| Vue Plan : barre latérale en cartes, plan simplifié en aplats | `Views/BridgeSidebar.swift`, `SpeakerCard.swift`, `RoomPlanView.swift`, `PlanRenderer.swift`, `SpeakerPulse.swift` |
-| Menu de la source, bouton Options, sélecteur de vue | `Views/WindowChrome.swift` ; options du Mac : `MacOptions` dans `BridgeSidebar.swift` |
+| Vue Console : une tuile et un curseur vertical blanc par enceinte ; dessous, la barre de lecture (état, volume général, silence, bouton rond Diffuser/Arrêter) ; dessous encore, les avertissements en petit, à une place réservée ; le lieu d'écoute en haut à droite | `Views/ConsoleView.swift`, `ConsoleFader.swift`, `ConsoleTiles.swift`, `ConsoleParts.swift`, `ConsoleChrome.swift`, `ConsoleWarnings.swift`, `TransportBar.swift` (`TransportBar`, `StreamingRoundButton`) |
+| Vue Plan : le plan plein cadre ; le panneau des enceintes flotte à gauche, l'inspecteur à droite, les outils du plan en deux capsules en haut | `Views/BridgeSidebar.swift`, `SpeakerCard.swift`, `RoomPlanView.swift`, `PlanRenderer.swift`, `SpeakerPulse.swift` |
+| Sélecteur de vue, options du Mac | `WindowLayoutPicker` dans `Views/WindowChrome.swift` ; `MacOptions` dans `BridgeSidebar.swift` |
 | Réglages persistés (décodage tolérant : un champ absent ou illisible prend sa valeur par défaut) | `Model/BridgeSettings.swift`, `Model/BridgeState.swift` (`windowLayout` est l'exemple le plus récent à suivre) |
 | Point d'entrée, scènes (`Window`, `MenuBarExtra`) : **compilé par Xcode seulement**, pas par `swift build` | `AirplayPersonalBridgeApp.swift` |
 
@@ -75,8 +78,12 @@ Choix déjà faits par Baptiste, à respecter :
 - Le plan est volontairement simplifié (aplats, murs fins) : n'y remets pas de détails.
 - Le panneau de la barre de menus n'est pas concerné, sauf pour le masquage (§ 3.B).
 
-Il n'existe **aucune fenêtre Réglages** (scène `Settings`) : les options vivent dans le bouton « … » des vues Halo et
-Console, et au pied de la barre latérale de la vue Plan.
+- **Plus aucune barre d'outils ni barre latérale** : tout flotte en verre au-dessus du fond, dans les trois vues.
+- **Pas de rose sur les commandes** non plus : pastilles des enceintes, outils du plan, menus en blanc ou en gris. Le
+  rose reste à la pastille d'état.
+
+Il n'existe **aucune fenêtre Réglages** (scène `Settings`) : les options vivent dans le bouton « … » en haut à droite,
+le même dans les trois vues.
 
 ## 3. Ce qui est attendu
 
@@ -150,6 +157,23 @@ d'origine, pour mémoire.
   place, et la fenêtre reste déplaçable par le haut.
 - La vue Plan garde sa barre d'outils : elle porte les outils du plan.
 
+### D. Propositions de style, en maquettes, sans toucher au layout
+
+Demande de Baptiste, ajoutée le 2026-11-10 : tu peux **proposer des maquettes** si tu as des idées pour changer le
+**style** des curseurs d'une vue, par exemple ceux de la vue Console (les curseurs verticaux des tuiles, celui de la
+barre de lecture). La règle : **le layout général de la vue ne bouge pas**. Mêmes éléments, même place, même taille de
+tuile et de barre ; seuls changent leur matière, leur forme et leur rendu.
+
+- C'est le bon endroit pour appliquer *Nova* et le grain du fond aux curseurs, si la recherche le suggère.
+- **Proposer n'est pas livrer** : présente deux ou trois variantes en maquettes, puis attends le choix de Baptiste.
+  N'en code aucune avant sa réponse. Le reste de la session (A et B) continue sans l'attendre.
+- Reste dans les règles du § 2 : curseurs blancs ou presque, pas de rose sur une commande.
+- Où les publier : dans la page de maquettes existante, `https://claude.ai/artifact/EYxdPQYm3Xe4Vvte1zoqMD`, sur une
+  nouvelle rangée, avec un titre de rangée (« Curseurs de la Console, variantes »). Lis-la d'abord (`Artifact`,
+  `action: "read"`, puis `project/canvas.json`) et garde ses planches existantes. Pour comparer, chaque planche montre
+  la vue Console entière à 1280×800, avec le layout actuel (§ 2), et seulement les curseurs changés.
+- Envoie le lien à Baptiste avec une phrase par variante : ce qui change, et pourquoi.
+
 ## 4. Organisation : sous-agents
 
 Tu es la session principale. Tu délègues, tu relis, tu fusionnes, tu installes, tu rends compte. Chaque sous-agent :
@@ -185,12 +209,15 @@ tout relancer.
 
    Les agents 3 et 4 peuvent toucher tous deux `HaloView.swift` ou les pastilles d'enceintes : découpe pour qu'un
    fichier n'ait qu'un propriétaire, ou fais-les passer l'un après l'autre.
-3. **Toi** : relis chaque branche, regarde ses rendus, fusionne dans `main`, lance la suite complète, et corrige les
+3. **Les maquettes du § 3.D** : toi, ou un agent sans worktree qui ne touche pas au dépôt, une fois la recherche
+   rendue. Brief : la Console actuelle (ouvre un rendu de `ConsoleViewExport`), les références, la règle « style
+   seulement, layout intact ».
+4. **Toi** : relis chaque branche, regarde ses rendus, fusionne dans `main`, lance la suite complète, et corrige les
    conflits et les défauts.
 
 ## 5. Vérifier
 
-- `swift build` sans erreur, et la suite complète `swift test` verte (1 053 tests au 2026-11-10, ~35 s). Ne pose jamais
+- `swift build` sans erreur, et la suite complète `swift test` verte (1 055 tests au 2026-11-10, ~35 s). Ne pose jamais
   de plafond de temps serré sur ce qui reprend sur le MainActor (`CLAUDE.md`, « Tests et outillage »). Chaque fonction
   pure nouvelle (géométrie, mouvement, persistance du masquage) a ses tests, dont au moins deux vérifiés par mutation.
 - `xcodebuild` (cible de l'app, Debug, `CODE_SIGNING_ALLOWED=NO`, sortie dans le scratchpad) réussit : c'est lui qui
@@ -219,7 +246,8 @@ tout relancer.
 3. Envoie à Baptiste, par `SendUserFile` :
    - les rendus des vues Halo et Console texturées ;
    - une enceinte masquée ;
-   - la fenêtre Réglages.
+   - la fenêtre Réglages ;
+   - le lien des maquettes de curseurs (§ 3.D), s'il y en a.
 
    Puis un compte rendu court : ce qui est fait, ce que tu as tranché, ce qu'il doit regarder dans l'app, et une seule
    action concrète pour lui.
