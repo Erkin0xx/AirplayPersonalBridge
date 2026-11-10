@@ -35,6 +35,7 @@ extension SystemSettingsPane {
 struct MenuBarPanel: View {
     let lifecycle: AppLifecycle
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     @State private var openings = 0
 
     var body: some View {
@@ -44,6 +45,9 @@ struct MenuBarPanel: View {
             actions: MenuBarPanelActions(
                 openMainWindow: {
                     lifecycle.showMainWindow { openWindow(id: MainWindow.id) }
+                },
+                openSettings: {
+                    lifecycle.showSettingsWindow { openSettings() }
                 },
                 quit: { NSApplication.shared.terminate(nil) }
             ),
@@ -107,6 +111,8 @@ private struct PanelOpenObserver: NSViewRepresentable {
 /// Ce que le panneau demande à l'app. Injecté pour le rendre hors de toute scène.
 struct MenuBarPanelActions {
     var openMainWindow: () -> Void = {}
+    /// La fenêtre Réglages de l'app : là où se réaffiche ce qui est masqué.
+    var openSettings: () -> Void = {}
     var quit: () -> Void = {}
 }
 
@@ -313,7 +319,9 @@ struct MenuBarPanelContent: View {
             speakersTitle
             if state.outputs.isEmpty {
                 emptySpeakers
-            } else if state.outputs.count > maximumRowsWithoutScrolling {
+            } else if state.hidesEverySpeaker {
+                allSpeakersHidden
+            } else if state.visibleOutputs.count > maximumRowsWithoutScrolling {
                 ScrollView { speakerRows }.frame(height: 256)
             } else {
                 speakerRows
@@ -352,9 +360,11 @@ struct MenuBarPanelContent: View {
     }
 
     private var speakerRows: some View {
-        let reservesDrawerColumn = state.outputs.contains(where: \.supportsToneControl)
+        // Une enceinte masquée dans la fenêtre l'est ici aussi : elle joue toujours si elle est cochée.
+        let visible = state.visibleOutputs
+        let reservesDrawerColumn = visible.contains(where: \.supportsToneControl)
         return VStack(alignment: .leading, spacing: 0) {
-            ForEach(PanelSpeakerOrder.sorted(state.outputs)) { output in
+            ForEach(PanelSpeakerOrder.sorted(visible)) { output in
                 PanelSpeakerRow(
                     output: output, isAudible: isAudible,
                     reservesDrawerColumn: reservesDrawerColumn,
@@ -378,6 +388,25 @@ struct MenuBarPanelContent: View {
                 }
             }
         )
+    }
+
+    /// Des enceintes sont là, toutes masquées : « aucune enceinte trouvée » serait faux.
+    private var allSpeakersHidden: some View {
+        VStack(spacing: 4) {
+            Text("Toutes les enceintes sont masquées")
+                .font(.body.weight(.medium))
+            Text("Celles qui sont cochées continuent de jouer.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Button("Réglages…", action: actions.openSettings)
+                .buttonStyle(.link)
+                .font(.subheadline.weight(.medium))
+                .padding(.top, 6)
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, PanelMetrics.margin + 8)
+        .padding(.vertical, 12)
     }
 
     private var emptySpeakers: some View {
@@ -591,6 +620,19 @@ struct MenuBarPanelContent: View {
     private var footer: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button("Plan et réglages…", action: actions.openMainWindow)
+            // La fenêtre Réglages de l'app (⌘,) : la vue, et ce qui est masqué.
+            Button(action: actions.openSettings) {
+                HStack(spacing: 6) {
+                    Text("Réglages…")
+                    Spacer(minLength: 4)
+                    if let summary = HiddenElementsCopy.summary(speakers: state.hiddenOutputCount, blocks: 0) {
+                        Text(summary)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
             Button("Quitter", action: actions.quit)
         }
         .buttonStyle(PanelMenuRowStyle())

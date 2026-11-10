@@ -46,22 +46,35 @@ struct TransportBar: View {
             }
             .accessibilityElement(children: .combine)
 
-            PanelVolumeSlider(
-                decibels: Self.master(of: state), isMuted: $state.isMuted, range: BridgeSettings.Limits.masterDB
-            )
-            .frame(minWidth: 160)
-            .contextMenu {
-                Button("Revenir à \(PanelFormat.decibels(BridgeState.defaultMasterVolumeDB))") {
-                    state.masterVolumeDB = BridgeState.defaultMasterVolumeDB
+            // Le volume général masqué (`WindowBlock.masterVolume`) : la barre garde sa largeur, l'état à
+            // gauche, le silence et la commande à droite.
+            if state.isVisible(.masterVolume) {
+                PanelVolumeSlider(
+                    decibels: Self.master(of: state), isMuted: $state.isMuted,
+                    range: BridgeSettings.Limits.masterDB
+                )
+                .frame(minWidth: 160)
+                .contextMenu {
+                    Button("Revenir à \(PanelFormat.decibels(BridgeState.defaultMasterVolumeDB))") {
+                        state.masterVolumeDB = BridgeState.defaultMasterVolumeDB
+                    }
+                }
+                .help("Volume de toutes les enceintes. Clic droit : revenir au niveau de départ.")
+
+                Text(state.isMuted ? "Coupé" : PanelFormat.decibels(state.masterVolumeDB))
+                    .font(.system(size: 13).monospacedDigit())
+                    .foregroundStyle(Color.white.opacity(0.62))
+                    .frame(width: 52, alignment: .trailing)
+                    .accessibilityHidden(true)
+            } else {
+                Spacer(minLength: 0)
+                if state.isMuted {
+                    Text("Son coupé")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.white.opacity(0.62))
+                        .accessibilityHidden(true)
                 }
             }
-            .help("Volume de toutes les enceintes. Clic droit : revenir au niveau de départ.")
-
-            Text(state.isMuted ? "Coupé" : PanelFormat.decibels(state.masterVolumeDB))
-                .font(.system(size: 13).monospacedDigit())
-                .foregroundStyle(Color.white.opacity(0.62))
-                .frame(width: 52, alignment: .trailing)
-                .accessibilityHidden(true)
 
             PanelMuteButton(isMuted: $state.isMuted)
 

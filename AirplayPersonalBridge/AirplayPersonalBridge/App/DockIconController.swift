@@ -22,14 +22,22 @@ struct LiveApplicationPresenter: ApplicationPresenting {
     }
 }
 
-/// L'icône du Dock n'existe que tant que la fenêtre est ouverte.
+/// L'icône du Dock n'existe que tant qu'une fenêtre est ouverte.
 ///
 /// L'app vit dans la barre de menus : une icône permanente dans le Dock n'y apporterait rien. Mais
 /// une fenêtre sans icône du Dock ne se retrouve pas dans ⌘⇥ et n'a pas de menu : le temps qu'elle
-/// est ouverte, l'app redevient une application ordinaire.
+/// est ouverte, l'app redevient une application ordinaire. Cela vaut pour la fenêtre principale comme
+/// pour celle des réglages, qui s'ouvre aussi depuis la barre de menus, sans l'autre.
 final class DockIconController {
+    /// Les fenêtres de l'app qui justifient l'icône.
+    enum Window: Hashable {
+        case main
+        case settings
+    }
+
     private let presenter: any ApplicationPresenting
-    private(set) var isWindowOpen = false
+    private var openWindows: Set<Window> = []
+    var isWindowOpen: Bool { !openWindows.isEmpty }
 
     init(presenter: any ApplicationPresenting = LiveApplicationPresenter()) {
         self.presenter = presenter
@@ -42,17 +50,16 @@ final class DockIconController {
         presenter.activate()
     }
 
-    func windowDidOpen() {
-        guard !isWindowOpen else { return }
-        isWindowOpen = true
+    func windowDidOpen(_ window: Window = .main) {
+        guard openWindows.insert(window).inserted else { return }
         presenter.setDockIconVisible(true)
         presenter.activate()
     }
 
     /// Différé d'un tour : changer de politique pendant que la fenêtre se ferme perturbe AppKit, et
     /// une fenêtre rouverte dans la foulée n'a pas à faire clignoter l'icône.
-    func windowWillClose() {
-        isWindowOpen = false
+    func windowWillClose(_ window: Window = .main) {
+        openWindows.remove(window)
         Task { [weak self] in
             await Task.yield()
             guard let self, !self.isWindowOpen else { return }

@@ -19,6 +19,17 @@ struct MainWindowContent: View {
     }
 }
 
+/// Le contenu de la fenêtre des réglages (scène `Settings`), relié de même à son `NSWindow` : ouverte
+/// depuis la barre de menus, elle doit passer devant et donner à l'app son icône du Dock.
+struct SettingsWindowContent: View {
+    let lifecycle: AppLifecycle
+
+    var body: some View {
+        SettingsView(state: lifecycle.state)
+            .background(WindowAttachmentObserver { lifecycle.settingsWindowDidAttach($0) })
+    }
+}
+
 private struct WindowAttachmentObserver: NSViewRepresentable {
     let onAttach: (NSWindow) -> Void
 

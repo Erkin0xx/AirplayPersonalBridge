@@ -31,6 +31,11 @@ struct AirplayPersonalBridgeApp: App {
         // dernier arrêt : sans cela, l'avoir fermée une fois la ferait disparaître au lancement.
         .restorationBehavior(.disabled)
 
+        // Les réglages de l'app (⌘,) : la vue de la fenêtre, et ce qui y est masqué.
+        Settings {
+            SettingsWindowContent(lifecycle: lifecycle)
+        }
+
         MenuBarExtra {
             MenuBarPanel(lifecycle: lifecycle)
         } label: {

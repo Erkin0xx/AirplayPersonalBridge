@@ -10,6 +10,7 @@ import SwiftUI
 /// options du Mac, diagnostic) est un clic plus loin, dans une fenêtre surgissante.
 struct BridgeSidebar: View {
     @Bindable var state: BridgeState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let panelWidth: CGFloat = 330
 
@@ -33,8 +34,20 @@ struct BridgeSidebar: View {
                     .padding(.top, 10)
                     .padding(.horizontal, WindowMetrics.cardPadding)
                 outputs
+                foot
+                    .padding(.top, 4)
+                    .padding(.horizontal, WindowMetrics.cardPadding)
         }
         .padding(WindowMetrics.margin)
+    }
+
+    /// Le pied du panneau : ce qui est masqué, et la fenêtre des réglages où le réafficher.
+    private var foot: some View {
+        HStack(spacing: 8) {
+            HiddenElementsNote(state: state)
+            Spacer(minLength: 0)
+            OpenSettingsLink()
+        }
     }
 
     // MARK: - En-tête
@@ -62,11 +75,17 @@ struct BridgeSidebar: View {
                     }
                 }
                 Spacer(minLength: 0)
+                // Le volume général masqué : son bouton de silence monte ici, un son coupé doit se voir.
+                if !state.isVisible(.masterVolume) {
+                    PanelMuteButton(isMuted: $state.isMuted)
+                }
                 StreamingRoundButton(state: state, diameter: 40)
             }
             .accessibilityElement(children: .contain)
 
-            master
+            if state.isVisible(.masterVolume) {
+                master
+            }
             awaitedSource
         }
         .padding(WindowMetrics.cardPadding)
@@ -197,9 +216,15 @@ struct BridgeSidebar: View {
         if state.outputs.isEmpty {
             emptyOutputs
                 .windowCard(isRaised: false)
+        } else if state.hidesEverySpeaker {
+            AllSpeakersHiddenNotice()
+                .padding(WindowMetrics.cardPadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .windowCard(isRaised: false)
         } else {
-            // L'ordre du panneau : celles qui exigent une intervention passent en fin de liste.
-            ForEach(PanelSpeakerOrder.sorted(state.outputs)) { output in
+            // L'ordre du panneau : celles qui exigent une intervention passent en fin de liste. Les masquées
+            // n'ont pas de carte ; le plan, lui, garde leur dessin.
+            ForEach(PanelSpeakerOrder.sorted(state.visibleOutputs)) { output in
                 SpeakerCard(
                     output: output,
                     effectiveGainDB: state.effectiveGainDB(for: output),
@@ -207,7 +232,12 @@ struct BridgeSidebar: View {
                     listeningPlaceName: state.listeningPlaceName,
                     stereoPartnerNames: state.stereoPartners(of: output).map(\.displayName),
                     isAudible: state.captureAlert == nil && !state.isMuted,
-                    toggle: { state.toggleEnabled(output) }
+                    toggle: { state.toggleEnabled(output) },
+                    hide: {
+                        withAnimation(PanelMotion.standard(reduceMotion: reduceMotion)) {
+                            state.setHidden(true, for: output)
+                        }
+                    }
                 )
             }
         }
