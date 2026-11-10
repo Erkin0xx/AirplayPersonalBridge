@@ -98,8 +98,11 @@ struct HaloVolumeRing: View {
     /// Le clic donne aussi le focus, mais l'anneau de focus n'a de sens que pour qui navigue au clavier.
     @State private var isPointerFocus = false
 
-    static let lineWidth: CGFloat = 5
+    /// Un tube plutôt qu'un trait : il lui faut un peu d'épaisseur pour montrer son profil.
+    static let lineWidth: CGFloat = 6
     static let knobDiameter: CGFloat = 18
+    /// De combien la prise grossit sous la souris.
+    static let knobGrowth: CGFloat = 1.18
     /// La demi-largeur de la bande qui répond à la souris, de part et d'autre du trait. Assez large pour se saisir au doigt près, assez étroite pour laisser la plus petite sphère, inspirée,
     /// hors de la bande : un clic au bord de la sphère doit lancer la diffusion, pas régler le volume.
     static let grabHalfWidth: CGFloat = 13
@@ -126,20 +129,19 @@ struct HaloVolumeRing: View {
         let isActive = isHovering || course != nil
 
         ZStack {
-            Circle()
-                .stroke(Color.white.opacity(isLive ? 0.16 : 0.12), lineWidth: Self.lineWidth)
-                .frame(width: radius * 2, height: radius * 2)
-            // Coupé, l'arc reste où il était, éteint : c'est ce niveau-là que le rétablissement rendra.
-            Circle()
-                .trim(from: 0, to: fraction)
-                .stroke(arcColor, style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-                .frame(width: radius * 2, height: radius * 2)
-            Circle()
-                .fill(isMuted ? Color(white: 0.72) : Color.white)
-                .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
+            // La piste, et sous elle l'arc éteint : coupé, il reste où il était, c'est ce niveau-là que
+            // le rétablissement rendra.
+            Canvas { context, _ in
+                HaloRingPaint.drawTrack(in: &context, center: center, radius: radius, fraction: fraction)
+            }
+            // L'arc allumé, par-dessus : il s'efface au repos et s'éteint quand le son est coupé.
+            Canvas { context, _ in
+                HaloRingPaint.drawLitArc(in: &context, center: center, radius: radius, fraction: fraction)
+            }
+            .opacity(HaloRingPaint.litOpacity(isMuted: isMuted, isLive: isLive))
+            HaloRingKnob(isMuted: isMuted)
                 .frame(width: Self.knobDiameter, height: Self.knobDiameter)
-                .scaleEffect(isActive ? 1.18 : 1)
+                .scaleEffect(isActive ? Self.knobGrowth : 1)
                 .position(knob)
             // L'anneau de focus du clavier, hors du trait.
             Circle()
@@ -184,11 +186,6 @@ struct HaloVolumeRing: View {
         }
     }
 
-    private var arcColor: Color {
-        if isMuted { return Color.white.opacity(0.26) }
-        return Color.white.opacity(isLive ? 1 : 0.6)
-    }
-
     private func drag(center: CGPoint) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { drag in
@@ -208,6 +205,182 @@ struct HaloVolumeRing: View {
     private func adjust(by delta: Double) {
         if isMuted { isMuted = false }
         decibels = min(max(decibels + delta, range.lowerBound), range.upperBound)
+    }
+}
+
+/// La matière de l'anneau, hors de la vue : un tube de verre sombre pour la piste, un tube blanc pour le
+/// niveau. Pas de couleur du thème ici : un réglage reste blanc, seule sa matière change.
+enum HaloRingPaint {
+    /// Ce qui dépasse du trait, au plus : le halo froid de l'arc allumé. Doit tenir dans
+    /// `HaloMetrics.ringOverhang`, comme le bouton.
+    static let haloReach: CGFloat = 7
+
+    /// L'opacité de l'arc allumé : plein quand un son part, en retrait au repos, éteint quand le son est
+    /// coupé — l'arc gris de la piste prend alors sa place.
+    static func litOpacity(isMuted: Bool, isLive: Bool) -> Double {
+        if isMuted { return 0 }
+        return isLive ? 1 : 0.62
+    }
+
+    /// Les arrêts du dégradé qui court le long de l'arc rempli, pour un dégradé conique parti du haut :
+    /// d'un blanc bleuté à l'origine au blanc pur à la pointe. Au-delà de la pointe, la couleur reste
+    /// celle de la pointe le temps de son bout arrondi, puis revient à celle de l'origine, dont le bout
+    /// arrondi déborde de l'autre côté du haut. Les places sont croissantes, quel que soit le niveau.
+    static func arcStops(fraction: Double) -> [(location: Double, tone: Double)] {
+        let end = min(max(fraction, 0), 1)
+        let cap = min(end + 0.03, max(end, 0.985))
+        return [(0, 0), (end * 0.55, 0.45), (end, 1), (cap, 1), (1, 0)]
+    }
+
+    private static let coolEdge = (red: 0.608, green: 0.769, blue: 0.886)  // #9BC4E2
+
+    /// Du blanc bleuté (`tone` 0) au blanc pur (`tone` 1), en composantes sRGB.
+    static func bodyComponents(tone: Double) -> (red: Double, green: Double, blue: Double) {
+        let share = min(max(tone, 0), 1)
+        return (
+            coolEdge.red + (1 - coolEdge.red) * share, coolEdge.green + (1 - coolEdge.green) * share,
+            coolEdge.blue + (1 - coolEdge.blue) * share
+        )
+    }
+
+    static func bodyColor(tone: Double) -> Color {
+        let color = bodyComponents(tone: tone)
+        return Color(.sRGB, red: color.red, green: color.green, blue: color.blue)
+    }
+
+    private static func arc(center: CGPoint, radius: CGFloat, from start: Double = 0, to end: Double) -> Path {
+        var path = Path()
+        path.addArc(
+            center: center, radius: radius, startAngle: .degrees(-90 + 360 * start),
+            endAngle: .degrees(-90 + 360 * end), clockwise: false
+        )
+        return path
+    }
+
+    private static func circle(center: CGPoint, radius: CGFloat) -> Path {
+        Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+    }
+
+    /// Un liseré qui n'existe qu'en haut à gauche, d'où vient la lumière, et s'éteint le long de la courbe.
+    private static func lip(_ color: Color, center: CGPoint) -> GraphicsContext.Shading {
+        .conicGradient(
+            Gradient(stops: [
+                .init(color: color.opacity(0), location: 0),
+                .init(color: color.opacity(0), location: 0.24),
+                .init(color: color, location: 0.5),
+                .init(color: color.opacity(0), location: 0.76),
+                .init(color: color.opacity(0), location: 1),
+            ]),
+            // La couture en bas à droite, à l'opposé de la lumière.
+            center: center, angle: .degrees(45)
+        )
+    }
+
+    /// La piste vide : un tube de verre noir, un peu translucide pour vivre sur le fond, et son liseré
+    /// gris vers le bord intérieur. Par-dessus, l'arc éteint du niveau.
+    static func drawTrack(in context: inout GraphicsContext, center: CGPoint, radius: CGFloat, fraction: Double) {
+        let width = HaloVolumeRing.lineWidth
+        let ring = circle(center: center, radius: radius)
+        context.stroke(ring, with: .color(Color(.sRGB, red: 0.043, green: 0.043, blue: 0.047, opacity: 0.66)), lineWidth: width)
+        // Un rien de clair partout : sur un fond presque noir, le tube se devinerait à peine.
+        context.stroke(ring, with: .color(.white.opacity(0.05)), lineWidth: width)
+        if fraction > 0 {
+            context.stroke(
+                arc(center: center, radius: radius, to: fraction), with: .color(.white.opacity(0.2)),
+                style: StrokeStyle(lineWidth: width, lineCap: .round)
+            )
+        }
+        let grey = Color(.sRGB, red: 0.627, green: 0.635, blue: 0.639)  // #A0A2A3
+        context.stroke(
+            circle(center: center, radius: radius - width * 0.5 + 0.9), with: lip(grey.opacity(0.95), center: center),
+            lineWidth: 1
+        )
+        // L'autre lèvre, à peine : le tube a deux bords.
+        context.stroke(
+            circle(center: center, radius: radius + width * 0.5 - 0.5), with: lip(grey.opacity(0.3), center: center),
+            lineWidth: 0.75
+        )
+    }
+
+    /// L'arc rempli : un tube blanc, plus clair en son milieu et bleuté sur ses bords, un trait
+    /// spéculaire, et un halo froid très discret.
+    static func drawLitArc(in context: inout GraphicsContext, center: CGPoint, radius: CGFloat, fraction: Double) {
+        guard fraction > 0 else { return }
+        let width = HaloVolumeRing.lineWidth
+        let path = arc(center: center, radius: radius, to: fraction)
+        let cool = Color(.sRGB, red: 0.412, green: 0.565, blue: 0.718)  // #6990B7
+
+        // Le halo : des traits de plus en plus larges, de moins en moins denses. Un flou ne se rend pas
+        // hors écran.
+        var step = 1
+        while step <= 7 {
+            let reach = haloReach * CGFloat(step) / 7
+            context.stroke(
+                path, with: .color(cool.opacity(0.05)),
+                style: StrokeStyle(lineWidth: width + reach * 2, lineCap: .round)
+            )
+            step += 1
+        }
+
+        // Le corps, du blanc bleuté de l'origine au blanc pur de la pointe.
+        let stops = arcStops(fraction: fraction)
+        let body = Gradient(stops: stops.map { .init(color: bodyColor(tone: $0.tone), location: $0.location) })
+        context.stroke(
+            path, with: .conicGradient(body, center: center, angle: .degrees(-90)),
+            style: StrokeStyle(lineWidth: width, lineCap: .round)
+        )
+        // Le profil du tube : son milieu est plus clair que ses bords.
+        context.stroke(
+            path, with: .color(.white.opacity(0.55)),
+            style: StrokeStyle(lineWidth: width * 0.5, lineCap: .round)
+        )
+        // Le trait spéculaire, du côté de la lumière : vers le dedans.
+        context.stroke(
+            arc(center: center, radius: radius - width * 0.2, to: fraction), with: .color(.white),
+            style: StrokeStyle(lineWidth: 1.1, lineCap: .round)
+        )
+        // Une ombre fine sur l'autre bord : c'est elle qui donne le rond du tube.
+        let shade = Color(.sRGB, red: 0.196, green: 0.337, blue: 0.510)  // #325682
+        context.stroke(
+            arc(center: center, radius: radius + width * 0.5 - 0.5, to: fraction), with: .color(shade.opacity(0.32)),
+            style: StrokeStyle(lineWidth: 1, lineCap: .round)
+        )
+    }
+}
+
+/// La prise de l'anneau : une bille de verre blanc, avec son reflet et une ombre fine.
+private struct HaloRingKnob: View {
+    let isMuted: Bool
+
+    var body: some View {
+        Circle()
+            .fill(
+                RadialGradient(
+                    colors: isMuted
+                        ? [Color(white: 0.84), Color(white: 0.66), Color(white: 0.5)]
+                        : [.white, Color(.sRGB, red: 0.95, green: 0.97, blue: 0.985), Color(.sRGB, red: 0.74, green: 0.82, blue: 0.89)],
+                    center: UnitPoint(x: 0.36, y: 0.3), startRadius: 0, endRadius: HaloVolumeRing.knobDiameter * 0.78
+                )
+            )
+            .overlay {
+                // Le liseré, plus net du côté de la lumière.
+                Circle().strokeBorder(
+                    LinearGradient(
+                        colors: [.white.opacity(isMuted ? 0.5 : 1), .white.opacity(0.1)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
+            }
+            .overlay(alignment: .topLeading) {
+                // Le reflet de la bille.
+                Ellipse()
+                    .fill(Color.white.opacity(isMuted ? 0.35 : 0.95))
+                    .frame(width: HaloVolumeRing.knobDiameter * 0.3, height: HaloVolumeRing.knobDiameter * 0.2)
+                    .rotationEffect(.degrees(-35))
+                    .offset(x: HaloVolumeRing.knobDiameter * 0.2, y: HaloVolumeRing.knobDiameter * 0.18)
+            }
+            .shadow(color: .black.opacity(0.45), radius: 3, y: 1)
     }
 }
 
