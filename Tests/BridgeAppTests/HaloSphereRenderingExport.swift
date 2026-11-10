@@ -45,7 +45,7 @@ struct HaloSphereExport {
             Text(cell.label).font(.caption).foregroundStyle(.white.opacity(0.7))
         }
         .frame(width: 420, height: 430)
-        .background { AuroraBackground(isLive: isLiveGround) }
+        .background { GrainientBackground(isLive: isLiveGround) }
     }
 
     private func write(_ view: some View, size: CGSize, to url: URL) throws {
@@ -84,6 +84,8 @@ struct HaloSphereExport {
         .enabled(if: ProcessInfo.processInfo.environment["SPHERE_PNG_DIR"] != nil)
     )
     func renderSheets() throws {
+        // Un rendu hors écran ne repasse pas par la vue : les textures de la bille doivent être prêtes.
+        NovaGlassTextures.bakedNow()
         let path = try #require(ProcessInfo.processInfo.environment["SPHERE_PNG_DIR"])
         let directory = URL(fileURLWithPath: path)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

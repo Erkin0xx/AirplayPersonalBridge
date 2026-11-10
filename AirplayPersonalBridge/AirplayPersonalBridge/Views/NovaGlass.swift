@@ -5,6 +5,7 @@
 
 import CoreGraphics
 import Foundation
+import os
 
 /// La matière de la sphère du halo : une bille de verre presque noir, qui ne montre que ses reflets.
 ///
@@ -289,18 +290,60 @@ nonisolated enum NovaGlassMotion {
 
 /// Les textures de la sphère, cuites une fois : la recette exacte, filets compris, qu'aucun dégradé
 /// vectoriel ne rend. Les dessiner ensuite ne coûte qu'une image tournée par couche.
-enum NovaGlassTextures {
+nonisolated enum NovaGlassTextures {
     /// Jusqu'où une couche est calculée, en rayons : assez pour couvrir la bille une fois glissée.
     static let layerExtent = 1.14
     static let layerSide = 640
     static let discSide = 600
 
-    static let layers: [CGImage] = NovaGlass.Layer.allCases.map { layer in
-        bake(side: layerSide, extent: layerExtent) { NovaGlass.radiance(of: layer, x: $0, y: $1) }
+    /// Les textures cuites. Des `CGImage` immuables : elles passent d'un fil à l'autre sans risque.
+    struct Baked: @unchecked Sendable {
+        /// Une par `NovaGlass.Layer`, dans l'ordre de ses cas.
+        let layers: [CGImage]
+        let rim: CGImage
+        let resting: CGImage
     }
 
-    static let rim: CGImage = bake(side: discSide, extent: 1, NovaGlass.rim)
-    static let resting: CGImage = bake(side: discSide, extent: 1, NovaGlass.resting)
+    /// Près de deux millions de points, chacun une somme d'exponentielles : **jamais sur le fil
+    /// principal**. Cuites là au premier dessin, elles figeaient la fenêtre à son ouverture, et en test
+    /// le MainActor que toutes les suites partagent, plusieurs secondes.
+    private static let baking = Task.detached(priority: .userInitiated) {
+        let baked = bakeAll()
+        ready.withLock { $0 = baked }
+        return baked
+    }
+
+    private static let ready = OSAllocatedUnfairLock<Baked?>(initialState: nil)
+
+    /// Les textures si elles sont prêtes, sans attendre. Lance la cuisson si elle ne l'est pas.
+    static var bakedIfReady: Baked? {
+        _ = baking
+        return ready.withLock { $0 }
+    }
+
+    /// Les textures, une fois cuites.
+    static func baked() async -> Baked {
+        await baking.value
+    }
+
+    /// Pour un rendu hors écran, qui ne repasse pas par la vue : cuit sur place si rien n'est prêt.
+    @discardableResult
+    static func bakedNow() -> Baked {
+        if let baked = ready.withLock({ $0 }) { return baked }
+        let baked = bakeAll()
+        ready.withLock { $0 = baked }
+        return baked
+    }
+
+    private static func bakeAll() -> Baked {
+        Baked(
+            layers: NovaGlass.Layer.allCases.map { layer in
+                bake(side: layerSide, extent: layerExtent) { NovaGlass.radiance(of: layer, x: $0, y: $1) }
+            },
+            rim: bake(side: discSide, extent: 1, NovaGlass.rim),
+            resting: bake(side: discSide, extent: 1, NovaGlass.resting)
+        )
+    }
 
     /// Calcule une image carrée qui couvre `−extent...extent` rayons.
     static func bake(side: Int, extent: Double, _ radiance: (Double, Double) -> NovaGlass.RGB) -> CGImage {

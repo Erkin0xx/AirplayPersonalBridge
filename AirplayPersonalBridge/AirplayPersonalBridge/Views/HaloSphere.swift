@@ -63,6 +63,9 @@ struct HaloSphere: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Fenêtre à l'arrière-plan : la sphère s'arrête, personne ne la regarde.
     @Environment(\.appearsActive) private var appearsActive
+    /// Les textures du verre, cuites hors du fil principal : `nil` le temps de la cuisson, la bille est
+    /// alors sombre et nue.
+    @State private var textures = NovaGlassTextures.bakedIfReady
 
     /// L'instant posé quand rien ne bouge : expirée, la nappe rose à sa place de dessin.
     static let stillTime: TimeInterval = 0
@@ -92,13 +95,16 @@ struct HaloSphere: View {
                 .shadow(color: .black.opacity(0.55), radius: 6, y: 1)
         }
         .frame(width: diameter, height: diameter)
+        .task {
+            if textures == nil { textures = await NovaGlassTextures.baked() }
+        }
     }
 
     private func orb(at time: TimeInterval) -> some View {
         Canvas { context, size in
             Self.draw(
                 in: &context, center: CGPoint(x: size.width / 2, y: size.height / 2),
-                radius: diameter / 2, look: look, isAudible: isAudible, time: time
+                radius: diameter / 2, look: look, isAudible: isAudible, time: time, textures: textures
             )
         }
     }
@@ -148,7 +154,7 @@ struct HaloSphere: View {
     /// choisisse l'instant.
     static func draw(
         in context: inout GraphicsContext, center: CGPoint, radius restRadius: CGFloat, look: Look,
-        isAudible: Bool, time: TimeInterval
+        isAudible: Bool, time: TimeInterval, textures: NovaGlassTextures.Baked?
     ) {
         let isAlive = look == .live && isAudible
         let breath = isAlive ? HaloSphereMotion.breath(at: time) : 0
@@ -200,7 +206,10 @@ struct HaloSphere: View {
             layer.clip(to: disc)
             switch look {
             case .resting:
-                layer.draw(image(NovaGlassTextures.resting), in: square(center, radius))
+                layer.fill(box, with: .color(BridgeTheme.color(0x0B0B0C)))
+                if let textures {
+                    layer.draw(image(textures.resting), in: square(center, radius))
+                }
             case .live:
                 layer.fill(box, with: .color(BridgeTheme.color(0x020207)))
                 // Les reflets s'additionnent. Sans son audible, ils restent où le dessin les pose, voilés.
@@ -208,7 +217,7 @@ struct HaloSphere: View {
                 lights.blendMode = .plusLighter
                 lights.opacity = isAudible ? 1 : veiledShare
                 let extent = radius * NovaGlassTextures.layerExtent
-                for glass in NovaGlass.Layer.allCases {
+                for glass in textures == nil ? [] : NovaGlass.Layer.allCases {
                     let pose = NovaGlassMotion.pose(of: glass, at: time)
                     var sheet = lights
                     sheet.translateBy(x: center.x, y: center.y)
@@ -216,11 +225,11 @@ struct HaloSphere: View {
                     sheet.concatenate(NovaGlassMotion.transform(for: pose))
                     sheet.scaleBy(x: 1 / radius, y: 1 / radius)
                     sheet.draw(
-                        image(NovaGlassTextures.layers[glass.rawValue]),
+                        image(textures?.layers[glass.rawValue]),
                         in: CGRect(x: -extent, y: -extent, width: extent * 2, height: extent * 2)
                     )
                 }
-                lights.draw(image(NovaGlassTextures.rim), in: square(center, radius))
+                lights.draw(image(textures?.rim), in: square(center, radius))
 
                 // Le creux sombre sous le logo : aucun reflet ne doit le noyer.
                 var well = layer
@@ -246,8 +255,9 @@ struct HaloSphere: View {
         }
     )
 
-    private static func image(_ texture: CGImage) -> Image {
-        Image(decorative: texture, scale: 1).interpolation(.medium)
+    private static func image(_ texture: CGImage?) -> Image {
+        guard let texture else { return Image(size: CGSize(width: 1, height: 1)) { _ in } }
+        return Image(decorative: texture, scale: 1).interpolation(.medium)
     }
 
     private static func square(_ center: CGPoint, _ radius: CGFloat) -> CGRect {

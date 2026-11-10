@@ -66,6 +66,8 @@ struct HaloViewExport {
         .enabled(if: ProcessInfo.processInfo.environment["WINDOW_PNG_DIR"] != nil)
     )
     func renderScenes() throws {
+        // Un rendu hors écran ne repasse pas par la vue : les textures de la bille doivent être prêtes.
+        NovaGlassTextures.bakedNow()
         let path = try #require(ProcessInfo.processInfo.environment["WINDOW_PNG_DIR"])
         let directory = URL(fileURLWithPath: path)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
