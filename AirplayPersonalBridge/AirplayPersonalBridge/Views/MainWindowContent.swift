@@ -30,7 +30,9 @@ struct SettingsWindowContent: View {
     }
 }
 
-private struct WindowAttachmentObserver: NSViewRepresentable {
+/// Prévient dès que la vue est rattachée à un `NSWindow` : aussi pour `WindowControls`, qui agit sur sa
+/// fenêtre.
+struct WindowAttachmentObserver: NSViewRepresentable {
     let onAttach: (NSWindow) -> Void
 
     func makeNSView(context: Context) -> ObserverView {

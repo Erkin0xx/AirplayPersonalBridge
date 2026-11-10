@@ -108,6 +108,9 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
 
     /// Appelée par la vue de la fenêtre dès qu'elle est rattachée à son `NSWindow`.
     func mainWindowDidAttach(_ window: NSWindow) {
+        // Les boutons rouge, orange et vert cèdent la place à ceux de l'app (`WindowControls`). À chaque
+        // rattachement, et à chaque moment où AppKit recompose la barre de titre : voir les observateurs.
+        SystemWindowButtons.hide(in: window)
         guard mainWindow !== window else {
             dock.windowDidOpen()
             bringToFront(window)
@@ -125,15 +128,31 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
             NotificationCenter.default.addObserver(
                 forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
             ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.dock.windowDidOpen() }
+                MainActor.assumeIsolated {
+                    SystemWindowButtons.hide(in: window)
+                    self?.dock.windowDidOpen()
+                }
             },
-        ]
+        ] + Self.titlebarRebuildNotifications.map { name in
+            NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { _ in
+                MainActor.assumeIsolated { SystemWindowButtons.hide(in: window) }
+            }
+        }
         // Avant toute chose : passer au premier plan pour se refermer aussitôt ferait clignoter
         // l'icône du Dock et voler la main à l'ouverture de session.
         guard !closeWindowIfLaunchedAtLogin() else { return }
         dock.windowDidOpen()
         if window.isVisible { bringToFront(window) }
     }
+
+    /// Les moments où AppKit recompose la barre de titre, et pourrait réafficher ses boutons : l'entrée et
+    /// la sortie du plein écran (la barre passe dans une fenêtre à part, puis revient), et la sortie du Dock.
+    /// Le retour au premier plan, déjà observé, repose le masquage lui aussi.
+    static let titlebarRebuildNotifications: [Notification.Name] = [
+        NSWindow.willEnterFullScreenNotification, NSWindow.didEnterFullScreenNotification,
+        NSWindow.willExitFullScreenNotification, NSWindow.didExitFullScreenNotification,
+        NSWindow.didDeminiaturizeNotification,
+    ]
 
     /// `activate` est coopératif depuis macOS 14 : une app qui sort de l'état `.accessory` peut se
     /// voir refuser le premier plan, et sa fenêtre s'ouvrir derrière celle de l'application en

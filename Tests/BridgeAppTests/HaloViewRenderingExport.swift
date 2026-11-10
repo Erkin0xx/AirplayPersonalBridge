@@ -38,9 +38,11 @@ struct HaloViewExport {
         )
         window.isReleasedWhenClosed = false
         window.title = "AirPlay Personal Bridge"
-        // Comme la scène de l'app (`hiddenTitleBar`) : barre de titre transparente, boutons seuls.
+        // Comme la scène de l'app (`hiddenTitleBar`) : barre de titre transparente, et boutons système
+        // masqués comme le fait `AppLifecycle`, pour que le rendu montre ceux de l'app seuls.
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
+        SystemWindowButtons.hide(in: window)
         window.appearance = NSAppearance(named: .darkAqua)
         window.contentView = hosting
         window.setContentSize(size)

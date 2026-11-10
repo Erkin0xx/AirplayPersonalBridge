@@ -30,6 +30,12 @@ struct ContentView: View {
             SourcePill(state: state)
                 .padding(.top, WindowChromeMetrics.topPadding)
         }
+        // Fermer, réduire, agrandir : à la place des boutons système, masqués (`AppLifecycle`).
+        .overlay(alignment: .topLeading) {
+            WindowControls()
+                .padding(.top, WindowControlsMetrics.top)
+                .padding(.leading, WindowChromeMetrics.sideMargin)
+        }
         .overlay(alignment: .topTrailing) {
             HStack(spacing: 8) {
                 // Le lieu d'écoute de la console, en haut à droite à côté des options ; la vue Plan a le sien
@@ -42,8 +48,8 @@ struct ContentView: View {
             .padding(.top, WindowChromeMetrics.topPadding)
             .padding(.trailing, WindowChromeMetrics.sideMargin)
         }
-        // Le contenu passe sous la barre de titre, que la scène rend transparente (`hiddenTitleBar`) : seuls
-        // les boutons de la fenêtre y restent.
+        // Le contenu passe sous la barre de titre, que la scène rend transparente (`hiddenTitleBar`) : elle
+        // ne montre plus rien, mais c'est toujours par elle que la fenêtre se déplace.
         .ignoresSafeArea()
         .navigationTitle("AirPlay Personal Bridge")
         // Le titre reste celui de la fenêtre (menu Fenêtre, Mission Control), sans s'afficher.
