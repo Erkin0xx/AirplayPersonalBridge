@@ -16,15 +16,15 @@ import SwiftUI
 enum PlanPalette {
     /// Le fond du plan : une table, pas une page. Un gris à peine teinté, plus doux que le noir ou le
     /// blanc purs d'un document, sur lequel le sol de la pièce se détache.
-    static let canvas = dynamic(dark: 0x151619, light: 0xE9E8E4)
+    static let canvas = dynamic(dark: 0x0E0C12, light: 0xE9E8E4)
     /// Le sol de la pièce, posé sur la table : c'est lui la feuille.
-    static let floor = dynamic(dark: 0x202227, light: 0xFBFAF7)
+    static let floor = dynamic(dark: 0x1D1A22, light: 0xFBFAF7)
     /// La graduation au mètre : un point par mètre, pas un quadrillage.
-    static let grid = dynamic(dark: 0x3C3F45, light: 0xC2BFB7)
-    /// Ce qui est sélectionné ou désigné : l'accent du système.
-    static let selection = Color(nsColor: .controlAccentColor)
+    static let grid = dynamic(dark: 0x3D3846, light: 0xC2BFB7)
+    /// Ce qui est sélectionné ou désigné : l'accent de l'app.
+    static let selection = BridgeTheme.accent
     /// Le mur en cours de tracé.
-    static let drawing = Color(nsColor: .controlAccentColor)
+    static let drawing = BridgeTheme.accent
     /// La mesure de calibrage.
     static let measure = Color(nsColor: .systemRed)
     /// Le lieu d'écoute et les distances qui en partent.
@@ -55,10 +55,10 @@ enum PlanPalette {
     static let amber = fixed(0xF0B64D)
 
     /// L'unique accent des enceintes, le même pour tous les modèles : c'est le sujet du plan, il doit
-    /// se repérer en premier, mais par un trait fin plutôt que par une couleur criarde. Un bleu-vert,
-    /// parce que le reste est déjà pris : l'ambre aux lampes et aux distances, le bleu à la sélection,
-    /// le vert aux plantes.
-    static let speakerAccent = dynamic(dark: 0x63D8C8, light: 0x0B8F82)
+    /// se repérer en premier, mais par un trait fin plutôt que par une couleur criarde. Le violet du
+    /// thème, parce que le reste est déjà pris : l'ambre aux lampes et aux distances, le rose à la
+    /// sélection, le vert aux plantes.
+    static let speakerAccent = dynamic(dark: 0xB69CFF, light: 0x6A4BD8)
     /// Le tissu maillé, vu du dessus : le flanc qui fuit vers le bord s'assombrit.
     static let meshLight = fixed(0x5C625E)
     static let meshDark = fixed(0x2A2E2C)
@@ -104,6 +104,8 @@ struct PlanRenderer {
     var hoveredVertex: CGPoint?
     var showsAllLabels = false
     var showsVertexHandles = false
+    /// Ce qu'on écrit à côté du nom d'une enceinte : le volume de sa sortie, si elle est cochée.
+    var speakerCaptions: [String: String] = [:]
     var backgroundImage: NSImage?
 
     private var scale: Double { transform.scale }
@@ -281,49 +283,31 @@ struct PlanRenderer {
 
     // MARK: - Murs
 
+    /// Un trait fin et régulier sur la face intérieure, celle qui compte pour poser un meuble : l'épaisseur
+    /// du mur reste dans le modèle (clic, cotes), elle n'alourdit plus le dessin.
     private func drawWalls(_ context: inout GraphicsContext) {
-        // Les corps de mur ordinaires sont remplis d'un seul tenant : remplis un par un, deux
-        // onglets voisins laisseraient voir un fil d'antialiasing à chaque angle.
-        var bodies = Path()
-        for wall in layout.walls where !selection.contains(.wall(wall.id)) {
-            addPolygon(layout.wallBody(wall), to: &bodies)
-        }
-        context.fill(bodies, with: .color(PlanPalette.wall))
-
+        var plain = Path()
+        var selected = Path()
         for wall in layout.walls {
             let isSelected = selection.contains(.wall(wall.id))
-            let body = layout.wallBody(wall)
-            if body.isEmpty {
-                var line = Path()
-                line.move(to: transform.toView(wall.a))
-                line.addLine(to: transform.toView(wall.b))
-                context.stroke(
-                    line,
-                    with: .color(isSelected ? PlanPalette.selection : PlanPalette.wall),
-                    style: .init(lineWidth: isSelected ? 8 : 6, lineCap: .round)
-                )
-            } else if isSelected {
-                var selected = Path()
-                addPolygon(body, to: &selected)
-                context.fill(selected, with: .color(PlanPalette.selection))
+            if isSelected {
+                selected.move(to: transform.toView(wall.a))
+                selected.addLine(to: transform.toView(wall.b))
+            } else {
+                plain.move(to: transform.toView(wall.a))
+                plain.addLine(to: transform.toView(wall.b))
             }
-            if wall.paint == .sage { drawPaint(of: wall, in: &context) }
         }
+        context.stroke(
+            plain, with: .color(PlanPalette.wall), style: .init(lineWidth: Self.wallLineWidth, lineCap: .round)
+        )
+        context.stroke(
+            selected, with: .color(PlanPalette.selection),
+            style: .init(lineWidth: Self.wallLineWidth + 2, lineCap: .round)
+        )
     }
 
-    /// La peinture se voit en liseré sur la face intérieure, par-dessus ce qui y est adossé.
-    private func drawPaint(of wall: RoomLayout.WallSegment, in context: inout GraphicsContext) {
-        let depth = 0.045
-        let normal = wall.outerNormal
-        let strip = [
-            wall.a, wall.b,
-            CGPoint(x: wall.b.x - normal.x * depth, y: wall.b.y - normal.y * depth),
-            CGPoint(x: wall.a.x - normal.x * depth, y: wall.a.y - normal.y * depth),
-        ]
-        var path = Path()
-        addPolygon(strip, to: &path)
-        context.fill(path, with: .color(PlanPalette.sage))
-    }
+    static let wallLineWidth = 4.0
 
     private func addPolygon(_ points: [CGPoint], to path: inout Path) {
         guard let first = points.first else { return }
@@ -335,9 +319,9 @@ struct PlanRenderer {
     private func drawWallLabels(_ context: inout GraphicsContext) {
         for wall in layout.walls {
             let isSelected = selection.contains(.wall(wall.id))
-            // Les cotes de mur ne s'affichent qu'à la sélection ou une fois assez zoomé :
-            // sur une pièce entière tenant dans la fenêtre, elles se chevauchaient toutes.
-            guard showsAllLabels || isSelected || scale >= 45 else { continue }
+            // Les cotes de mur ne s'affichent qu'à la sélection, ou avec « toutes les cotes » : à
+            // demeure, elles entouraient la pièce de chiffres qu'on ne lit qu'en la dessinant.
+            guard showsAllLabels || isSelected else { continue }
             let a = transform.toView(wall.a)
             let b = transform.toView(wall.b)
             let middle = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
@@ -503,11 +487,6 @@ struct PlanRenderer {
                 layer.stroke(front, with: .color(PlanPalette.selection), lineWidth: 2.5)
             }
         }
-        if object.kind == .listener {
-            var figure = context
-            figure.opacity = opacity
-            drawListenerFigure(&figure, at: center, rotation: object.rotation)
-        }
     }
 
     /// Une seule définition du contour sert au remplissage et à la sélection. Le L vient du
@@ -539,324 +518,46 @@ struct PlanRenderer {
         }
     }
 
+    /// Des aplats, sans contour ni détail : un plan qui se lit d'un coup d'œil, où seules les enceintes
+    /// et le lieu d'écoute sont dessinés avec soin. Coussins, pieds de chaise, feuillages et motifs de
+    /// tapis ont existé (jusqu'au 2026-11-10) ; Baptiste les a trouvés de trop.
     private func drawMaterial(
         of object: RoomObject, in rect: CGRect, outline: Path, on layer: inout GraphicsContext
     ) {
         func plain(_ color: Color) {
             layer.fill(outline, with: .color(color))
-            layer.stroke(outline, with: .color(PlanPalette.outline), lineWidth: 1)
+        }
+        /// Un simple anneau : ce qui est posé là sans être un meuble.
+        func ring(_ color: Color) {
+            let side = min(rect.width, rect.height, 0.34 * scale)
+            let disc = CGRect(x: -side / 2, y: -side / 2, width: side, height: side)
+            layer.fill(Path(ellipseIn: disc), with: .color(PlanPalette.floor))
+            layer.stroke(Path(ellipseIn: disc), with: .color(color), lineWidth: 1.75)
         }
 
         switch object.kind {
-        case .sofa: drawSofa(object, in: rect, outline: outline, on: &layer)
-        case .armchair: drawArmchair(in: rect, outline: outline, on: &layer)
-        case .chair: drawChair(object, in: rect, outline: outline, on: &layer)
-        case .plant: drawPlant(in: rect, on: &layer)
-        case .lamp: drawLamp(in: rect, on: &layer)
-        case .console, .desk:
-            plain(PlanPalette.wood)
-        case .table:
-            plain(PlanPalette.wood)
-            if object.shape == .ellipse { drawTableBase(in: rect, on: &layer) }
-        case .sideTable:
-            plain(object.shape == .ellipse ? PlanPalette.wood : PlanPalette.paleWood)
-            if object.shape == .ellipse { drawInnerRing(of: rect, on: &layer) }
-        case .coffeeTable:
-            plain(PlanPalette.darkWood)
-            if object.shape == .ellipse { drawInnerRing(of: rect, on: &layer) }
-        case .tvStand:
-            plain(PlanPalette.darkWood)
-        case .sideboard:
-            plain(PlanPalette.wood)
-            drawSideboardFront(in: rect, on: &layer)
-        case .tv: drawTV(in: rect, on: &layer)
-        case .shelf: drawShelf(in: rect, outline: outline, on: &layer)
-        case .decor: drawDecor(object, in: rect, outline: outline, on: &layer)
-        case .rug: drawRug(in: rect, on: &layer)
+        case .sofa, .armchair: plain(PlanPalette.fabric)
+        case .chair: plain(PlanPalette.chairSeat)
+        case .plant: ring(PlanPalette.foliage)
+        case .lamp: ring(PlanPalette.amber)
+        case .console, .desk, .table, .sideboard, .shelf: plain(PlanPalette.wood)
+        case .sideTable: plain(object.shape == .ellipse ? PlanPalette.wood : PlanPalette.paleWood)
+        case .coffeeTable, .tvStand: plain(PlanPalette.darkWood)
+        case .tv, .device, .radiator: plain(PlanPalette.charcoal)
+        case .decor: plain(PlanPalette.taupe.opacity(0.7))
+        case .rug:
+            layer.fill(outline, with: .color(PlanPalette.rug))
+            layer.stroke(outline, with: .color(PlanPalette.rugLine), style: .init(lineWidth: 1, dash: [5, 5]))
         case .door: drawDoor(object, in: rect, on: &layer)
         case .window: drawWindow(in: rect, on: &layer)
-        case .radiator: drawRadiator(in: rect, on: &layer)
-        case .device:
-            layer.fill(outline, with: .color(PlanPalette.charcoal))
-            layer.stroke(outline, with: .color(PlanPalette.outline.opacity(0.6)), lineWidth: 1)
         case .speaker: drawSpeaker(object, in: rect, on: &layer)
         case .listener:
-            layer.fill(outline, with: .color(PlanPalette.listening.opacity(0.22)))
-            layer.stroke(outline, with: .color(PlanPalette.listening.opacity(0.6)), lineWidth: 1)
+            // Un point : c'est de là que partent les distances. Sa taille reste en points, pour se
+            // voir sur une pièce entière.
+            let side = max(min(rect.width, rect.height) * 0.5, 16)
+            let dot = CGRect(x: -side / 2, y: -side / 2, width: side, height: side)
+            layer.fill(Path(ellipseIn: dot), with: .color(PlanPalette.listening))
         }
-    }
-
-    /// Dossier le long du bord avant, accoudoir à l'opposé du retour, coussins séparés.
-    private func drawSofa(
-        _ object: RoomObject, in rect: CGRect, outline: Path, on layer: inout GraphicsContext
-    ) {
-        layer.fill(outline, with: .color(PlanPalette.fabric))
-        let back = 0.20 * scale
-        let arm = 0.20 * scale
-        var shade = Path(CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: back))
-        var seams = Path()
-
-        func seam(atX x: Double, bottom: Double) {
-            seams.move(to: CGPoint(x: x, y: rect.minY + back))
-            seams.addLine(to: CGPoint(x: x, y: bottom))
-        }
-
-        if object.shape == .lShape {
-            let thickness = min(max(object.armThickness, 0.05), min(object.size.width, object.size.height))
-                * scale
-            let bottom = rect.minY + thickness
-            let seatsStart = object.isMirrored ? rect.minX + arm : rect.minX + thickness
-            let seatsEnd = object.isMirrored ? rect.maxX - thickness : rect.maxX - arm
-            shade.addRect(
-                CGRect(
-                    x: object.isMirrored ? rect.minX : rect.maxX - arm, y: rect.minY + back,
-                    width: arm, height: thickness - back
-                )
-            )
-            seam(atX: (seatsStart + seatsEnd) / 2, bottom: bottom)
-            seam(atX: object.isMirrored ? seatsEnd : seatsStart, bottom: bottom)
-            seam(atX: object.isMirrored ? seatsStart : seatsEnd, bottom: bottom)
-        } else {
-            shade.addRect(CGRect(x: rect.minX, y: rect.minY, width: arm, height: rect.height))
-            shade.addRect(CGRect(x: rect.maxX - arm, y: rect.minY, width: arm, height: rect.height))
-            let seats = rect.width - arm * 2
-            let count = max(Int((seats / (0.75 * scale)).rounded()), 1)
-            for index in 0...count {
-                seam(atX: rect.minX + arm + seats * Double(index) / Double(count), bottom: rect.maxY)
-            }
-        }
-
-        var clipped = layer
-        clipped.clip(to: outline)
-        clipped.fill(shade, with: .color(PlanPalette.fabricShade))
-        clipped.stroke(seams, with: .color(PlanPalette.glass.opacity(0.7)), lineWidth: 1)
-        layer.stroke(outline, with: .color(PlanPalette.outline), lineWidth: 1)
-    }
-
-    /// Le coussin est décalé vers l'avant : le dossier, sur le bord avant du repère comme pour
-    /// toutes les assises, est plus épais que le reste du corps.
-    private func drawArmchair(in rect: CGRect, outline: Path, on layer: inout GraphicsContext) {
-        layer.fill(outline, with: .color(PlanPalette.charcoal))
-        layer.stroke(outline, with: .color(PlanPalette.outline.opacity(0.55)), lineWidth: 1)
-        let cushion = rect.insetBy(dx: rect.width * 0.20, dy: rect.height * 0.20)
-            .offsetBy(dx: 0, dy: rect.height * 0.075)
-        let path = Path(roundedRect: cushion, cornerRadius: cushion.width * 0.22)
-        layer.fill(path, with: .color(PlanPalette.fabric))
-        layer.stroke(path, with: .color(PlanPalette.glass.opacity(0.8)), lineWidth: 1)
-    }
-
-    /// Une assise et un dossier sombre sur le bord avant. Ronde (chaise de bureau), elle a un
-    /// dossier en arc : c'est lui, là encore, qui donne le sens.
-    private func drawChair(
-        _ object: RoomObject, in rect: CGRect, outline: Path, on layer: inout GraphicsContext
-    ) {
-        if object.shape == .ellipse {
-            layer.fill(outline, with: .color(PlanPalette.fabric))
-            layer.stroke(outline, with: .color(PlanPalette.outline), lineWidth: 1)
-            let radius = rect.width / 2 + 0.015 * scale
-            var arc = Path()
-            for step in 0...24 {
-                let angle = (-132 + 84 * Double(step) / 24) * .pi / 180
-                let point = CGPoint(x: cos(angle) * radius, y: sin(angle) * radius)
-                if step == 0 { arc.move(to: point) } else { arc.addLine(to: point) }
-            }
-            layer.stroke(
-                arc, with: .color(PlanPalette.charcoal),
-                style: .init(lineWidth: max(0.045 * scale, 2), lineCap: .round)
-            )
-            return
-        }
-        let backDepth = min(0.07 * scale, rect.height * 0.3)
-        let seat = CGRect(
-            x: rect.minX, y: rect.minY + backDepth, width: rect.width,
-            height: rect.height - backDepth
-        )
-        let seatPath = Path(roundedRect: seat, cornerRadius: min(0.05 * scale, seat.width / 3))
-        let backPath = Path(
-            roundedRect: CGRect(
-                x: rect.minX - 0.005 * scale, y: rect.minY, width: rect.width + 0.01 * scale,
-                height: backDepth
-            ),
-            cornerRadius: min(0.02 * scale, backDepth / 2)
-        )
-        layer.fill(backPath, with: .color(PlanPalette.charcoal))
-        layer.stroke(backPath, with: .color(PlanPalette.outline.opacity(0.55)), lineWidth: 1)
-        layer.fill(seatPath, with: .color(PlanPalette.chairSeat))
-        layer.stroke(seatPath, with: .color(PlanPalette.outline), lineWidth: 1)
-    }
-
-    /// Le feuillage reste translucide et en pointillés : il passe au-dessus des meubles
-    /// voisins sans les masquer, ce qui est exactement ce qu'il fait dans la pièce.
-    private func drawPlant(in rect: CGRect, on layer: inout GraphicsContext) {
-        let radius = rect.width / 2
-        let crown = Path(ellipseIn: rect)
-        layer.fill(crown, with: .color(PlanPalette.foliage.opacity(0.24)))
-        layer.stroke(
-            crown, with: .color(PlanPalette.foliage),
-            style: .init(lineWidth: 1.5, dash: [4, 4])
-        )
-        let potRadius = radius * RoomObject.plantPotRatio
-        var branches = Path()
-        let spread: [(angle: Double, reach: Double)] = [
-            (-118, 0.92), (-82, 0.72), (-32, 0.86), (18, 0.84), (72, 0.74), (122, 0.92), (176, 0.78),
-        ]
-        for branch in spread {
-            let angle = branch.angle * .pi / 180
-            branches.move(to: CGPoint(x: cos(angle) * potRadius, y: sin(angle) * potRadius))
-            branches.addLine(
-                to: CGPoint(x: cos(angle) * radius * branch.reach, y: sin(angle) * radius * branch.reach)
-            )
-        }
-        layer.stroke(branches, with: .color(PlanPalette.foliage), lineWidth: 1.5)
-        let pot = Path(
-            ellipseIn: CGRect(
-                x: -potRadius, y: -potRadius, width: potRadius * 2, height: potRadius * 2
-            )
-        )
-        layer.fill(pot, with: .color(PlanPalette.charcoal))
-        layer.stroke(pot, with: .color(PlanPalette.amber), lineWidth: max(0.02 * scale, 2))
-    }
-
-    /// Le socle vu du dessus. Une petite lampe posée se réduit à un disque et un point : un
-    /// anneau de plus ne serait plus lisible à cette taille.
-    private func drawLamp(in rect: CGRect, on layer: inout GraphicsContext) {
-        let radius = rect.width / 2
-        let dot = max(radius * 0.16, 2)
-        let center = Path(ellipseIn: CGRect(x: -dot, y: -dot, width: dot * 2, height: dot * 2))
-        if rect.width < 0.3 * scale {
-            let disc = Path(ellipseIn: rect)
-            layer.fill(disc, with: .color(PlanPalette.charcoal))
-            layer.stroke(disc, with: .color(PlanPalette.glass), lineWidth: 1)
-            layer.fill(center, with: .color(PlanPalette.amber))
-            return
-        }
-        layer.stroke(
-            Path(ellipseIn: rect), with: .color(PlanPalette.outline.opacity(0.6)), lineWidth: 1
-        )
-        let shade = Path(ellipseIn: rect.insetBy(dx: radius * 0.19, dy: radius * 0.19))
-        layer.fill(shade, with: .color(PlanPalette.charcoal))
-        layer.stroke(shade, with: .color(PlanPalette.amber), lineWidth: max(0.02 * scale, 2))
-        layer.fill(center, with: .color(PlanPalette.amber))
-    }
-
-    /// Le piétement en étoile d'une table ronde, en filigrane sous le plateau.
-    private func drawTableBase(in rect: CGRect, on layer: inout GraphicsContext) {
-        var star = Path()
-        for degrees in [0.0, 45.0, 135.0] {
-            let angle = degrees * .pi / 180
-            let reach = rect.width / 2 * (degrees == 0 ? 0.92 : 0.58)
-            star.move(to: CGPoint(x: -cos(angle) * reach, y: -sin(angle) * reach))
-            star.addLine(to: CGPoint(x: cos(angle) * reach, y: sin(angle) * reach))
-        }
-        layer.stroke(star, with: .color(PlanPalette.outline.opacity(0.35)), lineWidth: 1)
-    }
-
-    private func drawInnerRing(of rect: CGRect, on layer: inout GraphicsContext) {
-        layer.stroke(
-            Path(ellipseIn: rect.insetBy(dx: rect.width * 0.09, dy: rect.height * 0.09)),
-            with: .color(PlanPalette.outline.opacity(0.4)), lineWidth: 1
-        )
-    }
-
-    /// Les cannelures de la façade, sur le bord avant.
-    private func drawSideboardFront(in rect: CGRect, on layer: inout GraphicsContext) {
-        var ticks = Path()
-        let spacing = 0.073 * scale
-        var x = rect.minX + spacing
-        while x < rect.maxX - spacing / 2 {
-            ticks.move(to: CGPoint(x: x, y: rect.minY + 0.015 * scale))
-            ticks.addLine(to: CGPoint(x: x, y: rect.minY + 0.10 * scale))
-            x += spacing
-        }
-        layer.stroke(ticks, with: .color(PlanPalette.outline.opacity(0.5)), lineWidth: 1)
-    }
-
-    private func drawTV(in rect: CGRect, on layer: inout GraphicsContext) {
-        var shape = Path(rect)
-        // Les deux pieds, seuls à dépasser de la dalle vue du dessus.
-        for side in [-1.0, 1.0] {
-            shape.addRect(
-                CGRect(
-                    x: side * rect.width * 0.36 - 0.02 * scale, y: rect.minY - 0.05 * scale,
-                    width: 0.04 * scale, height: rect.height + 0.07 * scale
-                )
-            )
-        }
-        layer.fill(shape, with: .color(PlanPalette.charcoal))
-    }
-
-    private func drawShelf(in rect: CGRect, outline: Path, on layer: inout GraphicsContext) {
-        layer.fill(outline, with: .color(PlanPalette.slate))
-        let frontDepth = rect.height * 0.22
-        layer.fill(
-            Path(CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: frontDepth)),
-            with: .color(PlanPalette.charcoal)
-        )
-        var dividers = Path()
-        dividers.move(to: CGPoint(x: rect.minX, y: rect.minY + frontDepth))
-        dividers.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + frontDepth))
-        let count = max(Int((rect.width / (0.27 * scale)).rounded()), 1)
-        for index in 1..<max(count, 2) {
-            let x = rect.minX + rect.width * Double(index) / Double(count)
-            dividers.move(to: CGPoint(x: x, y: rect.minY + frontDepth))
-            dividers.addLine(to: CGPoint(x: x, y: rect.maxY))
-        }
-        layer.stroke(dividers, with: .color(PlanPalette.outline.opacity(0.6)), lineWidth: 1)
-        layer.stroke(outline, with: .color(PlanPalette.outline.opacity(0.6)), lineWidth: 1)
-    }
-
-    /// Un objet assez grand pour avoir une matière (un pouf) en a une ; le reste n'est qu'un
-    /// encombrement sur un meuble, et reste discret.
-    private func drawDecor(
-        _ object: RoomObject, in rect: CGRect, outline: Path, on layer: inout GraphicsContext
-    ) {
-        if object.shape == .rectangle, min(object.size.width, object.size.height) >= 0.25 {
-            layer.fill(outline, with: .color(PlanPalette.taupe))
-            layer.stroke(outline, with: .color(PlanPalette.outline), lineWidth: 1.5)
-            let hollow = Path(ellipseIn: rect.insetBy(dx: rect.width * 0.23, dy: rect.height * 0.24))
-            layer.fill(hollow, with: .color(PlanPalette.taupeShade))
-            return
-        }
-        layer.fill(outline, with: .color(PlanPalette.charcoal))
-        layer.stroke(outline, with: .color(PlanPalette.outline.opacity(0.55)), lineWidth: 1)
-    }
-
-    /// Le tapis : un aplat, une bordure en pointillés et un motif de bandes. Ces traits restent
-    /// très discrets : il passe sous tout le reste et ne doit jamais attirer l'œil.
-    private func drawRug(in rect: CGRect, on layer: inout GraphicsContext) {
-        let shape = Path(rect)
-        layer.fill(shape, with: .color(PlanPalette.rug))
-        layer.stroke(shape, with: .color(PlanPalette.rugLine), lineWidth: 1)
-
-        let inset = 0.07 * scale
-        layer.stroke(
-            Path(rect.insetBy(dx: inset, dy: inset)), with: .color(PlanPalette.rugLine),
-            style: .init(lineWidth: 1, dash: [5, 5])
-        )
-
-        // Le motif est symétrique : des bandes, dont les deux plus éloignées du centre se
-        // rejoignent en courbe au milieu de chaque rive.
-        var stripes = Path()
-        let margin = 0.18 * scale
-        func y(_ fraction: Double) -> Double { rect.minY + fraction * rect.height }
-        for fraction in [0.31, 0.375, 0.44, 0.56, 0.625, 0.69] {
-            stripes.move(to: CGPoint(x: rect.minX + margin, y: y(fraction)))
-            stripes.addLine(to: CGPoint(x: rect.maxX - margin, y: y(fraction)))
-        }
-        for (outer, meet) in [(0.18, 0.31), (0.245, 0.31), (0.82, 0.69), (0.755, 0.69)] {
-            let spread = (outer == 0.18 || outer == 0.82) ? 0.11 : 0.17
-            for side in [-1.0, 1.0] {
-                let start = side * rect.width * 0.5 - side * margin
-                let turn = side * rect.width * spread
-                stripes.move(to: CGPoint(x: start, y: y(outer)))
-                stripes.addLine(to: CGPoint(x: turn, y: y(outer)))
-                stripes.addQuadCurve(
-                    to: CGPoint(x: 0, y: y(meet)),
-                    control: CGPoint(x: turn * 0.35, y: y(outer))
-                )
-            }
-        }
-        layer.stroke(stripes, with: .color(PlanPalette.rugLine), lineWidth: 1)
     }
 
     /// Le vantail ouvert le long du bord bas de l'emprise, le débattement en pointillés. La
@@ -866,31 +567,6 @@ struct PlanRenderer {
     ) {
         let side = object.isMirrored ? -1.0 : 1.0
         let hinge = CGPoint(x: -side * rect.width / 2, y: rect.maxY)
-
-        // Le dormant : là où un mur épais s'arrête à la charnière, son épaisseur fait le tour
-        // de l'angle. Sans lui, l'ouverture paraît mordre dans le coin de la pièce.
-        let angle = object.rotation * .pi / 180
-        let hingeInRoom = CGPoint(
-            x: object.position.x + (hinge.x * cos(angle) - hinge.y * sin(angle)) / scale,
-            y: object.position.y + (hinge.x * sin(angle) + hinge.y * cos(angle)) / scale
-        )
-        let frame = layout.walls.first { wall in
-            wall.thickness > 0 && [wall.a, wall.b].contains {
-                hypot($0.x - hingeInRoom.x, $0.y - hingeInRoom.y) < 0.002
-            }
-        }?.thickness
-        if let frame {
-            let depth = frame * scale
-            layer.fill(
-                Path(
-                    CGRect(
-                        x: side > 0 ? hinge.x - depth : hinge.x, y: hinge.y,
-                        width: depth, height: depth
-                    )
-                ),
-                with: .color(PlanPalette.wall)
-            )
-        }
 
         var swing = Path()
         for step in 0...32 {
@@ -915,39 +591,12 @@ struct PlanRenderer {
 
     /// Une percée dans le mur et ses deux vantaux coulissants, décalés l'un de l'autre.
     private func drawWindow(in rect: CGRect, on layer: inout GraphicsContext) {
-        layer.fill(Path(rect), with: .color(PlanPalette.canvas))
-        layer.stroke(Path(rect), with: .color(PlanPalette.outline), lineWidth: 1)
-        let paneHeight = max(rect.height * 0.2, 1.5)
-        let panes = [
-            CGRect(
-                x: rect.minX + rect.width * 0.01, y: rect.minY + rect.height * 0.3 - paneHeight / 2,
-                width: rect.width * 0.54, height: paneHeight
-            ),
-            CGRect(
-                x: rect.minX + rect.width * 0.45, y: rect.minY + rect.height * 0.7 - paneHeight / 2,
-                width: rect.width * 0.54, height: paneHeight
-            ),
-        ]
-        for pane in panes {
-            layer.fill(Path(pane), with: .color(PlanPalette.glass))
-            layer.stroke(Path(pane), with: .color(PlanPalette.outline), lineWidth: 0.75)
-        }
-    }
-
-    private func drawRadiator(in rect: CGRect, on layer: inout GraphicsContext) {
-        layer.fill(Path(rect), with: .color(PlanPalette.canvas))
-        var hatch = Path()
-        let spacing = 0.06 * scale
-        var x = rect.minX - rect.height
-        while x < rect.maxX {
-            hatch.move(to: CGPoint(x: x, y: rect.maxY))
-            hatch.addLine(to: CGPoint(x: x + rect.height, y: rect.minY))
-            x += spacing
-        }
-        var clipped = layer
-        clipped.clip(to: Path(rect))
-        clipped.stroke(hatch, with: .color(PlanPalette.outline.opacity(0.75)), lineWidth: 1)
-        layer.stroke(Path(rect), with: .color(PlanPalette.outline), lineWidth: 1)
+        // Un trait de verre dans l'axe de la fenêtre : elle se devine, sans croisée ni dormant.
+        let horizontal = rect.width >= rect.height
+        var line = Path()
+        line.move(to: horizontal ? CGPoint(x: rect.minX, y: rect.midY) : CGPoint(x: rect.midX, y: rect.minY))
+        line.addLine(to: horizontal ? CGPoint(x: rect.maxX, y: rect.midY) : CGPoint(x: rect.midX, y: rect.maxY))
+        layer.stroke(line, with: .color(PlanPalette.glass), style: .init(lineWidth: 3, lineCap: .round))
     }
 
     // MARK: - Enceintes
@@ -975,17 +624,10 @@ struct PlanRenderer {
     /// en points, Ø 15 cm ne faisant que dix points sur une pièce entière.
     private func drawSpeaker(_ object: RoomObject, in rect: CGRect, on layer: inout GraphicsContext) {
         drawSpeakerAccent(around: rect, on: &layer)
-        // L'ombre de contact : c'est elle qui pose l'enceinte sur le meuble au lieu de la coller
-        // dessus, et qui la détache d'un plateau de bois de même valeur.
-        layer.fill(
-            Path(ellipseIn: rect.insetBy(dx: -0.75, dy: -0.75).offsetBy(dx: 0, dy: 0.75)),
-            with: .color(.black.opacity(0.45))
-        )
-        switch SpeakerFamily(name: object.name) {
-        case .geneva: drawSphere(in: rect, on: &layer)
-        case .homePod: drawHomePod(in: rect, on: &layer)
-        case .other: drawGenericSpeaker(in: rect, on: &layer)
-        }
+        // Un disque sombre, cerné : le même pour tous les modèles. L'anneau dit que c'est une enceinte,
+        // l'étiquette dit laquelle.
+        layer.fill(Path(ellipseIn: rect), with: .color(PlanPalette.touchLight))
+        layer.stroke(Path(ellipseIn: rect), with: .color(PlanPalette.touchDark), lineWidth: 1.5)
     }
 
     /// Un anneau fin et, plus loin, son écho : le son qui part, sans une seule couleur criarde.
@@ -1001,143 +643,6 @@ struct PlanRenderer {
     private static let speakerRingGap = 2.5
     private static let speakerEchoGap = 6.5
 
-    /// HomePod : un cylindre aux bords arrondis, maillé sur le flanc, un disque tactile sur le dessus.
-    private func drawHomePod(in rect: CGRect, on layer: inout GraphicsContext) {
-        let radius = rect.width / 2
-        layer.fill(
-            Path(ellipseIn: rect),
-            with: .radialGradient(
-                Gradient(colors: [PlanPalette.meshLight, PlanPalette.meshDark]),
-                center: .zero, startRadius: radius * 0.55, endRadius: radius
-            )
-        )
-        // Le maillage : des points en anneaux, seulement là où ils ont la place d'exister. Sous six
-        // points de rayon, ils ne feraient qu'une bouillie grise.
-        if radius >= 6 {
-            for ratio in [0.78, 0.9] {
-                layer.stroke(
-                    Path(ellipseIn: rect.insetBy(dx: radius * (1 - ratio), dy: radius * (1 - ratio))),
-                    with: .color(.white.opacity(0.28)),
-                    style: StrokeStyle(lineWidth: 0.6, lineCap: .round, dash: [0.1, 1.5])
-                )
-            }
-        }
-        let touch = rect.insetBy(dx: radius * 0.34, dy: radius * 0.34)
-        layer.fill(
-            Path(ellipseIn: touch),
-            with: .linearGradient(
-                Gradient(colors: [PlanPalette.touchLight, PlanPalette.touchDark]),
-                startPoint: CGPoint(x: touch.minX, y: touch.minY),
-                endPoint: CGPoint(x: touch.maxX, y: touch.maxY)
-            )
-        )
-        layer.stroke(Path(ellipseIn: touch), with: .color(.white.opacity(0.22)), lineWidth: 0.5)
-    }
-
-    /// Geneva AeroSphere : une sphère de tissu. Les parallèles se resserrent vers le bord, comme sur
-    /// un globe vu du pôle : c'est ce qui la fait lire comme une boule plutôt que comme un disque.
-    private func drawSphere(in rect: CGRect, on layer: inout GraphicsContext) {
-        let radius = rect.width / 2
-        let sphere = Path(ellipseIn: rect)
-        layer.fill(
-            sphere,
-            with: .radialGradient(
-                Gradient(colors: [PlanPalette.taupe, PlanPalette.meshLight, PlanPalette.meshDark]),
-                center: CGPoint(x: -radius * 0.3, y: -radius * 0.34),
-                startRadius: 0, endRadius: radius * 1.3
-            )
-        )
-        var weave = layer
-        weave.clip(to: sphere)
-        // Le tissage disparaît avant de devenir un aplat : au dézoom, seule reste la sphère.
-        if radius >= 8 {
-            var parallels = Path()
-            for degrees in stride(from: 12.0, through: 84.0, by: 12.0) {
-                let ring = radius * sin(degrees * .pi / 180)
-                parallels.addEllipse(in: CGRect(x: -ring, y: -ring, width: ring * 2, height: ring * 2))
-            }
-            weave.stroke(parallels, with: .color(.white.opacity(0.09)), lineWidth: 0.5)
-            var meridians = Path()
-            let inner = radius * sin(12 * .pi / 180)
-            for step in 0..<24 {
-                let angle = Double(step) * .pi / 12
-                meridians.move(to: CGPoint(x: cos(angle) * inner, y: sin(angle) * inner))
-                meridians.addLine(to: CGPoint(x: cos(angle) * radius, y: sin(angle) * radius))
-            }
-            weave.stroke(meridians, with: .color(.black.opacity(0.12)), lineWidth: 0.5)
-        }
-        layer.stroke(sphere, with: .color(.black.opacity(0.35)), lineWidth: 0.75)
-    }
-
-    /// Une enceinte dont on ne connaît pas le modèle : un haut-parleur, vu de face comme du dessus.
-    private func drawGenericSpeaker(in rect: CGRect, on layer: inout GraphicsContext) {
-        let radius = rect.width / 2
-        layer.fill(Path(ellipseIn: rect), with: .color(PlanPalette.meshDark))
-        let cone = rect.insetBy(dx: radius * 0.28, dy: radius * 0.28)
-        layer.fill(Path(ellipseIn: cone), with: .color(PlanPalette.meshLight))
-        let dome = rect.insetBy(dx: radius * 0.68, dy: radius * 0.68)
-        layer.fill(Path(ellipseIn: dome), with: .color(PlanPalette.touchDark))
-    }
-
-    /// La position d'écoute, dessinée **vue de dessus**.
-    ///
-    /// Le symbole système `figure.seated.side` est une silhouette de profil : posée sur un
-    /// plan vu du dessus, elle jure avec tout le reste et ne dit pas où sont les oreilles —
-    /// qui sont pourtant le seul point qui compte ici, puisque toutes les distances y
-    /// aboutissent. On dessine donc des épaules, une tête, deux oreilles et le regard.
-    private func drawListenerFigure(
-        _ context: inout GraphicsContext, at point: CGPoint, rotation: Double
-    ) {
-        // Tailles anthropométriques ramenées à l'échelle du plan, bornées pour rester
-        // lisibles quand on dézoome.
-        let head = max(7, min(0.18 * scale, 26))
-        let shoulders = head * 2.1
-
-        context.drawLayer { layer in
-            layer.translateBy(x: point.x, y: point.y)
-            layer.rotate(by: .degrees(rotation))
-
-            // Épaules : une ellipse large et peu profonde, qui donne l'orientation.
-            layer.fill(
-                Path(
-                    ellipseIn: CGRect(
-                        x: -shoulders / 2, y: -head * 0.35, width: shoulders, height: head * 1.15
-                    )
-                ),
-                with: .color(PlanPalette.listening.opacity(0.85))
-            )
-
-            // Tête.
-            let headRect = CGRect(x: -head / 2, y: -head / 2, width: head, height: head)
-            layer.fill(Path(ellipseIn: headRect), with: .color(PlanPalette.listening))
-            layer.stroke(
-                Path(ellipseIn: headRect), with: .color(PlanPalette.ink.opacity(0.55)), lineWidth: 1
-            )
-
-            // Les deux oreilles : c'est là qu'arrivent les distances calculées.
-            let ear = max(2, head * 0.17)
-            for side in [-1.0, 1.0] {
-                layer.fill(
-                    Path(
-                        ellipseIn: CGRect(
-                            x: side * head * 0.5 - ear / 2, y: -ear / 2,
-                            width: ear, height: ear * 1.6
-                        )
-                    ),
-                    with: .color(PlanPalette.ink.opacity(0.6))
-                )
-            }
-
-            // Nez : un petit triangle vers l'avant, qui dit dans quel sens on regarde.
-            var nose = Path()
-            nose.move(to: CGPoint(x: -head * 0.18, y: -head * 0.45))
-            nose.addLine(to: CGPoint(x: 0, y: -head * 0.72))
-            nose.addLine(to: CGPoint(x: head * 0.18, y: -head * 0.45))
-            nose.closeSubpath()
-            layer.fill(nose, with: .color(PlanPalette.listening))
-        }
-    }
-
     // MARK: - Textes
 
     private func drawLabels(of object: RoomObject, in context: inout GraphicsContext) {
@@ -1150,8 +655,12 @@ struct PlanRenderer {
         // désigné. C'est le principal remède à l'encombrement : sur un plan meublé, une
         // dizaine d'étiquettes permanentes se recouvrent et plus rien ne se lit. Même le mode
         // « toutes les cotes » épargne ce qui n'est qu'un encombrement sur un meuble.
+        if case .speaker = object.kind {
+            drawSpeakerTag(of: object, center: center, height: height, in: &context)
+        }
         let namedOnDemand = showsAllLabels && object.kind != .decor
-        if namedOnDemand || isDesignated || hasPermanentName(object, width: width, height: height) {
+        let isSpeaker = object.kind.outputID != nil || { if case .speaker = object.kind { true } else { false } }()
+        if !isSpeaker, namedOnDemand || isDesignated || hasPermanentName(object, width: width, height: height) {
             drawHaloText(
                 Text(object.name.isEmpty ? object.kind.label : object.name)
                     .font(.system(size: 11, weight: .bold))
@@ -1173,24 +682,35 @@ struct PlanRenderer {
         }
     }
 
+    /// Seuls les lieux d'écoute nommés gardent leur nom à demeure : c'est ce qui les distingue. Les
+    /// enceintes ont leur étiquette, les meubles se nomment au survol ou à la sélection.
     private func hasPermanentName(_ object: RoomObject, width: Double, height: Double) -> Bool {
-        switch object.kind {
-        case .speaker:
-            return true
-        case .listener:
-            // Avec plusieurs lieux d'écoute, le nom est ce qui les distingue sur le plan.
-            return !object.name.isEmpty
-        case .sofa, .armchair, .table, .sideboard, .desk, .tvStand, .rug, .plant:
-            return max(width, height) >= 36
-        case .lamp:
-            return object.size.width >= 0.3 && width >= 18
-        default:
-            return false
-        }
+        object.kind == .listener && !object.name.isEmpty
     }
 
-    /// Où poser le nom, dans le repère de l'écran : le texte reste horizontal même quand le
-    /// meuble ne l'est pas, le point d'ancrage suit sa rotation.
+    /// L'étiquette d'une enceinte : son nom, et son volume si elle est dans la diffusion, dans une
+    /// pastille sous son anneau.
+    private func drawSpeakerTag(
+        of object: RoomObject, center: CGPoint, height: Double, in context: inout GraphicsContext
+    ) {
+        let name = object.name.isEmpty ? object.kind.label : object.name
+        var label = Text(name).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
+        if let id = object.kind.outputID, let caption = speakerCaptions[id] {
+            label = label + Text("  \(caption)")
+                .font(.system(size: 11).monospacedDigit()).foregroundStyle(.white.opacity(0.62))
+        }
+        let resolved = context.resolve(label)
+        let size = resolved.measure(in: CGSize(width: 240, height: 40))
+        let tag = CGRect(
+            x: center.x - size.width / 2 - 9, y: center.y + height / 2 + Self.speakerEchoGap + 6,
+            width: size.width + 18, height: size.height + 8
+        )
+        let capsule = Path(roundedRect: tag, cornerRadius: tag.height / 2)
+        context.fill(capsule, with: .color(.black.opacity(0.55)))
+        context.stroke(capsule, with: .color(.white.opacity(0.16)), lineWidth: 0.75)
+        context.draw(resolved, at: CGPoint(x: tag.midX, y: tag.midY))
+    }
+
     private func nameAnchor(of object: RoomObject, center: CGPoint, height: Double) -> CGPoint {
         func rotated(_ offset: CGPoint) -> CGPoint {
             let angle = object.rotation * .pi / 180
@@ -1211,6 +731,9 @@ struct PlanRenderer {
             // dessous, il tomberait sur le fauteuil voisin dès que le plan se resserre.
             return SpeakerFamily(name: object.name) == .geneva
                 ? center : CGPoint(x: center.x, y: center.y + height / 2 + Self.speakerEchoGap + 9)
+        case .listener:
+            // Sous le point, pas dessus.
+            return CGPoint(x: center.x, y: center.y + 22)
         default:
             // Le centre d'un canapé d'angle tombe dans le vide de l'angle : le modèle sait où
             // se trouve sa partie assez large pour porter un texte.

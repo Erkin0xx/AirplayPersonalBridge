@@ -134,6 +134,12 @@ struct RoomPlanView: View {
             layout: state.roomLayout, transform: transform, outputIDs: state.outputIDsDrawnOnPlan,
             selection: selection, hoveredObject: hoveredObject, hoveredVertex: hoveredVertex,
             showsAllLabels: showsAllLabels, showsVertexHandles: tool == .select,
+            speakerCaptions: Dictionary(
+                state.outputs.filter(\.isEnabled).map {
+                    ($0.id, PanelFormat.decibels($0.trimDB, fractionDigits: $0.trimDB.rounded() == $0.trimDB ? 0 : 1, signed: true))
+                },
+                uniquingKeysWith: { first, _ in first }
+            ),
             backgroundImage: backgroundImage
         )
     }
@@ -204,6 +210,9 @@ struct RoomPlanView: View {
             drawCalibration(&context)
             drawPendingWall(&context)
         }
+        // Le fond des autres vues, éteint : le même grain et une trace des mêmes couleurs, immobiles sous
+        // un plan qu'on édite.
+        .background { AuroraBackground(isLive: false) }
         .background(PlanPalette.canvas)
         .overlay { SpeakerPulse(sources: playingSpeakers, reach: 0.55 * scale) }
         .contentShape(Rectangle())

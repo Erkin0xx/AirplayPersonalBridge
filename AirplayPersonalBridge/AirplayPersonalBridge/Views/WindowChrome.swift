@@ -34,17 +34,26 @@ struct SourceMenu: View {
     @Bindable var state: BridgeState
 
     var body: some View {
-        // Des identifiants, pas des valeurs : les PID d'une application varient d'un relevé à l'autre.
-        Picker(
-            "Source",
-            selection: Binding(get: { state.selectedSource.id }, set: { state.selectSource(id: $0) })
-        ) {
-            ForEach(state.sources) { source in
-                Text(source.label).tag(source.id)
+        // Un menu au libellé explicite : la source en vigueur se lit dans la barre, là où un sélecteur
+        // sans libellé ne montrait qu'un chevron. Des identifiants, pas des valeurs : les PID d'une
+        // application varient d'un relevé à l'autre.
+        Menu {
+            Picker(
+                "Source",
+                selection: Binding(get: { state.selectedSource.id }, set: { state.selectSource(id: $0) })
+            ) {
+                ForEach(state.sources) { source in
+                    Text(source.label).tag(source.id)
+                }
             }
+            .pickerStyle(.inline)
+            Divider()
+            Button("Rafraîchir la liste") { state.refreshSources() }
+        } label: {
+            Label(state.selectedSource.label, systemImage: "waveform")
         }
-        .pickerStyle(.menu)
-        .fixedSize()
+        .labelStyle(.titleAndIcon)
+        .accessibilityLabel("Source")
         .help("Source du son. Pendant une diffusion, en changer la relance.")
     }
 }
