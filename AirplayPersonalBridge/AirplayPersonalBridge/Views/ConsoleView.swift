@@ -44,7 +44,7 @@ struct ConsoleLayout: Equatable {
 /// La vue « Console » de la fenêtre : une tuile et un curseur vertical par enceinte, puis, en grand dessous,
 /// la barre de lecture (ce qui joue, le volume général, Diffuser/Arrêter).
 ///
-/// La mise en page de la maquette 2, aux couleurs du thème : du verre sur le fond de nappes, le rose de
+/// La mise en page de la maquette 2, aux couleurs du thème : du verre sur le fond granuleux, le rose de
 /// l'app réservé à l'état, les curseurs en blanc. La source, le lieu d'écoute et les options flottent en haut
 /// de la fenêtre (`WindowChrome`) ; le plan est une autre vue.
 struct ConsoleView: View {
@@ -179,6 +179,6 @@ struct ConsoleView: View {
 #Preview("Diffusion") {
     ConsoleView(state: .preview(.streaming))
         .frame(width: 1200, height: 700)
-        .background { AuroraBackground(isLive: true) }
+        .background { GrainientBackground(isLive: true) }
         .preferredColorScheme(.dark)
 }

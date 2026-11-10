@@ -29,7 +29,3 @@ enum BridgeTheme {
         )
     }
 }
-
-/// L'ancien nom du fond, gardé le temps que les vues qui l'appellent encore passent à
-/// `GrainientBackground` (`Views/GrainientBackground.swift`), où il est dessiné.
-typealias AuroraBackground = GrainientBackground

@@ -93,7 +93,7 @@ extension ContentView {
     /// Le bord gauche de ce que le panneau des enceintes laisse visible du plan.
     private static let panelInset = WindowChromeMetrics.sideMargin + BridgeSidebar.panelWidth + 18
 
-    /// Une vue sans plan : son contenu sur le fond de nappes, sous les commandes flottantes.
+    /// Une vue sans plan : son contenu sur le fond granuleux, sous les commandes flottantes.
     private func immersive(@ViewBuilder _ content: () -> some View) -> some View {
         content()
             .padding(.top, WindowChromeMetrics.contentTop - 8)
