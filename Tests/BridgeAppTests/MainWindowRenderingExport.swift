@@ -131,6 +131,14 @@ struct MainWindowExport {
                 to: directory.appending(path: "fenetre-inspecteur-murs-\(suffix).png")
             )
 
+            // Un HomePod coupé seul : son curseur grisé, son bouton de silence enclenché.
+            let mutedSpeaker = Self.state(.streaming)
+            mutedSpeaker.outputs.first { $0.id == "airplay2/Salon (2)" }?.isMuted = true
+            try writeMainWindow(
+                mutedSpeaker, scheme: scheme,
+                to: directory.appending(path: "fenetre-enceinte-coupee-\(suffix).png")
+            )
+
             // Une application choisie qui ne joue pas : la ligne « Passera sur … » et son Annuler.
             let awaiting = Self.state(.idle)
             if let music = awaiting.sources.first(where: { $0.label.contains("Music") }) {

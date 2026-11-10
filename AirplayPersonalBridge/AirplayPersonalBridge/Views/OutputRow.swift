@@ -29,6 +29,8 @@ struct OutputRow: View {
     private let labelWidth: CGFloat = 44
     private let valueWidth: CGFloat = 58
     private let columnGap: CGFloat = 8
+    /// Le silence de l'enceinte, au bout de la rangée du volume.
+    private let accessoryWidth: CGFloat = 18
     /// La case, puis l'icône : le message et les réglages commencent sur le bord du nom.
     static let checkboxWidth: CGFloat = 16
     static let iconWidth: CGFloat = 18
@@ -119,7 +121,8 @@ struct OutputRow: View {
                 "Trim", help: "Volume de cette sortie, en plus du volume master",
                 value: Binding(get: { output.trimDB }, set: { output.trimDB = ($0 * 2).rounded() / 2 }),
                 in: BridgeSettings.Limits.trimDB,
-                text: PanelFormat.decibels(output.trimDB, fractionDigits: 1, signed: true)
+                text: PanelFormat.decibels(output.trimDB, fractionDigits: 1, signed: true),
+                carriesMute: true
             )
             settingRow(
                 "Délai", help: "Décalage manuel, ajouté à la compensation du lieu d'écoute",
@@ -163,6 +166,7 @@ struct OutputRow: View {
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .frame(width: valueWidth, alignment: .trailing)
+                Color.clear.frame(width: accessoryWidth, height: 1)
             }
             .help("Gain effectif : master et trim confondus, silences compris")
             .accessibilityElement(children: .ignore)
@@ -174,8 +178,12 @@ struct OutputRow: View {
         .padding(.leading, Self.textInset)
     }
 
+    /// `carriesMute` : la rangée du volume porte le silence de l'enceinte au bout, comme dans le panneau ;
+    /// coupée, l'enceinte reste dans la diffusion, et son curseur reste là, grisé. Les autres rangées
+    /// réservent la colonne, pour que leurs valeurs restent l'une sous l'autre.
     private func settingRow(
-        _ label: String, help: String, value: Binding<Double>, in range: ClosedRange<Double>, text: String
+        _ label: String, help: String, value: Binding<Double>, in range: ClosedRange<Double>, text: String,
+        carriesMute: Bool = false
     ) -> some View {
         HStack(spacing: columnGap) {
             Text(label)
@@ -187,12 +195,21 @@ struct OutputRow: View {
             }
             .labelsHidden()
             .controlSize(.small)
+            .disabled(carriesMute && output.isMuted)
+            .opacity(carriesMute && output.isMuted ? PanelSpeakerMute.mutedSliderOpacity : 1)
             .accessibilityValue(text)
-            .help(help)
+            .help(carriesMute ? PanelSpeakerMute.sliderHelp(for: output) : help)
             Text(text)
                 .monospacedDigit()
                 .frame(width: valueWidth, alignment: .trailing)
                 .accessibilityHidden(true)
+            if carriesMute {
+                PanelSpeakerMuteButton(output: output, width: accessoryWidth)
+            } else {
+                Color.clear
+                    .frame(width: accessoryWidth, height: 1)
+                    .accessibilityHidden(true)
+            }
         }
     }
 
