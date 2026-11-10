@@ -114,7 +114,7 @@ struct ConsoleViewExport {
         let narrow = Self.state(.streaming)
         try writeWindow(
             ConsoleView(state: narrow)
-                .background { AuroraBackground(isLive: true) }
+                .background { GrainientBackground(isLive: true) }
                 .tint(BridgeTheme.accent)
                 .frame(width: 720, height: 568),
             size: CGSize(width: 720, height: 568), to: directory.appending(path: "console-rangee-defilante.png")

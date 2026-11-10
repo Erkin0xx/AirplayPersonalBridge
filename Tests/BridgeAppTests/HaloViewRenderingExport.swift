@@ -113,7 +113,7 @@ struct HaloViewExport {
         try writeWindow(
             HaloView(state: Self.state(.streaming))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background { AuroraBackground(isLive: true) }
+                .background { GrainientBackground(isLive: true) }
                 .safeAreaPadding(.top, 90)
                 .preferredColorScheme(.dark),
             size: CGSize(width: 960, height: 700),
