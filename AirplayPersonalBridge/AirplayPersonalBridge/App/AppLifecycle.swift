@@ -46,6 +46,8 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
     private var wasLaunchedAtLogin = false
     private weak var mainWindow: NSWindow?
     private var windowObservers: [any NSObjectProtocol] = []
+    private weak var settingsWindow: NSWindow?
+    private var settingsWindowObservers: [any NSObjectProtocol] = []
     private var powerObservers: [any NSObjectProtocol] = []
 
     /// Celle qu'emploie `@NSApplicationDelegateAdaptor`, seule à relancer le vrai coreaudiod.
@@ -164,6 +166,43 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
         guard let mainWindow else { return }
         if mainWindow.isMiniaturized { mainWindow.deminiaturize(nil) }
         if mainWindow.isVisible { bringToFront(mainWindow) }
+    }
+
+    // MARK: - Fenêtre des réglages
+
+    /// Ouvre la fenêtre des réglages depuis le panneau de la barre de menus, au premier plan.
+    ///
+    /// Sans fenêtre principale, l'app est `.accessory` : elle ne peut pas passer devant, et la fenêtre
+    /// des réglages s'ouvrirait derrière celle de l'application en cours. D'où l'icône du Dock et
+    /// l'activation **avant** l'ouverture, comme pour la fenêtre principale.
+    func showSettingsWindow(using open: () -> Void) {
+        dock.prepareToShowWindow()
+        open()
+        if let settingsWindow, settingsWindow.isVisible { bringToFront(settingsWindow) }
+    }
+
+    /// Appelée par la vue des réglages dès qu'elle est rattachée à son `NSWindow`, d'où qu'elle ait été
+    /// ouverte (⌘,, bouton des options, panneau).
+    func settingsWindowDidAttach(_ window: NSWindow) {
+        if settingsWindow !== window {
+            settingsWindow = window
+            for observer in settingsWindowObservers { NotificationCenter.default.removeObserver(observer) }
+            settingsWindowObservers = [
+                NotificationCenter.default.addObserver(
+                    forName: NSWindow.willCloseNotification, object: window, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.dock.windowWillClose(.settings) }
+                },
+                // Rouverte, la fenêtre peut réutiliser le même `NSWindow`, sans repasser par la vue.
+                NotificationCenter.default.addObserver(
+                    forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.dock.windowDidOpen(.settings) }
+                },
+            ]
+        }
+        dock.windowDidOpen(.settings)
+        if window.isVisible { bringToFront(window) }
     }
 
     // MARK: - Panneau

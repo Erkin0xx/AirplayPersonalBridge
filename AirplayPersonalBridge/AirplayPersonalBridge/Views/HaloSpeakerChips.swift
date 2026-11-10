@@ -37,6 +37,7 @@ struct HaloSpeakerChips: View {
     @Bindable var state: BridgeState
     /// Un son part vraiment : les égaliseurs des enceintes qui diffusent peuvent bouger.
     let isAudible: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var contentHeight: CGFloat = HaloChipMetrics.height
 
     var body: some View {
@@ -46,7 +47,8 @@ struct HaloSpeakerChips: View {
             ScrollView(.vertical) {
                 HaloFlowLayout(spacing: HaloChipMetrics.spacing, rowSpacing: HaloChipMetrics.rowSpacing) {
                     // L'ordre du panneau : celles qui exigent une intervention passent en dernier.
-                    ForEach(PanelSpeakerOrder.sorted(state.outputs)) { output in
+                    // Les masquées n'y sont pas : elles jouent toujours si elles sont cochées.
+                    ForEach(PanelSpeakerOrder.sorted(state.visibleOutputs)) { output in
                         HaloSpeakerChip(
                             output: output,
                             effectiveGainDB: state.effectiveGainDB(for: output),
@@ -54,8 +56,16 @@ struct HaloSpeakerChips: View {
                             listeningPlaceName: state.listeningPlaceName,
                             stereoPartnerNames: state.stereoPartners(of: output).map(\.displayName),
                             isAudible: isAudible,
-                            toggle: { state.toggleEnabled(output) }
+                            toggle: { state.toggleEnabled(output) },
+                            hide: { hide(output) }
                         )
+                    }
+                    if state.hidesEverySpeaker {
+                        AllSpeakersHiddenNotice()
+                            .glassButtonStyle()
+                            .padding(.horizontal, 20)
+                            .frame(height: HaloChipMetrics.height)
+                            .floatingGlass(in: Capsule(style: .circular))
                     }
                     searchButton
                 }
@@ -66,6 +76,12 @@ struct HaloSpeakerChips: View {
             .scrollIndicators(.never)
             // La hauteur de ce qu'il contient, jusqu'à deux rangées : la vue ne réserve pas de vide.
             .frame(height: min(max(contentHeight, HaloChipMetrics.height), HaloChipMetrics.maxHeight))
+        }
+    }
+
+    private func hide(_ output: OutputState) {
+        withAnimation(PanelMotion.standard(reduceMotion: reduceMotion)) {
+            state.setHidden(true, for: output)
         }
     }
 
@@ -159,8 +175,11 @@ struct HaloSpeakerChip: View {
     var isAudible = true
     /// Le clic sur le badge : `BridgeState.toggleEnabled(_:)`, qui emmène la paire stéréo.
     var toggle: () -> Void
+    /// « Masquer » : au clic droit, et par l'œil barré qui apparaît au survol. Emmène la paire stéréo.
+    var hide: (() -> Void)?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.revealsHoverControls) private var revealsHoverControls
     @State private var isHovering = false
     @State private var isAdjusting = false
     @State private var showsSettings = false
@@ -179,6 +198,13 @@ struct HaloSpeakerChip: View {
                     Spacer(minLength: 2)
                     indicator
                         .frame(width: 16, height: 16)
+                    if let hide, isHovering || revealsHoverControls {
+                        HideSpeakerButton(
+                            name: output.displayName, partners: stereoPartnerNames,
+                            isEnabled: output.isEnabled, action: hide
+                        )
+                        .transition(.opacity)
+                    }
                     if !output.isHeldBack {
                         settingsButton
                     }
@@ -195,6 +221,7 @@ struct HaloSpeakerChip: View {
         .onHover { isHovering = $0 }
         .animation(PanelMotion.quick(reduceMotion: reduceMotion), value: isHovering)
         .accessibilityElement(children: .contain)
+        .hideSpeakerMenu(partners: stereoPartnerNames, action: hide)
     }
 
     // MARK: - Badge

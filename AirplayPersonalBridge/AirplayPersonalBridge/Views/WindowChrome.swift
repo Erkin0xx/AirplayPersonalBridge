@@ -88,6 +88,7 @@ struct SourcePill: View {
 struct WindowOptionsButton: View {
     @Bindable var state: BridgeState
     var showDiagnostics: () -> Void
+    @Environment(\.openSettings) private var openSettings
     @State private var isPresented = false
 
     var body: some View {
@@ -102,17 +103,27 @@ struct WindowOptionsButton: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .help("Options : vue de la fenêtre, options du Mac, diagnostic")
+        .help("Options : vue de la fenêtre, options du Mac, réglages, diagnostic")
         .accessibilityLabel("Options")
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 0) {
                 MacOptions(state: state)
                 Divider()
-                Button {
-                    isPresented = false
-                    showDiagnostics()
-                } label: {
-                    Label("Diagnostic…", systemImage: "waveform.path.ecg")
+                VStack(alignment: .leading, spacing: 10) {
+                    // Ce qui est masqué se réaffiche là : la fenêtre des réglages de l'app (⌘,).
+                    Button {
+                        isPresented = false
+                        AppSettingsWindow.open(openSettings)
+                    } label: {
+                        Label("Réglages…", systemImage: "gearshape")
+                    }
+                    .help("Vue de la fenêtre, enceintes et éléments masqués (⌘,)")
+                    Button {
+                        isPresented = false
+                        showDiagnostics()
+                    } label: {
+                        Label("Diagnostic…", systemImage: "waveform.path.ecg")
+                    }
                 }
                 .buttonStyle(.borderless)
                 .padding(16)

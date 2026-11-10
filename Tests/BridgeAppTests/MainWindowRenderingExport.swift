@@ -106,6 +106,42 @@ struct MainWindowExport {
             ("echec-demarrage", .startFailed), ("hors-ligne", .offline), ("vide", .empty),
             ("recherche", .searching), ("demarrage", .starting),
         ]
+        // L'Apple TV masquée : sa carte quitte le panneau des enceintes, dont le pied le dit ; le plan garde
+        // son dessin.
+        let hidden = Self.state(.streaming)
+        if let appleTV = hidden.outputs.first(where: { $0.displayName == "Apple TV Salon" }) {
+            hidden.setHidden(true, for: appleTV)
+        }
+        try writeMainWindow(
+            hidden, scheme: .dark, to: directory.appending(path: "fenetre-enceinte-masquee-sombre.png")
+        )
+
+        // Ce que seul le survol fait apparaître : l'œil barré de chaque carte.
+        try writeWindow(
+            ContentView(state: Self.state(.streaming)).environment(\.revealsHoverControls, true),
+            scheme: .dark, to: directory.appending(path: "fenetre-survol-masquer-sombre.png")
+        )
+
+        // Le volume général masqué : le bouton de silence monte à côté de la commande.
+        let bare = Self.state(.streaming)
+        bare.setVisible(false, block: .masterVolume)
+        try writeMainWindow(bare, scheme: .dark, to: directory.appending(path: "fenetre-blocs-masques-sombre.png"))
+
+        // La fenêtre Réglages, seule : l'Apple TV et la paire masquées, les ondes aussi.
+        let settings = Self.state(.streaming)
+        for output in settings.outputs where output.displayName == "Apple TV Salon" || output.id == "airplay2/Salon" {
+            settings.setHidden(true, for: output)
+        }
+        settings.setVisible(false, block: .haloWaves)
+        try writeWindow(
+            SettingsView(state: settings), scheme: .dark, size: SettingsView.size,
+            to: directory.appending(path: "reglages-fenetre-sombre.png")
+        )
+        try writeWindow(
+            SettingsView(state: Self.state(.idle)), scheme: .dark, size: SettingsView.size,
+            to: directory.appending(path: "reglages-fenetre-rien-de-masque-sombre.png")
+        )
+
         for scheme in [ColorScheme.dark, .light] {
             let suffix = scheme == .dark ? "sombre" : "clair"
             for (name, scene) in scenes {

@@ -90,9 +90,12 @@ struct SpeakerCard: View {
     var isAudible = true
     /// Le clic sur l'en-tête : `BridgeState.toggleEnabled(_:)`, qui emmène la paire stéréo.
     var toggle: () -> Void
+    /// « Masquer » : au clic droit, et par l'œil barré qui apparaît au survol. Emmène la paire stéréo.
+    var hide: (() -> Void)?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appearsActive) private var appearsActive
+    @Environment(\.revealsHoverControls) private var revealsHoverControls
     @State private var isHovering = false
     @State private var isAdjusting = false
     @State private var showsSettings: Bool
@@ -100,7 +103,7 @@ struct SpeakerCard: View {
     init(
         output: OutputState, effectiveGainDB: Double, listeningCompensationMS: Double? = nil,
         listeningPlaceName: String? = nil, stereoPartnerNames: [String] = [], isAudible: Bool = true,
-        previewShowsSettings: Bool = false, toggle: @escaping () -> Void
+        previewShowsSettings: Bool = false, toggle: @escaping () -> Void, hide: (() -> Void)? = nil
     ) {
         self.output = output
         self.effectiveGainDB = effectiveGainDB
@@ -109,6 +112,7 @@ struct SpeakerCard: View {
         self.stereoPartnerNames = stereoPartnerNames
         self.isAudible = isAudible
         self.toggle = toggle
+        self.hide = hide
         _showsSettings = State(initialValue: previewShowsSettings)
     }
 
@@ -134,6 +138,7 @@ struct SpeakerCard: View {
         .onHover { isHovering = $0 }
         .animation(PanelMotion.quick(reduceMotion: reduceMotion), value: isHovering)
         .accessibilityElement(children: .contain)
+        .hideSpeakerMenu(partners: stereoPartnerNames, action: hide)
     }
 
     // MARK: - En-tête
@@ -170,6 +175,13 @@ struct SpeakerCard: View {
 
             stateIndicator
                 .frame(width: 18, height: 18)
+            if let hide, isHovering || revealsHoverControls {
+                HideSpeakerButton(
+                    name: output.displayName, partners: stereoPartnerNames, isEnabled: output.isEnabled,
+                    diameter: 26, action: hide
+                )
+                .transition(.opacity)
+            }
             if !output.isHeldBack {
                 settingsButton
             }

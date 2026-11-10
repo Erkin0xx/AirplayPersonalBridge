@@ -34,7 +34,7 @@ struct ContentView: View {
             HStack(spacing: 8) {
                 // Le lieu d'écoute de la console, en haut à droite à côté des options ; la vue Plan a le sien
                 // dans ses outils.
-                if state.windowLayout == .console {
+                if state.windowLayout == .console, state.isVisible(.listeningPlaces) {
                     ConsoleListeningPlaces(state: state)
                 }
                 WindowOptionsButton(state: state, showDiagnostics: { showsDiagnostics = true })

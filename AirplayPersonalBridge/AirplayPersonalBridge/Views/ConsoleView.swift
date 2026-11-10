@@ -50,12 +50,15 @@ struct ConsoleLayout: Equatable {
 struct ConsoleView: View {
     @Bindable var state: BridgeState
 
-    /// L'ordre du panneau : celles qui exigent une intervention passent en fin de rangée.
-    private var speakers: [OutputState] { PanelSpeakerOrder.sorted(state.outputs) }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// L'ordre du panneau : celles qui exigent une intervention passent en fin de rangée. Les masquées n'ont
+    /// pas de tuile.
+    private var speakers: [OutputState] { PanelSpeakerOrder.sorted(state.visibleOutputs) }
 
     var body: some View {
         GeometryReader { proxy in
-            let layout = ConsoleLayout.make(size: proxy.size, speakerCount: state.outputs.count)
+            let layout = ConsoleLayout.make(size: proxy.size, speakerCount: speakers.count)
             VStack(spacing: 0) {
                 console(layout)
                     .frame(minHeight: ConsoleLayout.minimumTileHeight, maxHeight: layout.maxTileHeight)
@@ -68,7 +71,11 @@ struct ConsoleView: View {
                     .padding(.top, 14)
                 // Les avertissements en petit sous la barre, à une place réservée : leur arrivée ne déplace
                 // rien.
-                ConsoleWarnings(warnings: ConsoleWarning.list(for: state, speakers: speakers))
+                // Toutes les enceintes, masquées comprises : masquer une tuile ne fait pas taire son
+                // avertissement.
+                ConsoleWarnings(
+                    warnings: ConsoleWarning.list(for: state, speakers: PanelSpeakerOrder.sorted(state.outputs))
+                )
                     .frame(width: layout.columnWidth)
                     .padding(.top, 8)
             }
@@ -86,7 +93,14 @@ struct ConsoleView: View {
         GeometryReader { proxy in
             ScrollView(.horizontal) {
                 HStack(spacing: ConsoleMetrics.tileSpacing) {
-                    if speakers.isEmpty {
+                    if state.hidesEverySpeaker {
+                        AllSpeakersHiddenNotice()
+                            .glassButtonStyle()
+                            .padding(.horizontal, 24)
+                            .frame(width: ConsoleMetrics.placeholderWidth)
+                            .frame(maxHeight: .infinity)
+                            .modifier(ConsoleTileSurface(isHeldBack: true))
+                    } else if speakers.isEmpty {
                         ConsoleEmptyTile(state: state)
                     } else {
                         ForEach(speakers) { output in
@@ -97,7 +111,12 @@ struct ConsoleView: View {
                                 listeningPlaceName: state.listeningPlaceName,
                                 stereoPartnerNames: state.stereoPartners(of: output).map(\.displayName),
                                 isAudible: state.captureAlert == nil && !state.isMuted,
-                                toggle: { state.toggleEnabled(output) }
+                                toggle: { state.toggleEnabled(output) },
+                                hide: {
+                                    withAnimation(PanelMotion.standard(reduceMotion: reduceMotion)) {
+                                        state.setHidden(true, for: output)
+                                    }
+                                }
                             )
                         }
                     }
@@ -119,6 +138,8 @@ struct ConsoleView: View {
     /// (`ConsoleWarnings`). Toujours là, même pendant la recherche : la console ne change pas de hauteur.
     private var footer: some View {
         HStack {
+            // Ce qui est masqué, en face de la recherche : la ligne existait, rien ne se déplace.
+            HiddenElementsNote(state: state)
             Spacer(minLength: 0)
             if !state.outputs.isEmpty {
                 search

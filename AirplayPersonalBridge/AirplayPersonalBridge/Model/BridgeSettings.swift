@@ -97,13 +97,16 @@ struct BridgeSettings: Codable, Equatable {
     /// La vue de la fenêtre (`WindowLayout`). Un fichier d'avant ce choix, ou une valeur inconnue,
     /// donne la vue par défaut.
     var windowLayout = WindowLayout.default
+    /// Ce qui est masqué dans la fenêtre (`HiddenElements`) : des enceintes, des blocs. Un fichier d'avant
+    /// le masquage, ou un champ illisible, ne masque rien.
+    var hiddenElements = HiddenElements()
     var outputs: [String: Output] = [:]
 
     private enum CodingKeys: String, CodingKey {
         case masterVolumeDB, isMuted, sourceID, muteLocalOutput, outputs
         case followsSystemVolume, systemVolumeMemory
         case syncsVideo, videoSyncMemory
-        case windowLayout
+        case windowLayout, hiddenElements
     }
 
     init() {}
@@ -124,6 +127,7 @@ struct BridgeSettings: Codable, Equatable {
         syncsVideo = fields.value(.syncsVideo, default: true)
         videoSyncMemory = fields.value(.videoSyncMemory, default: nil)
         windowLayout = fields.value(.windowLayout, default: .default)
+        hiddenElements = fields.value(.hiddenElements, default: HiddenElements())
         // Entrée par entrée : une sortie abîmée ne doit pas coûter les réglages des autres.
         let entries = fields.value(.outputs, default: [String: TolerantOutput]())
         outputs = entries.compactMapValues(\.output)

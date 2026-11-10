@@ -167,6 +167,32 @@ struct MenuBarPanelExport {
                 to: directory.appending(path: "panneau-son-coupe-basses-aigus-options-\(suffix).png")
             )
 
+            // L'Apple TV masquée : elle n'a plus sa rangée, et la ligne « Réglages… » le rappelle.
+            let hidden = BridgeState.preview(.streaming)
+            if let appleTV = hidden.outputs.first(where: { $0.displayName == "Apple TV Salon" }) {
+                hidden.setHidden(true, for: appleTV)
+            }
+            try writeHosted(
+                SimulatedGlass(scheme: scheme) {
+                    MenuBarPanelContent(
+                        state: hidden, loginItem: LoginItemController(service: PreviewLoginItemService())
+                    )
+                }, scheme: scheme,
+                to: directory.appending(path: "panneau-enceinte-masquee-\(suffix).png")
+            )
+
+            // Toutes masquées : le panneau le dit, au lieu de « aucune enceinte trouvée ».
+            let none = BridgeState.preview(.streaming)
+            for output in none.outputs { none.setHidden(true, for: output) }
+            try writeHosted(
+                SimulatedGlass(scheme: scheme) {
+                    MenuBarPanelContent(
+                        state: none, loginItem: LoginItemController(service: PreviewLoginItemService())
+                    )
+                }, scheme: scheme,
+                to: directory.appending(path: "panneau-toutes-masquees-\(suffix).png")
+            )
+
             // L'option du calage vidéo, pilote installé, puis grisée sans pilote.
             var withDriver = BridgeEnvironment.inert
             withDriver.outputSwitch = InertDefaultOutputSwitch(driverInstalled: true)

@@ -23,8 +23,12 @@ struct ConsoleSpeakerTile: View {
     var isAudible = true
     /// Le clic sur l'en-tête : `BridgeState.toggleEnabled(_:)`, qui emmène la paire stéréo.
     var toggle: () -> Void
+    /// « Masquer » : au clic droit, et par l'œil barré qui apparaît au survol. Emmène la paire stéréo.
+    var hide: (() -> Void)?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.revealsHoverControls) private var revealsHoverControls
+    @State private var isHovering = false
     @State private var showsSettings = false
 
     private var caption: (text: String, tone: OutputStatusTone) {
@@ -57,9 +61,24 @@ struct ConsoleSpeakerTile: View {
         .frame(width: ConsoleMetrics.speakerWidth)
         .frame(maxHeight: .infinity)
         .modifier(ConsoleTileSurface(isHeldBack: output.consoleIsHeldBack))
+        // Dans le coin, par-dessus : la tuile ne change pas de forme au survol, et celle d'une enceinte en
+        // retrait, qui n'a pas de boutons, l'a aussi.
+        .overlay(alignment: .topTrailing) {
+            if let hide, isHovering || revealsHoverControls {
+                HideSpeakerButton(
+                    name: output.displayName, partners: stereoPartnerNames, isEnabled: output.isEnabled,
+                    diameter: 24, isFilled: true, action: hide
+                )
+                .padding(7)
+                .transition(.opacity)
+            }
+        }
+        .onHover { isHovering = $0 }
+        .animation(PanelMotion.quick(reduceMotion: reduceMotion), value: isHovering)
         .animation(PanelMotion.standard(reduceMotion: reduceMotion), value: output.isEnabled)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(output.displayName)
+        .hideSpeakerMenu(partners: stereoPartnerNames, action: hide)
     }
 
     // MARK: En-tête

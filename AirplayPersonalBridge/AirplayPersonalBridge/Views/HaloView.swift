@@ -111,10 +111,16 @@ struct HaloView: View {
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 20)
+        // Ce qui est masqué, en petit dans la marge du bas : sa venue ne déplace ni le halo ni les pastilles.
+        .overlay(alignment: .bottom) {
+            HiddenElementsNote(state: state)
+                .padding(.bottom, 3)
+        }
         // Les ondes, derrière tout : elles passent sous le titre, les pastilles et la barre d'outils.
         .backgroundPreferenceValue(HaloSphereBoundsKey.self) { anchor in
             GeometryReader { proxy in
-                if let anchor {
+                // Un décor, masquable depuis les Réglages (`WindowBlock.haloWaves`).
+                if let anchor, state.isVisible(.haloWaves) {
                     let sphere = proxy[anchor]
                     let insets = proxy.safeAreaInsets
                     HaloWaves(
@@ -165,10 +171,14 @@ struct HaloView: View {
             .anchorPreference(key: HaloSphereBoundsKey.self, value: .bounds) { $0 }
             .animation(reduceMotion ? nil : .smooth(duration: 0.45), value: look)
 
-            HaloVolumeRing(
-                decibels: masterBinding, isMuted: $state.isMuted, range: BridgeSettings.Limits.masterDB,
-                radius: HaloMetrics.ringRadius(forSphere: diameter), isLive: isAudible
-            )
+            // Le volume général masqué (`WindowBlock.masterVolume`) : l'anneau s'en va, la sphère garde sa
+            // taille et sa place.
+            if state.isVisible(.masterVolume) {
+                HaloVolumeRing(
+                    decibels: masterBinding, isMuted: $state.isMuted, range: BridgeSettings.Limits.masterDB,
+                    radius: HaloMetrics.ringRadius(forSphere: diameter), isLive: isAudible
+                )
+            }
         }
     }
 
@@ -210,20 +220,24 @@ struct HaloView: View {
         .accessibilityAddTraits(.isHeader)
     }
 
-    /// Le silence général et le niveau en chiffres : l'anneau le montre, cette ligne le dit.
+    /// Le silence général et le niveau en chiffres : l'anneau le montre, cette ligne le dit. Volume général
+    /// masqué, il ne reste que le silence : un son coupé doit toujours se voir, et se rétablir d'un clic.
     private var master: some View {
-        HStack(spacing: 8) {
+        let showsLevel = state.isVisible(.masterVolume)
+        return HStack(spacing: 8) {
             PanelMuteButton(isMuted: $state.isMuted)
-            Text(state.isMuted ? "Son coupé" : "Volume général \(PanelFormat.decibels(state.masterVolumeDB))")
-                .font(.subheadline.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                // La largeur du plus long : la capsule ne tressaute pas pendant qu'on tourne l'anneau.
-                .frame(width: 142, alignment: .leading)
-                .accessibilityHidden(true)
+            if showsLevel || state.isMuted {
+                Text(state.isMuted ? "Son coupé" : "Volume général \(PanelFormat.decibels(state.masterVolumeDB))")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    // La largeur du plus long : la capsule ne tressaute pas pendant qu'on tourne l'anneau.
+                    .frame(width: showsLevel ? 142 : nil, alignment: .leading)
+                    .accessibilityHidden(true)
+            }
         }
         .padding(.leading, 4)
-        .padding(.trailing, 12)
+        .padding(.trailing, showsLevel || state.isMuted ? 12 : 4)
         .padding(.vertical, 4)
         .floatingGlass(in: Capsule(style: .circular))
     }
