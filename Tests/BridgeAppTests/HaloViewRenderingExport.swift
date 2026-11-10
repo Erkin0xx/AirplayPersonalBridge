@@ -108,6 +108,34 @@ struct HaloViewExport {
         }
         try writeWindow(ContentView(state: speakers), to: directory.appending(path: "halo-enceinte-coupee.png"))
 
+        // L'Apple TV masquée : sa pastille s'en va, la ligne discrète le dit au pied de la vue.
+        let hidden = Self.state(.streaming)
+        if let appleTV = hidden.outputs.first(where: { $0.displayName == "Apple TV Salon" }) {
+            hidden.setHidden(true, for: appleTV)
+        }
+        try writeWindow(ContentView(state: hidden), to: directory.appending(path: "halo-enceinte-masquee.png"))
+        try writeWindow(
+            ContentView(state: hidden), size: Self.minimumSize,
+            to: directory.appending(path: "halo-enceinte-masquee-minimale.png")
+        )
+
+        // Ce que seul le survol fait apparaître : l'œil barré de chaque pastille.
+        try writeWindow(
+            ContentView(state: Self.state(.streaming)).environment(\.revealsHoverControls, true),
+            to: directory.appending(path: "halo-survol-masquer.png")
+        )
+
+        // Les blocs masqués : ni ondes ni anneau, le bouton de silence reste seul sous le titre.
+        let bare = Self.state(.streaming)
+        bare.setVisible(false, block: .haloWaves)
+        bare.setVisible(false, block: .masterVolume)
+        try writeWindow(ContentView(state: bare), to: directory.appending(path: "halo-blocs-masques.png"))
+
+        // Toutes masquées : la vue le dit, au lieu de « aucune enceinte ».
+        let none = Self.state(.streaming)
+        for output in none.outputs { none.setHidden(true, for: output) }
+        try writeWindow(ContentView(state: none), to: directory.appending(path: "halo-toutes-masquees.png"))
+
         // La vue seule, sous une marge sûre factice à la place de la barre d'outils, que le rendu hors
         // écran peint en opaque : les ondes doivent rester centrées sur la sphère et passer dessous.
         try writeWindow(

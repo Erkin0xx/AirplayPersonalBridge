@@ -108,6 +108,32 @@ struct ConsoleViewExport {
         }
         try writeWindow(unticked, to: directory.appending(path: "console-enceinte-decochee.png"))
 
+        // L'Apple TV masquée : sa tuile s'en va, la ligne discrète le dit en face de la recherche.
+        let hidden = Self.state(.streaming)
+        if let appleTV = hidden.outputs.first(where: { $0.displayName == "Apple TV Salon" }) {
+            hidden.setHidden(true, for: appleTV)
+        }
+        try writeWindow(hidden, to: directory.appending(path: "console-enceinte-masquee.png"))
+
+        // Ce que seul le survol fait apparaître : l'œil barré dans le coin de chaque tuile.
+        let hovered = Self.state(.streaming)
+        hovered.windowLayout = .console
+        try writeWindow(
+            ContentView(state: hovered).environment(\.revealsHoverControls, true), size: Self.size,
+            to: directory.appending(path: "console-survol-masquer.png")
+        )
+
+        // Les blocs masqués : ni volume général dans la barre, ni lieu d'écoute en haut.
+        let bare = Self.state(.streaming)
+        bare.setVisible(false, block: .masterVolume)
+        bare.setVisible(false, block: .listeningPlaces)
+        try writeWindow(bare, to: directory.appending(path: "console-blocs-masques.png"))
+
+        // Toutes masquées : la console le dit, au lieu de « aucune enceinte ».
+        let none = Self.state(.streaming)
+        for output in none.outputs { none.setHidden(true, for: output) }
+        try writeWindow(none, to: directory.appending(path: "console-toutes-masquees.png"))
+
         // La rangée qui ne tient pas : elle défile d'un bord à l'autre. La fenêtre ne descend pas sous
         // 960 points et une scène d'essai n'a que quatre enceintes : la vue seule, donc, plus étroite
         // que la fenêtre ne le permet.
