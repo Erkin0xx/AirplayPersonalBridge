@@ -326,3 +326,34 @@ struct ConsoleViewTests {
         #expect(ConsoleLiveBars.restLevels.count == ConsoleLiveBars.barCount)
     }
 }
+
+/// Les avertissements de la console, en petit sous la barre de lecture.
+@Suite("Console — avertissements")
+struct ConsoleWarningsTests {
+    @Test("Le démarrage, puis la capture, puis les enceintes en peine, dans l'ordre des tuiles")
+    func order() {
+        let state = BridgeState.preview(.trouble)
+        let speakers = PanelSpeakerOrder.sorted(state.outputs)
+        let warnings = ConsoleWarning.list(for: state, speakers: speakers)
+        let subjects = warnings.map(\.subject)
+        if let alert = state.captureAlert {
+            #expect(subjects.first == alert.title)
+            #expect(warnings.first?.settingsPane != nil || alert.settingsPane == nil)
+        }
+        // Une enceinte en échec ou en attente a sa ligne ; une enceinte qui diffuse n'en a pas.
+        for output in speakers {
+            let expected = ConsoleTileCaption.detail(
+                connection: output.connection, isEnabled: output.isEnabled, isHeldBack: output.consoleIsHeldBack
+            )
+            #expect(subjects.contains(output.displayName) == (expected != nil))
+        }
+        #expect(Set(warnings.map(\.id)).count == warnings.count)
+    }
+
+    @Test("Rien à signaler : aucune ligne, mais la place reste réservée")
+    func nothingToSay() {
+        let state = BridgeState.preview(.streaming)
+        #expect(ConsoleWarning.list(for: state, speakers: PanelSpeakerOrder.sorted(state.outputs)).isEmpty)
+        #expect(ConsoleWarnings.reservedHeight >= CGFloat(ConsoleWarnings.visibleLines) * ConsoleWarnings.lineHeight)
+    }
+}

@@ -50,8 +50,6 @@ struct ConsoleLayout: Equatable {
 struct ConsoleView: View {
     @Bindable var state: BridgeState
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     /// L'ordre du panneau : celles qui exigent une intervention passent en fin de rangée.
     private var speakers: [OutputState] { PanelSpeakerOrder.sorted(state.outputs) }
 
@@ -59,11 +57,6 @@ struct ConsoleView: View {
         GeometryReader { proxy in
             let layout = ConsoleLayout.make(size: proxy.size, speakerCount: state.outputs.count)
             VStack(spacing: 0) {
-                if state.startFailure != nil || state.captureAlert != nil {
-                    notices
-                        .frame(width: layout.columnWidth)
-                        .padding(.bottom, 18)
-                }
                 console(layout)
                     .frame(minHeight: ConsoleLayout.minimumTileHeight, maxHeight: layout.maxTileHeight)
                 footer
@@ -73,47 +66,16 @@ struct ConsoleView: View {
                 TransportBar(state: state)
                     .frame(width: layout.columnWidth)
                     .padding(.top, 14)
+                // Les avertissements en petit sous la barre, à une place réservée : leur arrivée ne déplace
+                // rien.
+                ConsoleWarnings(warnings: ConsoleWarning.list(for: state, speakers: speakers))
+                    .frame(width: layout.columnWidth)
+                    .padding(.top, 8)
             }
             .padding(.top, 12)
             .padding(.bottom, 16)
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
-        .animation(PanelMotion.standard(reduceMotion: reduceMotion), value: state.captureAlert != nil)
-        .animation(PanelMotion.standard(reduceMotion: reduceMotion), value: state.startFailure != nil)
-    }
-
-    // MARK: - Alertes
-
-    /// Les alertes de la diffusion, au-dessus de la console. Côte à côte s'il y en a deux : la console
-    /// garde sa hauteur. Un voile sombre dessous : sur les nappes, le fond teinté d'une alerte ne suffit
-    /// pas à porter son texte.
-    private var notices: some View {
-        HStack(alignment: .top, spacing: 10) {
-            if let failure = state.startFailure {
-                notice(
-                    PanelNotice(
-                        severity: .critical, title: "Démarrage impossible", detail: failure.message,
-                        actionTitle: failure.settingsPane == nil ? nil : "Ouvrir les Réglages…",
-                        action: { failure.settingsPane?.open() }
-                    )
-                )
-            }
-            if let alert = state.captureAlert {
-                notice(
-                    PanelNotice(
-                        severity: alert.severity, title: alert.title, detail: alert.detail,
-                        actionTitle: alert.settingsPane == nil ? nil : "Ouvrir les Réglages…",
-                        action: { alert.settingsPane?.open() }
-                    )
-                )
-            }
-        }
-    }
-
-    private func notice(_ content: PanelNotice) -> some View {
-        content
-            .background(Color.black.opacity(0.34), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Console
@@ -153,22 +115,11 @@ struct ConsoleView: View {
 
     // MARK: - Pied
 
-    /// Sous la console : ce que le moteur dit d'une enceinte en peine, et la recherche sur le réseau.
-    /// Toujours là, même vide : la console ne change pas de hauteur quand la recherche tourne.
+    /// Sous la console : la recherche sur le réseau. Les messages des enceintes sont sous la barre de lecture
+    /// (`ConsoleWarnings`). Toujours là, même pendant la recherche : la console ne change pas de hauteur.
     private var footer: some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(speakers) { output in
-                    if let detail = ConsoleTileCaption.detail(
-                        connection: output.connection, isEnabled: output.isEnabled,
-                        isHeldBack: output.consoleIsHeldBack
-                    ) {
-                        ConsoleSpeakerMessage(name: output.displayName, text: detail.text, tone: detail.tone)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
+        HStack {
+            Spacer(minLength: 0)
             if !state.outputs.isEmpty {
                 search
             }

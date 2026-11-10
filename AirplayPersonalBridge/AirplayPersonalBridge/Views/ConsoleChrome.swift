@@ -93,31 +93,7 @@ struct ConsoleListeningPlaces: View {
     }
 }
 
-// MARK: - Messages et attente
-
-/// Le message du moteur sur une enceinte, sous la console : son nom, puis ce qu'il en dit.
-struct ConsoleSpeakerMessage: View {
-    let name: String
-    let text: String
-    let tone: OutputStatusTone
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: tone == .critical ? "exclamationmark.triangle.fill" : "exclamationmark.circle.fill")
-                .foregroundStyle(tone.consoleColor)
-                .accessibilityHidden(true)
-            Text(name)
-                .fontWeight(.semibold)
-                .fixedSize()
-            OutputStatusMessage(text: text, tone: .muted, foldedLines: 2, foldedLength: 230)
-        }
-        .font(.subheadline)
-        .padding(.vertical, 7)
-        .padding(.horizontal, 12)
-        .background(Color.black.opacity(0.3), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .accessibilityElement(children: .combine)
-    }
-}
+// MARK: - Attente
 
 /// La tuile qui tient la place des enceintes tant qu'il n'y en a aucune : la recherche en cours, ou ce
 /// qu'il faut vérifier.
