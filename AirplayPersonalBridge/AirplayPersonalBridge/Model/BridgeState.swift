@@ -322,6 +322,15 @@ final class BridgeState {
         }
     }
 
+    /// Ce qui est masqué dans la fenêtre et le panneau (`HiddenElements`, `BridgeState+Visibility.swift`).
+    /// Purement visuel, comme la vue : le moteur, les groupes de volume et les paires n'en savent rien.
+    var hiddenElements = HiddenElements() {
+        didSet {
+            guard oldValue != hiddenElements else { return }
+            scheduleSettingsSave()
+        }
+    }
+
     /// La bascule de la sortie du Mac vers le pilote (`BridgeState+VideoSync.swift`).
     @ObservationIgnored let videoSync: VideoSyncSwitch
 
@@ -428,7 +437,8 @@ final class BridgeState {
     // MARK: - Réglages
 
     /// Dernier état connu des réglages, y compris ceux des sorties absentes du réseau.
-    @ObservationIgnored private var settings: BridgeSettings
+    /// Lisible hors de ce fichier pour ce qu'on a gardé d'une enceinte absente de la liste (nom, `tsid`).
+    @ObservationIgnored private(set) var settings: BridgeSettings
     @ObservationIgnored private var lastSavedSettings: BridgeSettings
     @ObservationIgnored private var settingsSaveTask: Task<Void, Never>?
 
@@ -515,6 +525,7 @@ final class BridgeState {
         self.followsSystemVolume = settings.followsSystemVolume
         self.syncsVideo = settings.syncsVideo
         self.windowLayout = settings.windowLayout
+        self.hiddenElements = settings.hiddenElements
         self.preferredSourceID = settings.sourceID
         if settings.sourceID == CaptureSource.inputDevice.id { selectedSource = .inputDevice }
 
@@ -544,7 +555,7 @@ final class BridgeState {
         videoSync.onMemoryChange = { [weak self] in self?.flushSettings() }
     }
 
-    private static func displayName(fromOutputID id: String) -> String {
+    static func displayName(fromOutputID id: String) -> String {
         let name = id.split(separator: "/", maxSplits: 1).last.map(String.init) ?? id
         return RAOPDevice(serviceName: name, host: "", port: 0, txt: [:]).displayName
     }
@@ -1399,6 +1410,7 @@ final class BridgeState {
         result.systemVolumeMemory = systemVolume.memory
         result.syncsVideo = syncsVideo
         result.windowLayout = windowLayout
+        result.hiddenElements = hiddenElements
         result.videoSyncMemory = videoSync.memory
         for output in outputs {
             result.outputs[output.id] = BridgeSettings.Output(
