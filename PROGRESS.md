@@ -18,7 +18,7 @@ fin, donnent le niveau de preuve de chaque point. L'Apple TV n'a jamais joué en
 |---|---|
 | **Dernier jalon terminé** | **Jalon 5 — intégration et interface, clos le 2026-11-02 sur le vrai matériel** |
 | **Jalon en cours** | Suite du jalon 5, ouverte le 2026-11-09 (`docs/prompt_video_dia_airfoil.md`, `docs/prompt_retard_2s.md`) : calage vidéo, retard réduit à ~0,45 s, refonte Liquid Glass. **Pas encore close** |
-| **Étape suivante** | Avec Baptiste : juger la nouvelle fenêtre dans l'app ; endurance et clics à 0,4 s ; non-régression du calage vidéo (phase 1.5) ; points ouverts de la phase 3 ; puis clôture (phase 4) |
+| **Étape suivante** | Avec Baptiste : installer et juger les textures, le masquage et les Réglages (dernière section) ; juger la nouvelle fenêtre dans l'app ; endurance et clics à 0,4 s ; non-régression du calage vidéo (phase 1.5) ; points ouverts de la phase 3 ; puis clôture (phase 4) |
 | **Dépôt** | `github.com/Erkin0xx/AirplayPersonalBridge`, branche `main` |
 
 **L'app diffuse depuis la barre de menus vers N enceintes en parallèle**, ce qui est l'objectif
@@ -1282,3 +1282,40 @@ rendu plus lent encore : la mutation « relance bornée par la part des sorties 
 - **Phase 1.5** : non-régression aux clics, option vidéo active puis inactive. Safari, QuickTime et Firefox avec le pilote.
 - **Phase 3** : paire cochée en décalé et ouverte d'un geste, à l'oreille ; basses et aigus, volumes séparés de la paire, touches du
   Mac en vraie diffusion, icône animée, ligne d'application attendue, à l'écran ; pannes provoquées ; tour de l'app ; canapé.
+
+### Après la clôture : textures, masquage, fenêtre Réglages (2026-11-10, soir)
+
+Demande de Baptiste (`docs/prompt_textures_grainient.md`) : le fond dans le style *shadeshifter-05* de Grainient, la sphère
+et l'anneau du volume dans celui de *Nova*, un bouton pour masquer une enceinte ou un élément, réactivable depuis une page
+de réglages. Mené par quatre sous-agents (recherche, fond, sphère, masquage) et un cinquième pour des maquettes. Niveaux de
+preuve : **test**, **rendu** (hors écran, regardé par la session), **mesuré**, **vu** (Baptiste, dans l'app).
+
+**Rien de ce qui suit n'a été vu par Baptiste, et l'app installée ne l'a pas** : elle diffusait au moment d'installer
+(quatre sockets UDP ouverts), et une installation coupe le son. À installer par `scripts/install-app.sh --open`, diffusion
+arrêtée.
+
+| Ce qui est fait | Preuve |
+|---|---|
+| **Recherche** : aucune des trois références n'a de grain visible (résidu 0,2 à 0,8/255) ; palettes échantillonnées ; licence de Grainient relevée (usage personnel permis, redistribution interdite, images très probablement payantes) | lecture des pages et des images, 2026-11-10. **Aucune image de Grainient dans le dépôt** : tout est reproduit par le code |
+| **Fond** (`GrainientBackground`) : rampe en bandes obliques dans la palette de l'app, nappe bleue en bas à droite, grain fin fixe ; cycle de 54 s ; plus sombre et immobile au repos ; arrêté fenêtre à l'arrière-plan ou sous « Réduire les animations » | test (20 tests : couture du cycle, contraste du texte blanc ≥ 4,5, pause et reprise ; 5 mutations tuées), rendu. **Le mouvement n'a été vu par personne** |
+| **Coût du fond** : animation confiée à Core Animation (36 images-clés de 160×100, fondu sur `contents`), l'app ne se réveille pas | **mesuré**, process seul, fenêtre non composée (écran verrouillé) : 0,248 % contre 0,249 % pour une fenêtre vide, et 109 % pour l'ancien `Canvas` à 20 images/s. **Le serveur de fenêtres n'est pas mesuré**, ni le coût fenêtre visible |
+| **Sphère et anneau** (`NovaGlass`) : bille de verre presque noir aux reflets roses et bleus, filets fins, éclat orange ; grise et immobile au repos ; anneau en tube blanc bleuté sur piste sombre, prise en perle, sans rose | test (14 tests : couture, bornes, contraste du logo ≥ 4,5 sur tout le cycle ; 4 mutations tuées), rendu (gros plans, 8 instants du cycle). Mouvement, survol et saisie **non vus** ; coût dans une vraie fenêtre **non mesurable** ici (la sonde tourne à 100 % d'un cœur avec l'ancienne sphère comme avec la nouvelle) |
+| **Cuisson des textures hors du fil principal** : cuites au premier dessin, elles figeaient la fenêtre (1 s en debug) et le MainActor des tests | **mesuré** : 0,995 s de cuisson en debug ; trouvé à la fusion, la suite passant de verte à 2 échecs sur 5 |
+| **Masquer** (`HiddenElements`) : clic droit ou œil barré au survol sur chaque enceinte des trois vues ; l'enceinte disparaît aussi du panneau ; purement visuel, elle continue de jouer ; la paire stéréo se masque d'un bloc ; ligne « 1 enceinte masquée » qui ouvre les Réglages ; trois blocs masquables (ondes du Halo, volume général, lieu d'écoute de la Console) ; persisté dans `settings.json` | test (24 tests, 5 mutations tuées), rendu. **Survol et clic droit jamais essayés** |
+| **Fenêtre Réglages** (scène `Settings`, ⌘,) : vue de la fenêtre, enceintes affichées, éléments affichés ; ouverte depuis le bouton « … », le panneau des enceintes du Plan et le panneau de la barre de menus | `xcodebuild` Debug réussi, rendu de la vue seule. **Jamais ouverte pour de vrai** : le cas à essayer d'abord est le panneau, fenêtre principale fermée |
+| **Maquettes de curseurs** pour la Console (demande § 3.D) : trois variantes (verre Nova, Darkshells, grain), layout intact, sur `claude.ai/artifact/EYxdPQYm3Xe4Vvte1zoqMD` | publiées, **rendu vu par personne** ; rien n'en est codé, en attente du choix de Baptiste |
+
+Choix tranchés : palette de l'app plutôt que le rouge et pêche de la référence (elle jurerait avec la sphère rose) ; fond
+assombri à 0,39 pour le texte blanc ; pas de shader (ADR 016) ; masquer ne décoche pas ; le bouton de silence reste même
+volume général masqué ; les avertissements couvrent aussi les enceintes masquées ; les options du Mac restent dans « … » ;
+« Plan et réglages… » du panneau devient « Ouvrir la fenêtre… ».
+
+**Tests** : 1 114 tests. Suite verte 3 passages sur 5 le soir du 2026-11-10, **Mac chargé** (Dia à 87 % d'un cœur, charge
+moyenne 7) : les échecs sont les tests chronométrés de la fermeture, et le commit de départ `2fca624`, lancé en alternance
+dans un worktree, échoue autant (2 sur 5). À relancer au calme.
+
+**Reste ouvert** : installer et juger dans l'app (mouvement du fond et de la sphère, verre, lisibilité, survol, clic droit,
+ouverture des Réglages) ; mesurer le CPU fenêtre visible (Moniteur d'activité, app et WindowServer) ; choisir une variante
+de curseurs ; deux défauts mineurs vus aux rendus (l'œil frôle un nom long dans la tuile Console, la légende « stéréo
+avec… » se tronque au survol dans la carte du Plan).
+

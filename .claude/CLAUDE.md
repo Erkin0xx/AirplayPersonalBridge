@@ -28,6 +28,6 @@ d'un jalon à l'autre imposée par le CDC section 14 :
   « validé contre mock » vs « validé contre matériel réel ».
 - **`CLAUDE.md` racine** : invariants et faits techniques vérifiés sur cette machine.
 - **Vault `decisions/`** : le *pourquoi* d'un choix d'architecture arbitré, au format ADR
-  (gabarit dans `Conventions/ADR Template.md`). Numérotation continue — 001 à 015 existent
-  déjà, la prochaine décision est donc 016.
+  (gabarit dans `Conventions/ADR Template.md`). Numérotation continue — 001 à 016 existent
+  déjà, la prochaine décision est donc 017.
 - **Vault `notes.md`** : les corrections de raisonnement, y compris les miennes.

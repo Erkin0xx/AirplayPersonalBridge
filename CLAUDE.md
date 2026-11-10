@@ -771,12 +771,42 @@ Relevés du 2026-11-03, implémentés et mesurés les 2026-11-09 et 10 : ADR `01
 ## Widget et app
 
 - **Barre de menus, pas WidgetKit** : la capture doit tourner dans un processus vivant. Voir l'ADR `005`.
-- **Fenêtre au style Liquid Glass** (2026-11-10) : `NavigationSplitView`, barre latérale `BridgeSidebar` en verre, plan prolongé
-  sous elle (`backgroundExtensionEffect`), inspecteur natif (`.inspector`, `PlanInspector`), Diffuser/Arrêter en
-  `.glassProminent`, diagnostic en `Form`. Le thème shadcn (`DesignSystem.swift`) et `RotaryKnob` sont retirés : couleurs, typos
-  et contrôles du système. Rendu : `WINDOW_PNG_DIR=<dossier> swift test --filter MainWindowExport`, verres de l'app et du système
-  remplacés par un aplat (`windowSimulatesGlass`, `WindowSnapshot`).
-- **Barre latérale en cartes** (seconde passe, même jour) : une carte d'en-tête puis une `SpeakerCard` par enceinte, sur un voile
+- **Fenêtre à trois vues** (2026-11-10, `WindowLayout` : `halo` par défaut, `console`, `plan`), sans barre d'outils ni barre
+  latérale (scène en `hiddenTitleBar`) : tout flotte en verre sur le fond, source en pastille (`SourcePill`) en haut au centre,
+  options (`WindowOptionsButton`) en haut à droite, marges dans `WindowChromeMetrics`. Rendus :
+  `WINDOW_PNG_DIR=<dossier> swift test --filter HaloViewExport` (ou `ConsoleViewExport`, `MainWindowExport`), verres remplacés
+  par un aplat (`windowSimulatesGlass`, `WindowSnapshot`). **Pas de rose sur une commande** : curseurs, anneau, boutons
+  enclenchés en blanc ; le rose va à la sphère, à la pastille d'état et au fond.
+- **Le fond se dessine à un seul endroit**, `Views/GrainientBackground.swift` (style *shadeshifter-05* de Grainient dans la
+  palette de l'app : rampe en bandes obliques, nappe bleue en bas à droite, assombrie à 0,39 en diffusion et 0,085 au repos,
+  grain fixe de 256 px). **Animé par Core Animation, pas par SwiftUI** : 36 images-clés de 160×100 calculées une fois par
+  proportions de fenêtre, hors du MainActor, enchaînées par une `CAKeyframeAnimation` sur `contents` (cycle de 54 s). L'app ne
+  se réveille pas pendant le mouvement. Mesuré par `BACKGROUND_CPU_PROBE=30 swift test -c release --filter
+  GrainientBackgroundCPUProbe` : le CPU du process égale celui d'une fenêtre vide, là où l'ancien `Canvas` à 20 images/s en
+  prenait 109 % (fenêtre non composée, écran verrouillé : le serveur de fenêtres n'est pas mesuré). Une image fixe de la même
+  recette vit sous le calque : c'est elle que montrent le repos, « Réduire les animations » et les rendus hors écran.
+- **Pas de shader SwiftUI** : `swift build` copie un `.metal` sans le compiler, et le Metal Toolchain n'est pas installé
+  (`xcrun metal` échoue). `MTLDevice.makeLibrary(source:)` compilerait du MSL à l'exécution, si un jour il en faut un.
+- **Aucune image de Grainient dans le dépôt** : sa licence (`grainient.supply/license-agreement`, 2024-08-20) permet l'usage
+  personnel mais interdit de redistribuer les fichiers, et le dépôt est sur GitHub. Les trois références (*shadeshifter-05*,
+  *Nova*, *Darkshells*) sont reproduites par le code. Aucune n'a de grain visible : celui de l'app est un ajout.
+- **Sphère et anneau du Halo en verre Nova** (`Views/NovaGlass.swift`) : cinq textures `CGImage` cuites une fois (près de deux
+  millions de points), dessinées en `.plusLighter`, qui pivotent et glissent sur 50 s à 20 images/s. **La cuisson se fait hors du
+  fil principal** (`NovaGlassTextures.baked()`), la bille restant sombre et nue en attendant : cuites au premier dessin, elles
+  figeaient la fenêtre 1 s en debug et faisaient dépasser leurs plafonds aux tests de la fermeture. Un rendu hors écran appelle
+  `NovaGlassTextures.bakedNow()` avant de rendre. Le contraste du logo blanc reste ≥ 4,5:1 sur tout le cycle (test). Planches :
+  `SPHERE_PNG_DIR=<dossier> swift test --filter HaloSphereExport`.
+- **Masquer est visuel** (`HiddenElements`, `BridgeState+Visibility`) : une enceinte masquée et cochée continue de jouer, et
+  disparaît des trois vues et du panneau. Le geste vaut pour toute la paire stéréo. Trois blocs masquables (`WindowBlock`) :
+  ondes du Halo, volume général, lieu d'écoute de la Console ; jamais l'état, les avertissements, la source, Diffuser ni le
+  silence. Persisté dans `settings.json` (`hiddenElements`), identifiants orphelins gardés. Les vues lisent `visibleOutputs`,
+  jamais `outputs`, pour leurs listes.
+- **Fenêtre Réglages** (scène `Settings`, ⌘,) : la scène est dans `AirplayPersonalBridgeApp.swift`, la vue dans
+  `Views/SettingsView.swift`. Ouverte depuis le panneau, elle passe par `AppLifecycle.showSettingsWindow` : icône du Dock et
+  activation **avant** l'ouverture, sinon elle s'ouvre derrière. L'icône du Dock dure tant que l'une des deux fenêtres est
+  ouverte (`DockIconController.Window`). **Jamais ouverte pour de vrai par un agent** : à essayer d'abord depuis le panneau,
+  fenêtre principale fermée.
+- **Panneau des enceintes de la vue Plan, en cartes** (`BridgeSidebar`, flottant à gauche) : une carte d'en-tête puis une `SpeakerCard` par enceinte, sur un voile
   (`windowCard`), jamais un second verre. Ce qui se règle une fois est en fenêtre surgissante : `SpeakerSettings` (délai, tonalité,
   gain, adresse) et `MacOptions`. Un rendu hors écran n'ouvre pas de popover : l'export les rend seuls
   (`reglages-enceinte-*`, `options-mac-*`). `OutputRow` n'existe plus.
@@ -854,7 +884,9 @@ scripts/install-app.sh --open  # compile en Release, signe, remplace l'app dans 
 - **Aucun plafond de temps serré sur ce qui reprend sur le MainActor** : toutes les suites de `BridgeAppTests` le partagent, et au
   départ d'une suite complète une reprise y attend jusqu'à ~2 s. Trois tests de la fermeture échouaient ainsi 3 fois sur 3, verts
   isolément. Plafond de quelques secondes (`QuitSequenceTests.mainActorSlack`), et le comportement fautif rendu bien plus lent
-  (part de 10 s, fils qui dort 10 s) pour qu'une mutation se voie encore.
+  (part de 10 s, fils qui dort 10 s) pour qu'une mutation se voie encore. **Ces plafonds cèdent encore quand le Mac est chargé**
+  (2026-11-10, Dia à 87 % d'un cœur, charge 7 : 2 passages sur 5 en échec, sur le commit de départ comme après) : relancer au
+  calme avant d'accuser le code, et comparer au commit précédent dans un worktree.
 - **Un socket lié qui n'écoute pas ne simule pas un port fermé** : le noyau ignore le SYN au lieu de le refuser, et la connexion
   reste en préparation sans fin.
 - **Les annonces Bonjour des tests restent sur l'interface locale, sous un type privé** (`_apbtest._tcp`) : la suite ne fait

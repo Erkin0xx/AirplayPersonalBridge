@@ -15,11 +15,19 @@ enceinte, et ça joue dessus. Les vidéos lues sur le Mac restent calées sur le
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/fenetre-diffusion-sombre.png" alt="Fenêtre principale : enceintes dans la barre latérale, plan du salon à l'échelle">
+  <img src="docs/screenshots/halo-diffusion.png" alt="Vue Halo pendant une diffusion : sphère de verre, anneau du volume, enceintes en pastilles">
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/fenetre-inspecteur-clair.png" alt="Fenêtre principale en clair, inspecteur ouvert sur la Geneva">
+  <img src="docs/screenshots/console-diffusion.png" alt="Vue Console : une tuile et un curseur vertical par enceinte, barre de lecture dessous">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/fenetre-diffusion-sombre.png" alt="Vue Plan : le plan du salon à l'échelle, le panneau des enceintes flottant à gauche">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/reglages-fenetre-sombre.png" width="420" alt="Fenêtre Réglages : vue de la fenêtre, enceintes affichées, éléments affichés">
 </p>
 
 *Rendus hors écran tirés du code, avec des données d'exemple (voir « Développement »). Le verre Liquid Glass ne
@@ -110,17 +118,26 @@ Dans la barre de menus :
   « Caler l'image des vidéos », démarrage à l'ouverture de session. Elles s'ouvrent dans une carte par-dessus le
   panneau, qui garde sa taille.
 
-« Ouvrir la fenêtre… » ouvre la fenêtre, au style Liquid Glass de macOS 26 :
+« Ouvrir la fenêtre… » ouvre la fenêtre, sombre, sans barre d'outils : tout flotte en verre sur un fond en dégradé
+granuleux qui ondule lentement pendant une diffusion, et s'éteint au repos. La source est une pastille en haut au
+centre, les options un bouton « … » en haut à droite. Trois vues, au choix dans les options ou les Réglages :
 
-- une barre latérale en verre : une carte pour ce qui joue (état, volume général, source), puis une carte par enceinte
-  (la pastille qui la coche, son état, son volume, son silence) ;
-- le délai, la tonalité et l'adresse d'une enceinte dans une fenêtre surgissante de sa carte, les options du Mac dans
-  une autre, au pied de la barre ;
-- le plan de la pièce à l'échelle, en pleine fenêtre : le sol posé sur un fond doux, un point par mètre, et une onde
-  autour des enceintes qu'on entend ;
-- une barre d'outils native avec le bouton Diffuser/Arrêter (⌘↩) ;
-- l'inspecteur de macOS pour l'objet sélectionné ;
-- le diagnostic.
+- **Halo** (par défaut) : une sphère de verre au centre, qui est le bouton Diffuser/Arrêter (⌘↩) et s'anime quand le
+  son passe ; le volume général en anneau autour ; les enceintes en pastilles dessous ;
+- **Console** : une tuile et un curseur vertical par enceinte, et une barre de lecture (état, volume général,
+  silence, Diffuser/Arrêter) ;
+- **Plan** : le plan de la pièce à l'échelle en plein cadre, le panneau des enceintes flottant à gauche, l'inspecteur
+  de l'objet sélectionné à droite.
+
+Le délai, la tonalité et l'adresse d'une enceinte se règlent dans une fenêtre surgissante, et le diagnostic s'ouvre
+depuis les options.
+
+**Masquer** : un clic droit sur une enceinte, ou l'œil barré qui apparaît au survol, la retire des trois vues et du
+panneau de la barre de menus (une Apple TV qui ne joue pas, par exemple). C'est seulement visuel : cochée, elle
+continue de jouer. Une paire stéréo se masque d'un bloc. Une ligne « 1 enceinte masquée » le rappelle.
+
+**Réglages** (⌘,) : le choix de la vue, un interrupteur par enceinte connue pour la réafficher, et trois éléments
+masquables (les ondes de la vue Halo, le volume général, le lieu d'écoute de la Console).
 
 L'app reste active fenêtre fermée et quitte alors le Dock.
 
