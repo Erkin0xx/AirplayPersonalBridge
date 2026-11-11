@@ -189,13 +189,14 @@ nonisolated struct GrainientBackgroundTests {
             smallest = min(smallest, Double(changed) / Double(before.count / 4))
         }
         #expect(smallest >= 0.30)
-        #expect(Field.period >= 30 && Field.period <= 40)
+        // Baptiste l'a voulu « plus doucement » le 2026-11-11 : un cycle d'une minute environ.
+        #expect(Field.period >= 50 && Field.period <= 70)
     }
 
-    @Test("Le fond ne bouge que si un son part, et jamais sous « Réduire les animations »")
+    @Test("Le fond bouge tout le temps, au repos comme en diffusion, et jamais sous « Réduire les animations »")
     func animationRule() {
         #expect(Field.isAnimated(isLive: true, reduceMotion: false))
-        #expect(!Field.isAnimated(isLive: false, reduceMotion: false))
+        #expect(Field.isAnimated(isLive: false, reduceMotion: false))
         #expect(!Field.isAnimated(isLive: true, reduceMotion: true))
         #expect(!Field.isAnimated(isLive: false, reduceMotion: true))
     }

@@ -65,7 +65,7 @@ nonisolated enum GrainientField {
     /// La durée d'un cycle complet du mouvement, en secondes. À 54 s et avec des ampleurs trois fois
     /// moindres, le fond tournait bien (sonde `BackgroundMotionProbe`) mais Baptiste le voyait fixe : une
     /// bande n'avançait pas de plus de 10 points par seconde (fenêtre de 1200). Elle en fait jusqu'à 48.
-    static let period: TimeInterval = 36
+    static let period: TimeInterval = 64
     /// Les images-clés d'un cycle : une toutes les 0,3 s. Entre deux, aucune bande ne bouge de plus de
     /// 1,2 % de la largeur (14,3 points dans une fenêtre de 1200, test `keyframeStepStaysSmall`), comme
     /// avant, et un fondu de l'une à l'autre ne se distingue pas d'une déformation. Plus espacées, le
@@ -85,8 +85,13 @@ nonisolated enum GrainientField {
     /// tient ainsi le même contraste de 4,5.
     static let poolGain = 0.56
 
-    /// Le fond bouge-t-il : seulement quand un son part, et jamais sous « Réduire les animations ».
-    static func isAnimated(isLive: Bool, reduceMotion: Bool) -> Bool { isLive && !reduceMotion }
+    /// Le fond bouge-t-il : tout le temps, au repos comme en diffusion (demande de Baptiste du 2026-11-11),
+    /// sauf sous « Réduire les animations ». Ce qui dit « ça joue », c'est la couleur, plus le mouvement.
+    static func isAnimated(isLive: Bool, reduceMotion: Bool) -> Bool { !reduceMotion }
+
+    /// Le voile posé sur le calque animé au repos : les images-clés sont calculées à l'éclat de la
+    /// diffusion, et `restGain / liveGain` en lumière linéaire vaut à peu près la moitié en sRGB.
+    static let restVeil = 0.5
 
     /// La rampe des bandes, de la gauche (pêche, orange, rose) au noir de droite. Le creux à 0,50 puis la
     /// remontée à 0,56 font le filet clair de la référence.
@@ -331,8 +336,8 @@ nonisolated enum GrainientField {
 /// Le fond des vues « Halo » et « Console », et sa version éteinte sous le plan.
 ///
 /// **Tout le fond tient dans ce fichier** : Baptiste changera peut-être encore de référence, et le
-/// remplacer ne doit toucher qu'ici. Vivant (un son part), les couleurs sont pleines et bougent lentement ;
-/// au repos il n'en reste qu'une trace, immobile — la couleur et le mouvement veulent dire « ça joue ».
+/// remplacer ne doit toucher qu'ici. Il bouge lentement tout le temps ; vivant (un son part), les couleurs
+/// sont pleines, au repos il n'en reste qu'une trace — c'est la couleur qui veut dire « ça joue ».
 ///
 /// **Le mouvement ne coûte rien à l'app.** La recette est calculée par pixel une seule fois, en petites
 /// images-clés (`GrainientField.keyframes`, hors du MainActor), puis Core Animation les fond l'une dans
@@ -367,6 +372,8 @@ struct GrainientBackground: View {
                 if animates, let motion {
                     GrainientMotionLayer(motion: motion, isPaused: !appearsActive)
                         .transition(.opacity)
+                    // Au repos, le même mouvement, assombri : un voile plutôt qu'un second jeu d'images-clés.
+                    BridgeTheme.ground.opacity(isLive ? 0 : GrainientField.restVeil)
                 }
                 if let grain = Self.grain {
                     Image(decorative: grain, scale: 2)

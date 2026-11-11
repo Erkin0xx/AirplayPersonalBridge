@@ -97,6 +97,9 @@ struct HaloVolumeRing: View {
     @State private var course: Double?
     /// Le clic donne aussi le focus, mais l'anneau de focus n'a de sens que pour qui navigue au clavier.
     @State private var isPointerFocus = false
+    /// L'anneau de focus n'apparaît qu'après une flèche du clavier : la fenêtre donne le focus à l'anneau en
+    /// s'ouvrant, et il s'affichait alors sans que personne n'ait rien demandé.
+    @State private var isKeyboardFocus = false
 
     /// Un tube plutôt qu'un trait : il lui faut un peu d'épaisseur pour montrer son profil.
     static let lineWidth: CGFloat = 6
@@ -145,9 +148,9 @@ struct HaloVolumeRing: View {
                 .position(knob)
             // L'anneau de focus du clavier, hors du trait.
             Circle()
-                .strokeBorder(BridgeTheme.accent, lineWidth: 2)
+                .strokeBorder(Color.white.opacity(0.45), lineWidth: 1.5)
                 .frame(width: side, height: side)
-                .opacity(isFocused && !isPointerFocus ? 1 : 0)
+                .opacity(isFocused && isKeyboardFocus ? 1 : 0)
         }
         .frame(width: side, height: side)
         // Seule la bande de l'anneau répond : le centre est à la sphère, qui est un bouton.
@@ -162,10 +165,14 @@ struct HaloVolumeRing: View {
         .focused($isFocused)
         .focusEffectDisabled()
         .onChange(of: isFocused) { _, focused in
-            if !focused { isPointerFocus = false }
+            if !focused {
+                isPointerFocus = false
+                isKeyboardFocus = false
+            }
         }
         .onKeyPress(keys: [.leftArrow, .downArrow, .rightArrow, .upArrow]) { press in
             let isUp = press.key == .rightArrow || press.key == .upArrow
+            isKeyboardFocus = true
             adjust(by: isUp ? keyStep : -keyStep)
             return .handled
         }
@@ -190,6 +197,7 @@ struct HaloVolumeRing: View {
         DragGesture(minimumDistance: 0)
             .onChanged { drag in
                 isPointerFocus = true
+                isKeyboardFocus = false
                 let turn = HaloRingGeometry.turn(of: drag.location, around: center)
                 let next =
                     course.map { HaloRingGeometry.follow(course: $0, turn: turn) }
