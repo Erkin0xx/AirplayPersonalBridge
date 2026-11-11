@@ -779,12 +779,17 @@ Relevés du 2026-11-03, implémentés et mesurés les 2026-11-09 et 10 : ADR `01
   enclenchés en blanc ; le rose va à la sphère, à la pastille d'état et au fond.
 - **Le fond se dessine à un seul endroit**, `Views/GrainientBackground.swift` (style *shadeshifter-05* de Grainient dans la
   palette de l'app : rampe en bandes obliques, nappe bleue en bas à droite, assombrie à 0,39 en diffusion et 0,085 au repos,
-  grain fixe de 256 px). **Animé par Core Animation, pas par SwiftUI** : 36 images-clés de 160×100 calculées une fois par
-  proportions de fenêtre, hors du MainActor, enchaînées par une `CAKeyframeAnimation` sur `contents` (cycle de 54 s). L'app ne
-  se réveille pas pendant le mouvement. Mesuré par `BACKGROUND_CPU_PROBE=30 swift test -c release --filter
-  GrainientBackgroundCPUProbe` : le CPU du process égale celui d'une fenêtre vide, là où l'ancien `Canvas` à 20 images/s en
-  prenait 109 % (fenêtre non composée, écran verrouillé : le serveur de fenêtres n'est pas mesuré). Une image fixe de la même
-  recette vit sous le calque : c'est elle que montrent le repos, « Réduire les animations » et les rendus hors écran.
+  grain fixe de 256 px). **Animé par Core Animation, pas par SwiftUI** : 120 images-clés de 160×100 calculées une fois par
+  proportions de fenêtre, hors du MainActor, enchaînées par une `CAKeyframeAnimation` sur `contents` (cycle de 36 s). L'app ne
+  se réveille pas pendant le mouvement. Une image fixe de la même recette vit sous le calque : c'est elle que montrent le
+  repos, « Réduire les animations » et les rendus hors écran.
+- **Un mouvement réglé sans le voir est trop faible** : le premier réglage (54 s, ondulation de 3,5 % de la largeur, ~10 pt/s)
+  tournait bien, mais Baptiste voyait « une texture fixe ». Réglage vu depuis : ondulation de 9 %, pente des bandes qui varie,
+  nappe qui dérive et respire, ~48 pt/s au plus, 14 pt au plus entre deux images-clés à 1200 pt de large. Sonde dans une vraie
+  fenêtre : `swift run BackgroundMotionProbe [court]`. **Elle affiche une petite fenêtre et prend le premier plan** : pas
+  quand Baptiste travaille. `swift test` ne peut pas devenir l'app active, le fond y reste en pause. Coût du process mesuré
+  par `BACKGROUND_CPU_PROBE=30 swift test -c release --filter GrainientBackgroundCPUProbe` sur l'ancien réglage : égal à
+  une fenêtre vide, contre 109 % pour le `Canvas` d'avant ; le serveur de fenêtres n'est pas mesuré.
 - **Pas de shader SwiftUI** : `swift build` copie un `.metal` sans le compiler, et le Metal Toolchain n'est pas installé
   (`xcrun metal` échoue). `MTLDevice.makeLibrary(source:)` compilerait du MSL à l'exécution, si un jour il en faut un.
 - **Aucune image de Grainient dans le dépôt** : sa licence (`grainient.supply/license-agreement`, 2024-08-20) permet l'usage
@@ -804,6 +809,22 @@ Relevés du 2026-11-03, implémentés et mesurés les 2026-11-09 et 10 : ADR `01
 - **`==` sur deux `CGPath` ne suffit pas à dire deux tracés identiques** : `BridgeGlyph.marks(.idle)`, assemblé par `addPath`,
   et le même tracé construit barre par barre diffèrent au dernier bit de quelques flottants (cause non établie). Comparer
   élément par élément, avec une tolérance (`HaloSphereTests.match`).
+- **Commandes de la Console en matière Darkshells** (`Views/Darkshell.swift`, variante 15 choisie par Baptiste) : piste presque
+  noire à liseré, niveau en voile gris sous un trait blanc. Le volume général garde une **prise ronde**. `PanelVolumeSlider` et
+  `PanelMuteButton` prennent un `look: ControlLook` (`.panel` par défaut) : le panneau et la vue Plan ne changent pas.
+- **Vue Halo** : les ondes (`HaloWaveField`) sont un voile flou calculé par pixel dans une image de 160 px, plafonné à 28 %
+  d'alpha, à 20 images/s. Une marge posée **autour** d'une vue rogne son fond : celle du haut est passée à `HaloView`
+  (`topInset`), sinon les ondes s'arrêtaient net à 48 pt du bord et dessinaient une fausse barre. Le silence général est un
+  bouton rond au bout de la rangée d'enceintes (`HaloMuteButton`), jamais masquable. Plus de mention « N enceintes masquées »
+  dans les vues Halo et Console ; elle reste au pied du panneau de la vue Plan.
+- **Boutons de fenêtre** (`Views/WindowControls.swift`) : une capsule de verre fermer / réduire / agrandir remplace les trois
+  boutons système de la fenêtre principale, masqués par `SystemWindowButtons.hide` à chaque rattachement, retour au premier
+  plan, entrée et sortie de plein écran, retour du Dock. `performClose` aboutit avec le bouton système masqué ;
+  **`performMiniaturize` non** (il simule un clic sur le bouton) : `miniaturize`. Agrandir = plein écran, ⌥ = `zoom`.
+- **Fenêtre réductible jusqu'à 440×400** (`Views/WindowSizing.swift`, paliers en fonctions pures) : pastilles du Halo sur une
+  rangée défilante puis compactes, tuiles de la Console défilantes, lieu d'écoute replié en bouton, panneau des enceintes du
+  Plan replié en barre et rouvert en surimpression. Rendus à toutes les tailles :
+  `WINDOW_PNG_DIR=<dossier> swift test --filter SmallWindowExport`.
 - **Masquer est visuel** (`HiddenElements`, `BridgeState+Visibility`) : une enceinte masquée et cochée continue de jouer, et
   disparaît des trois vues et du panneau. Le geste vaut pour toute la paire stéréo. Trois blocs masquables (`WindowBlock`) :
   ondes du Halo, volume général, lieu d'écoute de la Console ; jamais l'état, les avertissements, la source, Diffuser ni le

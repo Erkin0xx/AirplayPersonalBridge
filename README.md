@@ -120,10 +120,12 @@ Dans la barre de menus :
 
 « Ouvrir la fenêtre… » ouvre la fenêtre, sombre, sans barre d'outils : tout flotte en verre sur un fond en dégradé
 granuleux qui ondule lentement pendant une diffusion, et s'éteint au repos. La source est une pastille en haut au
-centre, les options un bouton « … » en haut à droite. Trois vues, au choix dans les options ou les Réglages :
+centre, les options un bouton « … » en haut à droite, et fermer, réduire, agrandir une capsule en haut à gauche. La
+fenêtre se réduit jusqu'à 440×400. Trois vues, au choix dans les options ou les Réglages :
 
-- **Halo** (par défaut) : une sphère de verre au centre, qui est le bouton Diffuser/Arrêter (⌘↩) et s'anime quand le
-  son passe ; le volume général en anneau autour ; les enceintes en pastilles dessous ;
+- **Halo** (par défaut) : un disque de verre noir au centre, qui est le bouton Diffuser/Arrêter (⌘↩) : un triangle
+  lecture au repos, le logo qui ondule quand le son passe ; le volume général en anneau autour ; les enceintes en
+  pastilles dessous, suivies d'un bouton de silence ;
 - **Console** : une tuile et un curseur vertical par enceinte, et une barre de lecture (état, volume général,
   silence, Diffuser/Arrêter) ;
 - **Plan** : le plan de la pièce à l'échelle en plein cadre, le panneau des enceintes flottant à gauche, l'inspecteur
@@ -134,7 +136,7 @@ depuis les options.
 
 **Masquer** : un clic droit sur une enceinte, ou l'œil barré qui apparaît au survol, la retire des trois vues et du
 panneau de la barre de menus (une Apple TV qui ne joue pas, par exemple). C'est seulement visuel : cochée, elle
-continue de jouer. Une paire stéréo se masque d'un bloc. Une ligne « 1 enceinte masquée » le rappelle.
+continue de jouer. Une paire stéréo se masque d'un bloc.
 
 **Réglages** (⌘,) : le choix de la vue, un interrupteur par enceinte connue pour la réafficher, et trois éléments
 masquables (les ondes de la vue Halo, le volume général, le lieu d'écoute de la Console).

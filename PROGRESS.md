@@ -1319,3 +1319,25 @@ ouverture des Réglages) ; mesurer le CPU fenêtre visible (Moniteur d'activité
 de curseurs ; deux défauts mineurs vus aux rendus (l'œil frôle un nom long dans la tuile Console, la légende « stéréo
 avec… » se tronque au survol dans la carte du Plan).
 
+### Après la clôture : seconde passe sur la fenêtre, d'après ce que Baptiste a vu dans l'app (2026-11-10 et 11)
+
+Baptiste a installé la première passe et l'a jugée dans l'app. Ses retours, et ce qui en est fait. **Installé le 2026-11-11.**
+
+| Retour de Baptiste | Ce qui est fait | Preuve |
+|---|---|---|
+| Curseurs de la Console : la variante 15 (Darkshells), avec un volume général à prise ronde | `Darkshell.swift` ; curseurs, boutons ronds et barre de lecture dans cette matière | test (8, 5 mutations), rendu. **Pas encore vu dans l'app** |
+| « Enlève la mention 2 enceintes masquées » | Retirée des vues Halo et Console ; elle reste au pied du panneau de la vue Plan | rendu |
+| Le volume général du Halo : un bouton rond de silence à droite de la dernière enceinte | `HaloMuteButton`, 40 pt, coupe sans déconnecter ; la pastille « Volume général » disparaît | test, rendu |
+| « Une espèce de nav bar en haut » | Cause : une marge haute posée autour de la vue rognait les ondes à 48 pt du bord. Les ondes couvrent toute la fenêtre | rendu (haut recadré) |
+| Ondes « trop nettes et trop présentes » | Voile flou dans la palette du fond, alpha plafonné à 28 % | test (4 mutations), rendu |
+| « Fais que le fond bouge, que ce ne soit pas une texture fixe » | L'animation tournait, le mouvement était trop faible. Trois fois plus ample, cycle de 36 s, 120 images-clés | **mesuré** dans une vraie fenêtre au premier plan : 3,2 fois plus de pixels changés par seconde. **Pas encore jugé par Baptiste** |
+| Le centre : « j'aime pas le motif » ; quatre maquettes proposées, **la 17 validée** | Verre noir, triangle lecture au repos ; en diffusion, logo du pont dont les barres ondulent et lueur rose floue. `NovaGlass` supprimé | test (12, 5 mutations ; contraste 9:1 au pire), rendu. Mouvement **non vu** |
+| Boutons fermer, réduire, agrandir « dans la DA des boutons de l'app » | Capsule de verre en haut à gauche, boutons système masqués | test (13, 8 mutations), rendu. Déplacement de la fenêtre, plein écran, retour d'un bouton système : **non essayés** |
+| « Je peux pas réduire la fenêtre trop » | Minimum 440×400 au lieu de 960×620, trois vues adaptées par paliers | test, rendu des trois vues à 7 tailles. L'agent a été arrêté avant son rapport : vérifié par la session (suite, `xcodebuild`, rendus regardés). Redimensionnement en direct **non essayé** |
+
+**Tests** : 1 172 tests verts, `xcodebuild` Debug réussi, Mac au calme.
+
+**Reste ouvert** : juger dans l'app le mouvement (fond, ondes, logo), la capsule de fenêtre et le redimensionnement ; à
+440×400, les étiquettes du plan se chevauchent ; le coût CPU fenêtre visible n'est toujours pas mesuré (fond à 24 images/s
+demandées au serveur de rendu, ondes et centre à 20 images/s).
+
