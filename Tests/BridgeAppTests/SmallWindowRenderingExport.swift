@@ -98,7 +98,6 @@ struct SmallWindowExport {
         .enabled(if: ProcessInfo.processInfo.environment["WINDOW_PNG_DIR"] != nil)
     )
     func renderEverySize() throws {
-        NovaGlassTextures.bakedNow()
         let directory = try directory()
         for (layoutName, layout) in Self.layouts {
             for (sizeName, size) in Self.sizes {
@@ -117,7 +116,6 @@ struct SmallWindowExport {
         .enabled(if: ProcessInfo.processInfo.environment["WINDOW_PNG_DIR"] != nil)
     )
     func renderReference() throws {
-        NovaGlassTextures.bakedNow()
         let directory = try directory()
         for (layoutName, layout) in Self.layouts {
             for scene in [BridgeState.PanelScene.idle, .trouble] {
@@ -134,7 +132,6 @@ struct SmallWindowExport {
         .enabled(if: ProcessInfo.processInfo.environment["WINDOW_PNG_DIR"] != nil)
     )
     func renderMinimumScenes() throws {
-        NovaGlassTextures.bakedNow()
         let directory = try directory()
         let scenes: [(String, BridgeState.PanelScene)] = [
             ("repos", .idle), ("alerte", .trouble), ("echec-demarrage", .startFailed), ("vide", .empty),
@@ -216,7 +213,6 @@ struct SmallWindowExport {
         .enabled(if: ProcessInfo.processInfo.environment["WINDOW_PNG_DIR"] != nil)
     )
     func renderCrowd() async throws {
-        NovaGlassTextures.bakedNow()
         let directory = try directory()
         let harness = BridgeHarness()
         let devices = (1...9).map { rank in
