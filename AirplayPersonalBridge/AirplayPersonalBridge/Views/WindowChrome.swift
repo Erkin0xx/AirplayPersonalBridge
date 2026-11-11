@@ -45,8 +45,15 @@ struct WindowLayoutPicker: View {
 }
 
 /// La source, en pastille de verre : son nom et un chevron, qui ouvrent la liste des sources.
+///
+/// Quand la fenêtre se resserre, le nom se tronque à la place qui reste entre ses voisins, puis laisse la
+/// place à une icône (`WindowChromeLayout`) : le menu, lui, dit toujours la source en entier.
 struct SourcePill: View {
     @Bindable var state: BridgeState
+    /// La largeur que la pastille ne dépasse pas : ce qui reste entre ses voisins.
+    var maxWidth: CGFloat = .infinity
+    /// Plus la place d'un nom : une icône et le chevron.
+    var isIconOnly = false
 
     var body: some View {
         // Des identifiants, pas des valeurs : les PID d'une application varient d'un relevé à l'autre.
@@ -64,15 +71,22 @@ struct SourcePill: View {
             Button("Rafraîchir la liste") { state.refreshSources() }
         } label: {
             HStack(spacing: 7) {
-                Text(state.selectedSource.label)
-                    .font(.body.weight(.semibold))
-                    .lineLimit(1)
+                if isIconOnly {
+                    Image(systemName: "waveform")
+                        .font(.body.weight(.semibold))
+                        .accessibilityHidden(true)
+                } else {
+                    Text(state.selectedSource.label)
+                        .font(.body.weight(.semibold))
+                        .lineLimit(1)
+                }
                 Image(systemName: "chevron.down")
                     .font(.caption.weight(.bold))
                     .accessibilityHidden(true)
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 18)
+            .padding(.horizontal, isIconOnly ? 12 : 18)
+            .frame(maxWidth: isIconOnly ? nil : maxWidth)
             .frame(height: WindowChromeMetrics.controlHeight)
             .floatingGlass(in: Capsule(), interactive: true)
             .contentShape(Capsule())
@@ -81,7 +95,7 @@ struct SourcePill: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Source du son. Pendant une diffusion, en changer la relance.")
+        .help("Source du son : \(state.selectedSource.label). Pendant une diffusion, en changer la relance.")
         .accessibilityLabel("Source")
         .accessibilityValue(state.selectedSource.label)
     }

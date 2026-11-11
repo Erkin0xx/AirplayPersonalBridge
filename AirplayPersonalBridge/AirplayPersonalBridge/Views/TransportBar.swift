@@ -9,8 +9,68 @@ import SwiftUI
 /// capsule de verre. Le curseur et le bouton de silence sont ceux du panneau, dans la matière de la console
 /// (`ControlLook.darkshell`) : la prise reste ronde, le niveau est un voile. Sous les curseurs de la vue Console, comme sur la maquette « Scène » qu'a choisie
 /// Baptiste (2026-11-10).
+/// La barre de lecture selon sa largeur : hors de la vue pour être testé.
+///
+/// Elle ne perd jamais son état, son silence ni Diffuser/Arrêter. Quand la largeur manque, le curseur du
+/// volume cède le premier, jusqu'à sa longueur utile ; puis le texte d'état se tronque ; puis la valeur en
+/// dB s'en va, et rend sa place au texte.
+struct TransportLayout: Equatable {
+    /// La largeur de la colonne du titre et de la source.
+    var textWidth: CGFloat
+    var showsDecibels: Bool
+    /// Le curseur est là mais sa valeur n'a plus sa colonne : elle prend la place de la source, sous le
+    /// titre. Le niveau reste lisible à toutes les largeurs.
+    var showsLevelInText = false
+    var sliderMinWidth: CGFloat
+    /// Une fenêtre basse : la barre s'amincit.
+    var isCompact: Bool
+
+    static let fullTextWidth: CGFloat = 190
+    static let minimumTextWidth: CGFloat = 96
+    /// Tant que les dB ont leur colonne, le texte ne descend pas sous cette largeur : « Diffusion vers
+    /// 3 enceintes » s'y lit encore. En deçà, mieux vaut rendre la colonne au texte.
+    static let readableTextWidth: CGFloat = 150
+    static let minimumSliderWidth: CGFloat = 96
+    static let decibelsWidth: CGFloat = 52
+    static let muteWidth: CGFloat = 28
+
+    var height: CGFloat { isCompact ? 60 : TransportBar.height }
+    var chipDiameter: CGFloat { isCompact ? 36 : 48 }
+    var commandDiameter: CGFloat { isCompact ? 44 : 52 }
+    var spacing: CGFloat { isCompact ? 10 : 14 }
+    var chipSpacing: CGFloat { isCompact ? 10 : 12 }
+    var leadingPadding: CGFloat { isCompact ? 10 : 14 }
+    var trailingPadding: CGFloat { isCompact ? 8 : 12 }
+    var titleSize: CGFloat { isCompact ? 14 : 15 }
+
+    static func make(width: CGFloat, isCompact: Bool, showsMaster: Bool = true) -> TransportLayout {
+        var layout = TransportLayout(
+            textWidth: fullTextWidth, showsDecibels: showsMaster, sliderMinWidth: minimumSliderWidth,
+            isCompact: isCompact
+        )
+        // Ce qui ne cède jamais : les marges, la pastille d'état, le silence et la commande.
+        let fixed = layout.leadingPadding + layout.trailingPadding + layout.chipDiameter + layout.chipSpacing
+            + muteWidth + layout.commandDiameter + 3 * layout.spacing
+        let room = width - fixed
+        guard showsMaster else {
+            layout.textWidth = min(max(room, minimumTextWidth), fullTextWidth)
+            return layout
+        }
+        let decibels = decibelsWidth + layout.spacing
+        layout.showsDecibels = room >= minimumSliderWidth + readableTextWidth + decibels
+        layout.showsLevelInText = !layout.showsDecibels
+        let forText = room - minimumSliderWidth - (layout.showsDecibels ? decibels : 0)
+        layout.textWidth = min(max(forText, minimumTextWidth), fullTextWidth)
+        return layout
+    }
+}
+
 struct TransportBar: View {
     @Bindable var state: BridgeState
+    /// La largeur offerte à la barre, et la fenêtre basse : ce qui décide de ce qu'elle garde
+    /// (`TransportLayout`).
+    var width: CGFloat = ConsoleLayout.minimumColumnWidth
+    var isCompact = false
 
     static let height: CGFloat = 76
 
@@ -26,24 +86,35 @@ struct TransportBar: View {
         )
     }
 
+    /// La ligne sous le titre : la source, ou le niveau quand la barre n'a plus la place de sa colonne.
+    static func secondLine(for state: BridgeState, showsLevel: Bool) -> String {
+        guard showsLevel else { return state.selectedSource.label }
+        return state.isMuted ? "Son coupé" : "Volume \(PanelFormat.decibels(state.masterVolumeDB))"
+    }
+
     var body: some View {
         let status = state.status
-        HStack(spacing: 14) {
-            HStack(spacing: 12) {
+        let layout = TransportLayout.make(
+            width: width, isCompact: isCompact, showsMaster: state.isVisible(.masterVolume)
+        )
+        HStack(spacing: layout.spacing) {
+            HStack(spacing: layout.chipSpacing) {
                 PanelStatusChip(
-                    status: status.menuBar, isAudible: state.captureAlert == nil && !state.isMuted, diameter: 48
+                    status: status.menuBar, isAudible: state.captureAlert == nil && !state.isMuted,
+                    diameter: layout.chipDiameter
                 )
                 VStack(alignment: .leading, spacing: 1) {
                     Text(status.title)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: layout.titleSize, weight: .semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
-                    Text(state.selectedSource.label)
-                        .font(.system(size: 13))
+                    // Sans la colonne des dB, le niveau se lit ici : la source est déjà en haut de la fenêtre.
+                    Text(Self.secondLine(for: state, showsLevel: layout.showsLevelInText))
+                        .font(.system(size: 13).monospacedDigit())
                         .foregroundStyle(Color.white.opacity(0.62))
                         .lineLimit(1)
                 }
-                .frame(width: 190, alignment: .leading)
+                .frame(width: layout.textWidth, alignment: .leading)
             }
             .accessibilityElement(children: .combine)
 
@@ -54,7 +125,7 @@ struct TransportBar: View {
                     decibels: Self.master(of: state), isMuted: $state.isMuted,
                     range: BridgeSettings.Limits.masterDB, look: .darkshell
                 )
-                .frame(minWidth: 160)
+                .frame(minWidth: layout.sliderMinWidth)
                 .contextMenu {
                     Button("Revenir à \(PanelFormat.decibels(BridgeState.defaultMasterVolumeDB))") {
                         state.masterVolumeDB = BridgeState.defaultMasterVolumeDB
@@ -62,28 +133,31 @@ struct TransportBar: View {
                 }
                 .help("Volume de toutes les enceintes. Clic droit : revenir au niveau de départ.")
 
-                Text(state.isMuted ? "Coupé" : PanelFormat.decibels(state.masterVolumeDB))
-                    .font(.system(size: 13).monospacedDigit())
-                    .foregroundStyle(Color.white.opacity(0.62))
-                    .frame(width: 52, alignment: .trailing)
-                    .accessibilityHidden(true)
+                if layout.showsDecibels {
+                    Text(state.isMuted ? "Coupé" : PanelFormat.decibels(state.masterVolumeDB))
+                        .font(.system(size: 13).monospacedDigit())
+                        .foregroundStyle(Color.white.opacity(0.62))
+                        .frame(width: TransportLayout.decibelsWidth, alignment: .trailing)
+                        .accessibilityHidden(true)
+                }
             } else {
                 Spacer(minLength: 0)
                 if state.isMuted {
                     Text("Son coupé")
                         .font(.system(size: 13))
                         .foregroundStyle(Color.white.opacity(0.62))
+                        .lineLimit(1)
                         .accessibilityHidden(true)
                 }
             }
 
             PanelMuteButton(isMuted: $state.isMuted, look: .darkshell)
 
-            StreamingRoundButton(state: state, diameter: 52)
+            StreamingRoundButton(state: state, diameter: layout.commandDiameter)
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 12)
-        .frame(height: Self.height)
+        .padding(.leading, layout.leadingPadding)
+        .padding(.trailing, layout.trailingPadding)
+        .frame(height: layout.height)
         .floatingGlass(in: Capsule())
         .environment(\.colorScheme, .dark)
     }

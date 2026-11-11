@@ -126,10 +126,23 @@ struct RoomPlanView: View {
     /// Ce que recouvrent les panneaux qui flottent au-dessus du plan : le cadrage s'en écarte, pour que la
     /// pièce tombe dans la partie visible, et l'aide du bas commence après le panneau de gauche.
     private let contentInsets: EdgeInsets
+    /// Ce que la largeur de la fenêtre laisse à la vue (`PlanWindowLayout`).
+    private let window: PlanWindowLayout
+    /// Le panneau des enceintes ouvert en surimpression, dans une fenêtre étroite : lui et l'inspecteur ne
+    /// tiennent pas ensemble, l'un referme l'autre.
+    @Binding private var showsSpeakerPanel: Bool
+    /// Ce que les outils du haut occupent, mesuré : la pastille de source s'en écarte (`ContentView`).
+    @State private var toolWidths = PlanToolWidths()
 
-    init(state: BridgeState, initialSelection: Set<PlanElement> = [], contentInsets: EdgeInsets = EdgeInsets()) {
+    init(
+        state: BridgeState, initialSelection: Set<PlanElement> = [], contentInsets: EdgeInsets = EdgeInsets(),
+        window: PlanWindowLayout = .make(windowWidth: WindowSizing.roomy.width),
+        showsSpeakerPanel: Binding<Bool> = .constant(false)
+    ) {
         self.state = state
         self.contentInsets = contentInsets
+        self.window = window
+        _showsSpeakerPanel = showsSpeakerPanel
         _selection = State(initialValue: initialSelection)
         _showsInspector = State(initialValue: !initialSelection.isEmpty)
     }
@@ -161,7 +174,7 @@ struct RoomPlanView: View {
             // quand la fenêtre se resserre, c'est l'aide qui cède sa place, jamais les boutons.
             .overlay(alignment: .bottom) {
                 HStack(alignment: .bottom, spacing: 8) {
-                    hint
+                    if window.showsHint { hint }
                     Spacer(minLength: 0)
                     zoomControls
                 }
@@ -170,43 +183,57 @@ struct RoomPlanView: View {
             }
             .overlay(alignment: .topLeading) {
                 drawingTools
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { toolWidths.leading = $0 }
                     .padding(.leading, WindowChromeMetrics.trafficLightsWidth)
                     .padding(.top, WindowChromeMetrics.topPadding)
             }
             .overlay(alignment: .topTrailing) {
                 planTools
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { toolWidths.trailing = $0 }
                     .padding(.trailing, WindowChromeMetrics.sideMargin + WindowChromeMetrics.controlHeight + 8)
                     .padding(.top, WindowChromeMetrics.topPadding)
             }
             .overlay(alignment: .top) {
                 wallDrawingControls
-                    .padding(.top, WindowChromeMetrics.contentTop - 12)
+                    .padding(.top, window.overlayTop - 12)
             }
             .overlay(alignment: .topTrailing) {
                 if showsInspector {
                     inspector
                         .scrollContentBackground(.hidden)
-                        .frame(width: Self.inspectorWidth)
+                        .frame(width: window.inspectorWidth)
                         .frame(maxHeight: 560)
                         .floatingGlass(in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-                        .padding(.top, WindowChromeMetrics.contentTop)
+                        .padding(.top, window.overlayTop)
                         .padding(.trailing, WindowChromeMetrics.sideMargin)
                         .padding(.bottom, 72)
                 }
             }
+            .preference(key: PlanToolWidths.Key.self, value: toolWidths)
             .onDeleteCommand(perform: deleteSelection)
             // Changer d'objet clôt les retouches en cours : les réglages d'un autre meuble sont
             // un nouveau pas d'annulation, pas la suite du précédent.
             .onChange(of: selection) { _, newSelection in
                 history.endGroup()
                 if !newSelection.isEmpty {
-                    showsInspector = true
+                    // Dans une fenêtre étroite l'inspecteur recouvre le plan : il ne s'ouvre que sur
+                    // demande, par son bouton, pour qu'on puisse encore déplacer ce qu'on sélectionne.
+                    if window.docksSidebar { showsInspector = true }
                 } else if !isInspectorPinned {
                     showsInspector = false
                 }
             }
             .onChange(of: showsInspector) { _, isShown in
                 if !isShown { isInspectorPinned = false }
+                if isShown, !window.docksSidebar { showsSpeakerPanel = false }
+            }
+            // Le panneau des enceintes qui se replie ou revient change la partie visible du plan : tant que
+            // l'utilisateur n'a pas cadré lui-même, le plan s'y recale.
+            .onChange(of: contentInsets) { _, _ in
+                if !isFramedByUser, viewSize.width > 0 { fitToContent(in: viewSize) }
+            }
+            .onChange(of: showsSpeakerPanel) { _, isShown in
+                if isShown, !window.docksSidebar { showsInspector = false }
             }
     }
 
@@ -310,14 +337,16 @@ struct RoomPlanView: View {
     private var zoomControls: some View {
         GlassEffectContainer(spacing: 8) {
             HStack(spacing: 8) {
-                Text(String(format: "%.0f px/m", scale))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 10)
-                    .frame(height: 28)
-                    .floatingGlass(in: Capsule())
-                    .accessibilityLabel("Échelle")
-                    .accessibilityValue(String(format: "%.0f points par mètre", scale))
+                if window.showsHint {
+                    Text(String(format: "%.0f px/m", scale))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)
+                        .frame(height: 28)
+                        .floatingGlass(in: Capsule())
+                        .accessibilityLabel("Échelle")
+                        .accessibilityValue(String(format: "%.0f points par mètre", scale))
+                }
 
                 HStack(spacing: 0) {
                     Button { zoom(to: scale / 1.25, around: center) } label: {
@@ -459,10 +488,13 @@ struct RoomPlanView: View {
     /// bouton des options.
     private var planTools: some View {
         HStack(spacing: 6) {
-            if state.roomLayout.listeners.count >= 2 {
-                listeningPlacePicker
+            // Dans une fenêtre étroite, le lieu d'écoute et l'ajout sont dans « Plus ».
+            if window.showsFullTools {
+                if state.roomLayout.listeners.count >= 2 {
+                    listeningPlacePicker
+                }
+                addMenu
             }
-            addMenu
             moreMenu
             Button {
                 showsInspector.toggle()
@@ -488,6 +520,15 @@ struct RoomPlanView: View {
     /// rangée de boutons devenait illisible avant même d'être complète.
     private var addMenu: some View {
         Menu {
+            addMenuItems
+        } label: {
+            Label("Ajouter", systemImage: "plus")
+        }
+        .help("Ajouter un meuble, ou une enceinte rattachée à une sortie")
+    }
+
+    @ViewBuilder
+    private var addMenuItems: some View {
             // Raccourci : pose une enceinte **déjà rattachée** à cette sortie. L'entrée ne disparaît
             // pas une fois utilisée — une sortie AirPlay 2 peut porter deux HomePod, et il faut pouvoir
             // poser le second.
@@ -521,14 +562,29 @@ struct RoomPlanView: View {
                     }
                 }
             }
-        } label: {
-            Label("Ajouter", systemImage: "plus")
-        }
-        .help("Ajouter un meuble, ou une enceinte rattachée à une sortie")
     }
 
     private var moreMenu: some View {
         Menu {
+            // Ce que la barre n'a plus la place de montrer dans une fenêtre étroite.
+            if !window.showsFullTools {
+                Menu {
+                    addMenuItems
+                } label: {
+                    Label("Ajouter", systemImage: "plus")
+                }
+                if state.roomLayout.listeners.count >= 2, let active = state.roomLayout.listener {
+                    Menu {
+                        listeningPlaceChoices(active: active)
+                    } label: {
+                        Label(
+                            "Lieu d'écoute : \(active.name.isEmpty ? active.kind.label : active.name)",
+                            systemImage: "ear"
+                        )
+                    }
+                }
+                Divider()
+            }
             Button("Charger le plan du salon", action: loadSalonPlan)
             Divider()
             Button("Pivoter le plan 90° à droite") { rotatePlan(clockwise: true) }
@@ -560,7 +616,11 @@ struct RoomPlanView: View {
             Label("Plus", systemImage: "ellipsis")
         }
         .menuIndicator(.hidden)
-        .help("Plan du salon, rotation, image de fond, effacement")
+        .help(
+            window.showsFullTools
+                ? "Plan du salon, rotation, image de fond, effacement"
+                : "Ajouter, lieu d'écoute, plan du salon, rotation, image de fond, effacement"
+        )
     }
 
     private func removeBackground() {
@@ -575,27 +635,11 @@ struct RoomPlanView: View {
     /// à choisir.
     @ViewBuilder
     private var listeningPlacePicker: some View {
-        let listeners = state.roomLayout.listeners
         if let active = state.roomLayout.listener {
             // Un menu au libellé explicite : le nom du lieu en vigueur se lit dans la barre, là où un
             // sélecteur sans libellé ne montrait qu'un chevron.
             Menu {
-                Picker(
-                    "Lieu d'écoute",
-                    selection: Binding(
-                        get: { active.id },
-                        set: { id in
-                            history.record(state.roomLayout)
-                            state.roomLayout.selectListener(id: id)
-                            state.persistRoomLayout()
-                        }
-                    )
-                ) {
-                    ForEach(listeners) { listener in
-                        Text(listener.name.isEmpty ? listener.kind.label : listener.name).tag(listener.id)
-                    }
-                }
-                .pickerStyle(.inline)
+                listeningPlaceChoices(active: active)
             } label: {
                 Label(active.name.isEmpty ? active.kind.label : active.name, systemImage: "ear")
             }
@@ -603,6 +647,25 @@ struct RoomPlanView: View {
             .help("Lieu d'écoute : recale les enceintes pour ce lieu, sans couper le son")
             .accessibilityLabel("Lieu d'écoute")
         }
+    }
+
+    private func listeningPlaceChoices(active: RoomObject) -> some View {
+        Picker(
+            "Lieu d'écoute",
+            selection: Binding(
+                get: { active.id },
+                set: { id in
+                    history.record(state.roomLayout)
+                    state.roomLayout.selectListener(id: id)
+                    state.persistRoomLayout()
+                }
+            )
+        ) {
+            ForEach(state.roomLayout.listeners) { listener in
+                Text(listener.name.isEmpty ? listener.kind.label : listener.name).tag(listener.id)
+            }
+        }
+        .pickerStyle(.inline)
     }
 
     private func add(_ preset: RoomObject.Preset, name: String = "") {

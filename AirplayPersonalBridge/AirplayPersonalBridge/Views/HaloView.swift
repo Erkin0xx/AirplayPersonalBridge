@@ -7,7 +7,9 @@ import SwiftUI
 
 /// Les mesures de la vue « Halo » : la sphère, et l'anneau du volume autour d'elle.
 nonisolated enum HaloMetrics {
-    /// De la fenêtre la plus petite à la maquette (280 pt sur 1200 × 760).
+    /// De la fenêtre la plus petite à la maquette (280 pt sur 1200 × 760). Le plancher ne descend pas avec
+    /// la fenêtre : plus petite, la sphère qui respire toucherait la bande où l'anneau se saisit. C'est ce
+    /// qui l'entoure qui cède (`HaloLayout`), et elle tient encore dans la fenêtre de 440 × 400.
     static let sphereRange: ClosedRange<CGFloat> = 150...280
     /// Le rayon de l'anneau, en rayons de sphère : celui de la maquette (172 pour 140).
     static let ringRatio: CGFloat = 172.0 / 140.0
@@ -30,6 +32,59 @@ nonisolated enum HaloMetrics {
     /// La hauteur qu'il faut au halo le plus petit, anneau compris.
     static var minimumZoneHeight: CGFloat {
         sphereRange.lowerBound * ringRatio + 2 * ringOverhang
+    }
+}
+
+/// La vue « Halo » selon la taille de la fenêtre : hors de la vue pour être testé.
+///
+/// La sphère prend la hauteur qui reste (`HaloMetrics.sphereDiameter`). Ce palier décide de ce qui
+/// l'entoure : à partir de l'ancienne taille minimale (`WindowSizing.roomy`) rien ne change ; en deçà, les
+/// pastilles tiennent sur une rangée qui défile, puis se réduisent, le titre rapetisse, la ligne d'aide
+/// s'en va, et les alertes quittent leur coin pour une ligne sous le titre.
+nonisolated struct HaloLayout: Equatable {
+    enum Chips: Equatable {
+        /// Jusqu'à deux rangées centrées, comme toujours.
+        case wrapped
+        /// Une seule rangée, qui défile ; le silence et la recherche restent épinglés à droite.
+        case row
+        /// La même rangée, en pastilles réduites : le rond, le nom, et les réglages au clic.
+        case compactRow
+    }
+
+    var chips: Chips
+    var titleSize: CGFloat
+    /// La ligne d'aide sous le titre (« Clique sur le halo pour arrêter »).
+    var showsSubtitle: Bool
+    /// Les alertes flottent dans le coin. Sinon elles tiennent en une ligne sous le titre, à la place de
+    /// l'aide : dans le coin, elles recouvriraient l'anneau.
+    var floatsNotices: Bool
+    var chipsTop: CGFloat
+    var sidePadding: CGFloat
+    var bottomPadding: CGFloat
+
+    /// En deçà, deux pastilles entières ne tiennent plus à côté des commandes rondes.
+    static var compactChipsWidth: CGFloat {
+        2 * HaloChipMetrics.width + 2 * HaloChipMetrics.spacing + HaloChipMetrics.controlsWidth + 2 * 24
+    }
+
+    static func make(size: CGSize) -> HaloLayout {
+        let isRoomy = size.width >= WindowSizing.roomy.width && size.height >= WindowSizing.roomy.height
+        let chips: Chips =
+            if size.width < compactChipsWidth {
+                .compactRow
+            } else if size.height < WindowSizing.roomy.height {
+                .row
+            } else {
+                .wrapped
+            }
+        let byHeight: CGFloat = size.height >= WindowSizing.roomy.height ? 28 : (size.height >= 500 ? 22 : 19)
+        let byWidth: CGFloat = size.width >= 560 ? 28 : 22
+        let isTight = size.height < 500
+        return HaloLayout(
+            chips: chips, titleSize: min(byHeight, byWidth), showsSubtitle: size.height >= 520,
+            floatsNotices: isRoomy, chipsTop: isTight ? 12 : 18,
+            sidePadding: size.width < 560 ? 16 : 24, bottomPadding: isTight ? 14 : 20
+        )
     }
 }
 
@@ -98,22 +153,27 @@ struct HaloView: View {
     var topInset: CGFloat = 0
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// La taille de la vue, mesurée : c'est elle qui décide du palier (`HaloLayout`).
+    @State private var viewSize = CGSize(width: 1200, height: 760)
+    @State private var showsNotices = false
 
     var body: some View {
         let isAudible = state.isHaloAudible
+        let layout = HaloLayout.make(size: viewSize)
         VStack(spacing: 0) {
             GeometryReader { zone in
                 halo(diameter: HaloMetrics.sphereDiameter(fitting: zone.size), isAudible: isAudible)
                     .position(x: zone.size.width / 2, y: zone.size.height / 2)
             }
             .frame(minHeight: HaloMetrics.minimumZoneHeight)
-            headline
-            HaloSpeakerChips(state: state, isAudible: isAudible)
-                .padding(.top, 18)
+            headline(layout)
+            HaloSpeakerChips(state: state, isAudible: isAudible, mode: layout.chips)
+                .padding(.top, layout.chipsTop)
         }
-        .padding(.horizontal, 24)
-        .padding(.bottom, 20)
+        .padding(.horizontal, layout.sidePadding)
+        .padding(.bottom, layout.bottomPadding)
         .padding(.top, topInset)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { viewSize = $0 }
         // Les ondes, derrière tout et sur toute la vue : elles passent sous le titre, les pastilles et les
         // commandes flottantes, sans autre bord que ceux de la fenêtre.
         .backgroundPreferenceValue(HaloSphereBoundsKey.self) { anchor in
@@ -131,7 +191,9 @@ struct HaloView: View {
             }
         }
         // Les alertes flottent dans le coin : elles ne poussent ni le halo ni les pastilles.
-        .overlay(alignment: .topLeading) { notices.padding(.top, topInset) }
+        .overlay(alignment: .topLeading) {
+            if layout.floatsNotices { notices.padding(.top, topInset) }
+        }
         .animation(PanelMotion.standard(reduceMotion: reduceMotion), value: state.startFailure)
         .animation(PanelMotion.standard(reduceMotion: reduceMotion), value: state.captureAlert)
     }
@@ -194,12 +256,26 @@ struct HaloView: View {
 
     // MARK: - Titre
 
-    private var headline: some View {
+    private func headline(_ layout: HaloLayout) -> some View {
         VStack(spacing: 4) {
             Text(state.status.title)
-                .font(.system(size: 28, weight: .bold))
+                .font(.system(size: layout.titleSize, weight: .bold))
                 .tracking(-0.5)
                 .minimumScaleFactor(0.7)
+                .accessibilityAddTraits(.isHeader)
+            if !layout.floatsNotices, state.startFailure != nil || state.captureAlert != nil {
+                inlineNotice
+            } else if layout.showsSubtitle {
+                subtitle
+            }
+        }
+        .lineLimit(1)
+        // Les ondes passent dessous : une ombre garde le texte lisible sur une bande claire.
+        .shadow(color: .black.opacity(0.35), radius: 6, y: 1)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var subtitle: some View {
             Text(
                 HaloCopy.subtitle(
                     phase: state.streamingPhase, detail: state.status.detail,
@@ -211,19 +287,45 @@ struct HaloView: View {
             .font(.system(size: 15))
             .foregroundStyle(Color.white.opacity(0.86))
             .minimumScaleFactor(0.8)
-        }
-        .lineLimit(1)
-        // Les ondes passent dessous : une ombre garde le texte lisible sur une bande claire.
-        .shadow(color: .black.opacity(0.35), radius: 6, y: 1)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
     }
 
     // MARK: - Alertes
 
-    @ViewBuilder
-    private var notices: some View {
-        if state.startFailure != nil || state.captureAlert != nil {
+    /// Dans une petite fenêtre : l'alerte la plus grave en une ligne sous le titre, et les alertes entières
+    /// au clic. Elle prend la place de la ligne d'aide, et reste là quand celle-ci n'a plus la sienne.
+    private var inlineNotice: some View {
+        let isCritical = state.startFailure != nil || state.captureAlert?.severity == .critical
+        let name = state.startFailure == nil ? (state.captureAlert?.title ?? "") : "Démarrage impossible"
+        // Le titre le dit parfois déjà (« Démarrage impossible ») : la ligne dit alors ce que fait le clic.
+        let title = name == state.status.title ? "Voir pourquoi, et quoi faire" : name
+        return Button {
+            showsNotices.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: isCritical ? "exclamationmark.triangle.fill" : "exclamationmark.circle.fill")
+                    .foregroundStyle(isCritical ? Color.red : Color.orange)
+                    .accessibilityHidden(true)
+                Text(title)
+                    .foregroundStyle(Color.white.opacity(0.92))
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(Color.white.opacity(0.6))
+                    .accessibilityHidden(true)
+            }
+            .font(.system(size: 13, weight: .semibold))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Afficher le détail, et ce qu'il faut faire")
+        .accessibilityHint("Affiche l'alerte en entier.")
+        .popover(isPresented: $showsNotices, arrowEdge: .top) {
+            noticeRows
+                .padding(6)
+                .frame(width: 300)
+        }
+    }
+
+    private var noticeRows: some View {
             VStack(alignment: .leading, spacing: 6) {
                 if let failure = state.startFailure {
                     PanelNotice(
@@ -240,6 +342,12 @@ struct HaloView: View {
                     )
                 }
             }
+    }
+
+    @ViewBuilder
+    private var notices: some View {
+        if state.startFailure != nil || state.captureAlert != nil {
+            noticeRows
             .padding(6)
             .frame(width: 300)
             .floatingGlass(in: RoundedRectangle(cornerRadius: 18, style: .continuous))

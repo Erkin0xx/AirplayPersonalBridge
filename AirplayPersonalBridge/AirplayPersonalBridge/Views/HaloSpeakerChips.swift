@@ -22,6 +22,13 @@ nonisolated enum HaloChipMetrics {
     /// Au-delà de deux rangées, les pastilles défilent : le halo garde sa place.
     static let maxRows = 2
     static var maxHeight: CGFloat { CGFloat(maxRows) * height + CGFloat(maxRows - 1) * rowSpacing }
+    /// La pastille réduite d'une petite fenêtre : le rond, le nom et le niveau. Deux tiennent à côté des
+    /// commandes rondes dans la fenêtre la plus étroite.
+    static let compactWidth: CGFloat = 128
+    static let compactHeight: CGFloat = 48
+    static let compactBadge: CGFloat = 36
+    /// Le fondu des bords d'une rangée qui défile : il dit qu'il y a une suite.
+    static let scrollFade: CGFloat = 18
 }
 
 /// Où vont les commandes rondes (silence général, recherche) : hors de la vue pour être testé.
@@ -34,6 +41,12 @@ nonisolated enum HaloChipsArrangement {
         let widths = Array(repeating: HaloChipMetrics.width, count: chipCount) + [HaloChipMetrics.controlsWidth]
         let rows = HaloFlowLayout.rows(widths: widths, available: available, spacing: HaloChipMetrics.spacing)
         return rows.count > HaloChipMetrics.maxRows
+    }
+
+    /// La largeur d'une rangée unique de pastilles, sans les commandes rondes.
+    static func rowWidth(chipCount: Int, chipWidth: CGFloat) -> CGFloat {
+        let count = max(chipCount, 0)
+        return CGFloat(count) * chipWidth + CGFloat(max(count - 1, 0)) * HaloChipMetrics.spacing
     }
 }
 
@@ -76,6 +89,8 @@ struct HaloSpeakerChips: View {
     @Bindable var state: BridgeState
     /// Un son part vraiment : les égaliseurs des enceintes qui diffusent peuvent bouger.
     let isAudible: Bool
+    /// Deux rangées centrées, ou une seule qui défile, selon la taille de la fenêtre (`HaloLayout`).
+    var mode: HaloLayout.Chips = .wrapped
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var contentHeight: CGFloat = HaloChipMetrics.height
     /// La largeur offerte à la rangée. Inconnue à la première passe : rien n'est épinglé.
@@ -90,6 +105,8 @@ struct HaloSpeakerChips: View {
                         HaloMuteButton(state: state)
                     }
                 }
+            } else if mode != .wrapped {
+                row(isCompact: mode == .compactRow)
             } else {
                 let pinsControls = HaloChipsArrangement.pinsControls(
                     chipCount: state.visibleOutputs.count, available: availableWidth
@@ -114,22 +131,59 @@ struct HaloSpeakerChips: View {
         .frame(height: HaloChipMetrics.height)
     }
 
+    /// Une seule rangée, pour une petite fenêtre : les pastilles défilent, le silence général et la
+    /// recherche restent épinglés à leur droite. Tant que tout tient, la rangée est centrée.
+    private func row(isCompact: Bool) -> some View {
+        let outputs = PanelSpeakerOrder.sorted(state.visibleOutputs)
+        let chipWidth = isCompact ? HaloChipMetrics.compactWidth : HaloChipMetrics.width
+        let height = isCompact ? HaloChipMetrics.compactHeight : HaloChipMetrics.height
+        return HStack(spacing: HaloChipMetrics.spacing) {
+            if state.hidesEverySpeaker {
+                AllSpeakersHiddenNotice()
+                    .glassButtonStyle()
+                    .padding(.horizontal, 20)
+                    .frame(minHeight: HaloChipMetrics.height)
+                    .floatingGlass(in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            } else {
+                ScrollView(.horizontal) {
+                    HStack(spacing: HaloChipMetrics.spacing) {
+                        ForEach(outputs) { output in chip(output, isCompact: isCompact) }
+                    }
+                }
+                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+                .scrollIndicators(.never)
+                .frame(
+                    maxWidth: HaloChipsArrangement.rowWidth(chipCount: outputs.count, chipWidth: chipWidth)
+                )
+                .frame(height: height)
+                // Ce qui dépasse s'efface au bord, sous un chevron qui y mène.
+                .modifier(HorizontalScrollChevrons(fade: HaloChipMetrics.scrollFade))
+            }
+            controls
+        }
+    }
+
+    private func chip(_ output: OutputState, isCompact: Bool = false) -> some View {
+        HaloSpeakerChip(
+            output: output,
+            effectiveGainDB: state.effectiveGainDB(for: output),
+            listeningCompensationMS: state.listeningCompensationMS(for: output),
+            listeningPlaceName: state.listeningPlaceName,
+            stereoPartnerNames: state.stereoPartners(of: output).map(\.displayName),
+            isAudible: isAudible,
+            isCompact: isCompact,
+            toggle: { state.toggleEnabled(output) },
+            hide: { hide(output) }
+        )
+    }
+
     private func chips(withControls: Bool) -> some View {
         ScrollView(.vertical) {
             HaloFlowLayout(spacing: HaloChipMetrics.spacing, rowSpacing: HaloChipMetrics.rowSpacing) {
                 // L'ordre du panneau : celles qui exigent une intervention passent en dernier.
                 // Les masquées n'y sont pas : elles jouent toujours si elles sont cochées.
                 ForEach(PanelSpeakerOrder.sorted(state.visibleOutputs)) { output in
-                    HaloSpeakerChip(
-                        output: output,
-                        effectiveGainDB: state.effectiveGainDB(for: output),
-                        listeningCompensationMS: state.listeningCompensationMS(for: output),
-                        listeningPlaceName: state.listeningPlaceName,
-                        stereoPartnerNames: state.stereoPartners(of: output).map(\.displayName),
-                        isAudible: isAudible,
-                        toggle: { state.toggleEnabled(output) },
-                        hide: { hide(output) }
-                    )
+                    chip(output)
                 }
                 if state.hidesEverySpeaker {
                     AllSpeakersHiddenNotice()
@@ -279,6 +333,9 @@ struct HaloSpeakerChip: View {
     var stereoPartnerNames: [String] = []
     /// Un son part vraiment : l'égaliseur peut bouger.
     var isAudible = true
+    /// Dans une petite fenêtre : le rond, le nom et le niveau ; le curseur et le silence de l'enceinte sont
+    /// dans la fenêtre surgissante, au clic sur le nom.
+    var isCompact = false
     /// Le clic sur le badge : `BridgeState.toggleEnabled(_:)`, qui emmène la paire stéréo.
     var toggle: () -> Void
     /// « Masquer » : au clic droit, et par l'œil barré qui apparaît au survol. Emmène la paire stéréo.
@@ -292,6 +349,112 @@ struct HaloSpeakerChip: View {
     @State private var showsMessage = false
 
     var body: some View {
+        content
+        .frame(
+            width: isCompact ? HaloChipMetrics.compactWidth : HaloChipMetrics.width,
+            height: isCompact ? HaloChipMetrics.compactHeight : HaloChipMetrics.height
+        )
+        .floatingGlass(in: Capsule(style: .circular))
+        .opacity(output.isHeldBack ? 0.62 : 1)
+        .onHover { isHovering = $0 }
+        .animation(PanelMotion.quick(reduceMotion: reduceMotion), value: isHovering)
+        .accessibilityElement(children: .contain)
+        .hideSpeakerMenu(partners: stereoPartnerNames, action: hide)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if isCompact { compact } else { regular }
+    }
+
+    // MARK: - Réduite
+
+    /// Ce que la pastille réduite dit sous le nom : ce qui empêche l'enceinte de jouer, son niveau quand
+    /// elle joue, sinon son état.
+    private var compactCaption: (text: String, color: Color) {
+        if let message = output.chipMessage { return (message.text, messageColor(message.tone)) }
+        if output.isEnabled, !output.isMuted, output.connection == .streaming {
+            return (PanelFormat.decibels(output.trimDB, fractionDigits: 1, signed: true), .secondary)
+        }
+        return (caption, .secondary)
+    }
+
+    private var compact: some View {
+        let line = compactCaption
+        return HStack(spacing: 7) {
+            badge
+            Button {
+                if output.isHeldBack {
+                    showsMessage.toggle()
+                } else {
+                    showsSettings.toggle()
+                }
+            } label: {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(output.displayName)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(output.isHeldBack || !output.isEnabled ? .secondary : .primary)
+                        .truncationMode(.middle)
+                    Text(line.text)
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(line.color)
+                }
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(
+                output.isHeldBack
+                    ? line.text : "Réglages de \(output.displayName) : volume, silence, délai, tonalité"
+            )
+            .accessibilityLabel(output.isHeldBack ? line.text : "Réglages de \(output.displayName)")
+            .accessibilityValue(line.text)
+            .popover(isPresented: $showsSettings, arrowEdge: .top) {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Ce qui l'empêche de jouer, en entier : la pastille n'en montre que le début.
+                    if let message = output.chipMessage {
+                        Text(message.text)
+                            .font(.callout)
+                            .foregroundStyle(messageColor(message.tone))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: 300, alignment: .leading)
+                            .padding(.horizontal, 16)
+                            .padding(.top, 14)
+                    }
+                    // Le silence de l'enceinte, que la pastille réduite n'a plus la place de porter.
+                    Toggle(
+                        "Couper cette enceinte",
+                        isOn: Binding(get: { output.isMuted }, set: { _ in PanelSpeakerMute.toggle(output) })
+                    )
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .disabled(!output.isEnabled)
+                    .help("Couper cette enceinte seule, sans la déconnecter")
+                    .padding(.horizontal, 16)
+                    .padding(.top, 14)
+                    SpeakerSettings(
+                        output: output, effectiveGainDB: effectiveGainDB,
+                        listeningCompensationMS: listeningCompensationMS, listeningPlaceName: listeningPlaceName,
+                        stereoPartnerNames: stereoPartnerNames
+                    )
+                }
+            }
+            .background {
+                // Sur une vue à part : deux fenêtres surgissantes sur le même bouton se disputent.
+                Color.clear.popover(isPresented: $showsMessage, arrowEdge: .top) {
+                    messagePopover(line.text)
+                }
+            }
+        }
+        .padding(.leading, 6)
+        .padding(.trailing, 10)
+    }
+
+    // MARK: - Entière
+
+    private var regular: some View {
         HStack(spacing: 10) {
             badge
             VStack(alignment: .leading, spacing: output.chipMessage == nil ? 5 : 1) {
@@ -321,13 +484,6 @@ struct HaloSpeakerChip: View {
         }
         .padding(.leading, 12)
         .padding(.trailing, 14)
-        .frame(width: HaloChipMetrics.width, height: HaloChipMetrics.height)
-        .floatingGlass(in: Capsule(style: .circular))
-        .opacity(output.isHeldBack ? 0.62 : 1)
-        .onHover { isHovering = $0 }
-        .animation(PanelMotion.quick(reduceMotion: reduceMotion), value: isHovering)
-        .accessibilityElement(children: .contain)
-        .hideSpeakerMenu(partners: stereoPartnerNames, action: hide)
     }
 
     // MARK: - Badge
@@ -341,9 +497,12 @@ struct HaloSpeakerChip: View {
                     displayName: output.displayName, proto: output.proto, unavailability: output.unavailability
                 )
             )
-            .font(.system(size: 17, weight: .medium))
+            .font(.system(size: isCompact ? 15 : 17, weight: .medium))
             .foregroundStyle(output.isEnabled ? BridgeTheme.color(0x1D1D1F) : Color.white.opacity(0.75))
-            .frame(width: HaloChipMetrics.badge, height: HaloChipMetrics.badge)
+            .frame(
+                width: isCompact ? HaloChipMetrics.compactBadge : HaloChipMetrics.badge,
+                height: isCompact ? HaloChipMetrics.compactBadge : HaloChipMetrics.badge
+            )
             .background(output.isEnabled ? Color.white : Color.white.opacity(0.12), in: Circle())
             // Retenue mais absente du réseau : elle ne peut pas jouer, le badge ne doit pas l'affirmer.
             .opacity(output.presence == .offline ? 0.55 : 1)
@@ -451,17 +610,21 @@ struct HaloSpeakerChip: View {
         .accessibilityLabel(text)
         .accessibilityHint("Affiche le message en entier.")
         .popover(isPresented: $showsMessage, arrowEdge: .top) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(output.displayName).font(.headline)
-                Text(text)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-            }
-            .padding(16)
-            .frame(width: 320, alignment: .leading)
+            messagePopover(text)
         }
+    }
+
+    private func messagePopover(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(output.displayName).font(.headline)
+            Text(text)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+        .padding(16)
+        .frame(width: 320, alignment: .leading)
     }
 
     private func messageColor(_ tone: OutputStatusTone) -> Color {
