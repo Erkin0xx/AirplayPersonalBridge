@@ -38,6 +38,11 @@ enum PanelMetrics {
 enum PanelPalette {
     /// Le fond d'une pastille au repos.
     static let quietFill = Color.primary.opacity(0.09)
+    /// Une commande enclenchée (enceinte cochée, silence, Diffuser) : blanche en sombre, presque noire en
+    /// clair. **Pas de rose sur une commande**, dans le panneau non plus (Baptiste, 2026-11-11).
+    static let engaged = adaptive(light: NSColor(white: 0.12, alpha: 1), dark: NSColor(white: 0.96, alpha: 1))
+    /// L'icône posée sur une commande enclenchée.
+    static let onEngaged = adaptive(light: .white, dark: NSColor(white: 0.1, alpha: 1))
     static let hover = Color.primary.opacity(0.07)
     static let press = Color.primary.opacity(0.12)
     /// Le rail du curseur, plus creux que le survol : il doit se lire comme un logement.
@@ -111,7 +116,7 @@ struct PanelCommandButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         let label = configuration.label
             .font(.callout.weight(.medium))
-            .foregroundStyle(tint == nil ? Color.primary : Color.white)
+            .foregroundStyle(tint == nil ? Color.primary : PanelPalette.onEngaged)
             .padding(.horizontal, 12)
             .frame(height: PanelMetrics.pastille)
             .contentShape(Capsule())
@@ -219,7 +224,7 @@ struct PanelVolumeSlider: View {
         .overlay {
             Capsule()
                 // Dans la console, pas de rose sur une commande : l'anneau y est blanc.
-                .strokeBorder(look == .darkshell ? Color.white.opacity(0.9) : BridgeTheme.accent, lineWidth: 2)
+                .strokeBorder(look == .darkshell ? Color.white.opacity(0.9) : Color.primary.opacity(0.6), lineWidth: 2)
                 .padding(-3)
                 .opacity(isFocused && !isPointerFocus ? 1 : 0)
         }
@@ -372,13 +377,13 @@ struct PanelMuteButton: View {
     /// Enclenché dans la console : un disque blanc, donc une icône sombre.
     private var foreground: Color {
         switch look {
-        case .panel: isMuted ? Color.white : Color.primary.opacity(0.75)
+        case .panel: isMuted ? PanelPalette.onEngaged : Color.primary.opacity(0.75)
         case .darkshell: isMuted ? Color.black.opacity(0.85) : Color.white.opacity(0.9)
         }
     }
 
     private var background: AnyShapeStyle {
-        if isMuted { return AnyShapeStyle(BridgeTheme.accent) }
+        if isMuted { return AnyShapeStyle(PanelPalette.engaged) }
         return AnyShapeStyle(isHovering ? PanelPalette.press : PanelPalette.quietFill)
     }
 }

@@ -202,8 +202,8 @@ struct MenuBarPanelContent: View {
         // Hors du conteneur de verre : la carte ne doit pas se fondre dans le bouton de l'en-tête.
         .panelPopup("Options", isPresented: $isOptionsPresented) { optionRows }
         .onChange(of: panelOpenings) { isOptionsPresented = false }
-        // L'accent de l'app, pour les contrôles du système aussi (interrupteurs, menus).
-        .tint(BridgeTheme.accent)
+        // Pas de rose sur une commande : les contrôles du système (interrupteurs, menus) en blanc aussi.
+        .tint(PanelPalette.engaged)
         .containerShape(.rect(cornerRadius: PanelMetrics.panelRadius))
         .background(alignment: .top) { streamingWash }
     }
@@ -212,7 +212,7 @@ struct MenuBarPanelContent: View {
     /// d'accent qui descend du haut et s'éteint avant les enceintes.
     private var streamingWash: some View {
         LinearGradient(
-            colors: [BridgeTheme.accent.opacity(0.2), BridgeTheme.accent.opacity(0)],
+            colors: [Color.primary.opacity(0.07), Color.primary.opacity(0)],
             startPoint: .top, endPoint: .bottom
         )
         .frame(height: 120)
@@ -271,7 +271,7 @@ struct MenuBarPanelContent: View {
             // La largeur du mot le plus long : le titre à côté ne se décale pas au changement d'état.
             .frame(minWidth: 64)
         }
-        .buttonStyle(PanelCommandButtonStyle(tint: isStopSide ? nil : BridgeTheme.accent))
+        .buttonStyle(PanelCommandButtonStyle(tint: isStopSide ? nil : PanelPalette.engaged))
         .disabled(!state.canToggleStreaming)
         .fixedSize()
         .accessibilityLabel(isStopSide ? "Arrêter la diffusion" : "Lancer la diffusion")

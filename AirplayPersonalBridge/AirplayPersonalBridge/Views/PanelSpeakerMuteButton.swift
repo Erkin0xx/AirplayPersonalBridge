@@ -55,12 +55,12 @@ struct PanelSpeakerMuteButton: View {
     }
 
     private var foreground: Color {
-        if output.isMuted { return .white }
+        if output.isMuted { return PanelPalette.onEngaged }
         return Color.primary.opacity(isHovering ? 0.75 : 0.45)
     }
 
     private var background: AnyShapeStyle {
-        if output.isMuted { return AnyShapeStyle(BridgeTheme.accent) }
+        if output.isMuted { return AnyShapeStyle(PanelPalette.engaged) }
         return AnyShapeStyle(isHovering ? PanelPalette.press : Color.clear)
     }
 }

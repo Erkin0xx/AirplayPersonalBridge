@@ -328,10 +328,10 @@ struct PanelSpeakerRow: View {
             )
         )
         .font(.body.weight(.medium))
-        .foregroundStyle(output.isEnabled ? Color.white : Color.primary.opacity(0.75))
+        .foregroundStyle(output.isEnabled ? PanelPalette.onEngaged : Color.primary.opacity(0.75))
         .frame(width: PanelMetrics.pastille, height: PanelMetrics.pastille)
         .background(
-            output.isEnabled ? AnyShapeStyle(BridgeTheme.accent) : AnyShapeStyle(PanelPalette.quietFill),
+            output.isEnabled ? AnyShapeStyle(PanelPalette.engaged) : AnyShapeStyle(PanelPalette.quietFill),
             in: Circle()
         )
         // Retenue mais absente du réseau, ou en attente d'une intervention : elle ne peut pas jouer,
@@ -390,14 +390,14 @@ struct PanelSpeakerRow: View {
             // Elle reçoit, et un son passe : le seul cas où l'indicateur a le droit de bouger.
             Image(systemName: "waveform")
                 .font(.callout.weight(.semibold))
-                .foregroundStyle(BridgeTheme.accent)
+                .foregroundStyle(Color.primary)
                 .symbolEffect(.variableColor.iterative, isActive: !reduceMotion && appearsActive)
                 .accessibilityHidden(true)
         case .idle, .streaming:
             if output.isEnabled {
                 Image(systemName: "checkmark")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(BridgeTheme.accent)
+                    .foregroundStyle(Color.primary)
                     .accessibilityHidden(true)
             }
         }
