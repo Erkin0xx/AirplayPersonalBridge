@@ -199,7 +199,9 @@ struct ConsoleViewTests {
         #expect(small < large)
         #expect(large <= ConsoleLayout.tileHeightCeiling)
         #expect(huge == ConsoleLayout.tileHeightCeiling)
-        #expect(ConsoleLayout.make(size: .zero, speakerCount: 4).maxTileHeight == ConsoleLayout.minimumTileHeight)
+        // Une fenêtre basse laisse descendre les tuiles sous l'ancien plancher, jusqu'à la tuile simplifiée.
+        #expect(ConsoleLayout.make(size: .zero, speakerCount: 4).maxTileHeight == ConsoleLayout.smallestTileHeight)
+        #expect(ConsoleLayout.smallestTileHeight < ConsoleLayout.minimumTileHeight)
     }
 
     // MARK: - Tuiles

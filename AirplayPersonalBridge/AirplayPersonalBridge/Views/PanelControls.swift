@@ -256,13 +256,16 @@ struct PanelVolumeSlider: View {
         // Le remplissage du silence est gris : le secondaire s'y lit, en clair comme en sombre.
         // La coque noire n'a pas de remplissage clair : sur le voile, le texte reste clair.
         let onLightFill = !fitsInTrack && !isMuted && look == .panel
+        // Un curseur très court (la barre de lecture d'une petite fenêtre) n'a de place ni dans le rail
+        // ni dans le remplissage : la valeur déborderait sur ce qui précède le curseur.
+        let fitsSomewhere = fitsInTrack || knobEnd - height - room + 8 >= 0
         return Text(valueText)
             .font(.subheadline.weight(.medium).monospacedDigit())
             .foregroundStyle(onLightFill ? AnyShapeStyle(.black.opacity(0.55)) : AnyShapeStyle(.secondary))
             .lineLimit(1)
             .frame(width: room, alignment: fitsInTrack ? .trailing : .leading)
             .offset(x: fitsInTrack ? width - room - 12 : knobEnd - height - room + 8)
-            .opacity(isMuted || isHovering || isDragging || showsValue ? 1 : 0)
+            .opacity(fitsSomewhere && (isMuted || isHovering || isDragging || showsValue) ? 1 : 0)
             .animation(PanelMotion.quick(reduceMotion: reduceMotion), value: isHovering)
             .accessibilityHidden(true)
             .allowsHitTesting(false)

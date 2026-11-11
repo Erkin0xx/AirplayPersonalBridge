@@ -10,6 +10,9 @@ import SwiftUI
 /// options du Mac, diagnostic) est un clic plus loin, dans une fenêtre surgissante.
 struct BridgeSidebar: View {
     @Bindable var state: BridgeState
+    /// L'état et la commande Diffuser en tête. Ouvert en surimpression dans une fenêtre étroite, le panneau
+    /// les laisse à la barre réduite (`PlanCompactBar`), qui reste au-dessus de lui.
+    var showsStatus = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let panelWidth: CGFloat = 330
@@ -26,7 +29,9 @@ struct BridgeSidebar: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: WindowMetrics.cardSpacing) {
-                hero
+                if showsStatus || state.isVisible(.masterVolume) || state.awaitedSourceName != nil {
+                    hero
+                }
                 if state.startFailure != nil || state.captureAlert != nil {
                     notices
                 }
@@ -57,6 +62,7 @@ struct BridgeSidebar: View {
     private var hero: some View {
         let status = state.status
         return VStack(alignment: .leading, spacing: 12) {
+            if showsStatus {
             HStack(spacing: WindowMetrics.columnGap) {
                 PanelStatusChip(
                     status: status.menuBar, isAudible: state.captureAlert == nil && !state.isMuted,
@@ -82,6 +88,7 @@ struct BridgeSidebar: View {
                 StreamingRoundButton(state: state, diameter: 40)
             }
             .accessibilityElement(children: .contain)
+            }
 
             if state.isVisible(.masterVolume) {
                 master
@@ -278,6 +285,61 @@ struct BridgeSidebar: View {
         .padding(.vertical, 16)
     }
 
+}
+
+/// Le panneau des enceintes replié, dans une fenêtre trop étroite pour le loger à côté du plan : une
+/// capsule de verre qui garde ce qu'on ne doit jamais chercher (l'état, une alerte, le silence,
+/// Diffuser/Arrêter), et le bouton qui ouvre le panneau en surimpression, puis le referme.
+struct PlanCompactBar: View {
+    @Bindable var state: BridgeState
+    @Binding var showsPanel: Bool
+
+    var body: some View {
+        let status = state.status
+        let hasNotice = state.startFailure != nil || state.captureAlert != nil
+        HStack(spacing: 8) {
+            // L'état ouvre aussi le panneau : c'est là qu'une alerte, que la pastille signale, se lit.
+            Button {
+                showsPanel.toggle()
+            } label: {
+                HStack(spacing: 8) {
+                    PanelStatusChip(
+                        status: status.menuBar, isAudible: state.captureAlert == nil && !state.isMuted,
+                        diameter: 30
+                    )
+                    Text(status.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                        .frame(maxWidth: 190, alignment: .leading)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(hasNotice ? "Une alerte : ouvrir le panneau des enceintes pour la lire" : "Enceintes et volumes")
+            .accessibilityLabel(status.title)
+            .accessibilityHint(hasNotice ? "Une alerte est à lire dans le panneau des enceintes." : "")
+
+            PanelMuteButton(isMuted: $state.isMuted)
+            StreamingRoundButton(state: state, diameter: 32)
+            Button {
+                showsPanel.toggle()
+            } label: {
+                Image(systemName: "hifispeaker.2.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(showsPanel ? Color.black.opacity(0.85) : Color.white.opacity(0.9))
+                    .frame(width: 30, height: 30)
+                    .background(showsPanel ? Color.white : Color.white.opacity(0.14), in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help(showsPanel ? "Refermer le panneau des enceintes" : "Enceintes, volumes et alertes")
+            .accessibilityLabel("Panneau des enceintes")
+            .accessibilityValue(showsPanel ? "ouvert" : "fermé")
+        }
+        .padding(.horizontal, 7)
+        .frame(height: PlanWindowLayout.compactBarHeight)
+        .floatingGlass(in: Capsule())
+    }
 }
 
 /// Les options du Mac, dans la fenêtre surgissante du pied de la barre latérale : les mêmes que celles du

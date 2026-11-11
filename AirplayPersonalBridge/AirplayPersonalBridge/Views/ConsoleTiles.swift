@@ -21,6 +21,9 @@ struct ConsoleSpeakerTile: View {
     var stereoPartnerNames: [String] = []
     /// Rien ne signale de silence : le témoin de diffusion peut bouger.
     var isAudible = true
+    /// Une fenêtre basse (`ConsoleLayout.compactTiles`) : l'en-tête tient en deux lignes courtes, le niveau
+    /// passe entre les deux boutons, et le curseur garde toute la hauteur qui reste.
+    var isCompact = false
     /// Le clic sur l'en-tête : `BridgeState.toggleEnabled(_:)`, qui emmène la paire stéréo.
     var toggle: () -> Void
     /// « Masquer » : au clic droit, et par l'œil barré qui apparaît au survol. Emmène la paire stéréo.
@@ -43,21 +46,17 @@ struct ConsoleSpeakerTile: View {
     }
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: isCompact ? 8 : 10) {
             header
             if output.consoleIsHeldBack {
                 heldBackMessage
             } else {
                 fader
-                Text(trimText)
-                    .font(.system(size: 13, weight: .medium).monospacedDigit())
-                    .foregroundStyle(output.isEnabled && !output.isMuted ? .primary : .secondary)
-                    .contentTransition(.numericText())
-                    .accessibilityHidden(true)
+                if !isCompact { trimLabel }
                 buttons
             }
         }
-        .padding(ConsoleMetrics.tilePadding)
+        .padding(isCompact ? 12 : ConsoleMetrics.tilePadding)
         .frame(width: ConsoleMetrics.speakerWidth)
         .frame(maxHeight: .infinity)
         .modifier(ConsoleTileSurface(isHeldBack: output.consoleIsHeldBack))
@@ -81,6 +80,16 @@ struct ConsoleSpeakerTile: View {
         .hideSpeakerMenu(partners: stereoPartnerNames, action: hide)
     }
 
+    private var trimLabel: some View {
+        Text(trimText)
+            .font(.system(size: isCompact ? 12 : 13, weight: .medium).monospacedDigit())
+            .foregroundStyle(output.isEnabled && !output.isMuted ? .primary : .secondary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .contentTransition(.numericText())
+            .accessibilityHidden(true)
+    }
+
     // MARK: En-tête
 
     private var header: some View {
@@ -89,14 +98,14 @@ struct ConsoleSpeakerTile: View {
         } label: {
             // Tout part du haut : les noms sont sur la même ligne d'une tuile à l'autre, qu'elle en ait
             // deux ou trois.
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .top, spacing: isCompact ? 8 : 10) {
                 badge
                 VStack(alignment: .leading, spacing: 1) {
                     // Sans paire à nommer, la troisième ligne revient au nom : « Apple TV Salon » y tient.
                     Text(output.displayName)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: isCompact ? 13.5 : 15, weight: .semibold))
                         .foregroundStyle(output.consoleIsHeldBack || !output.isEnabled ? .secondary : .primary)
-                        .lineLimit(pair == nil ? 2 : 1)
+                        .lineLimit(pair == nil && !isCompact ? 2 : 1)
                         .minimumScaleFactor(0.85)
                         .truncationMode(.tail)
                     HStack(spacing: 4) {
@@ -104,9 +113,9 @@ struct ConsoleSpeakerTile: View {
                         Text(caption.text)
                             .foregroundStyle(caption.tone.consoleColor)
                     }
-                    .font(.system(size: 12.5))
+                    .font(.system(size: isCompact ? 11.5 : 12.5))
                     .lineLimit(1)
-                    if let pair {
+                    if let pair, !isCompact {
                         Label(pair, systemImage: "link")
                             .labelStyle(ConsolePairLabelStyle())
                             .font(.system(size: 11))
@@ -115,10 +124,10 @@ struct ConsoleSpeakerTile: View {
                     }
                 }
                 .multilineTextAlignment(.leading)
-                .padding(.top, 2)
+                .padding(.top, isCompact ? 0 : 2)
                 Spacer(minLength: 0)
             }
-            .frame(height: ConsoleMetrics.tileHeader, alignment: .top)
+            .frame(height: isCompact ? ConsoleMetrics.compactTileHeader : ConsoleMetrics.tileHeader, alignment: .top)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -149,9 +158,12 @@ struct ConsoleSpeakerTile: View {
                 displayName: output.displayName, proto: output.proto, unavailability: output.unavailability
             )
         )
-        .font(.system(size: 17, weight: .medium))
+        .font(.system(size: isCompact ? 14 : 17, weight: .medium))
         .foregroundStyle(output.isEnabled ? Color.black.opacity(0.82) : Color.white.opacity(0.7))
-        .frame(width: ConsoleMetrics.badge, height: ConsoleMetrics.badge)
+        .frame(
+            width: isCompact ? ConsoleMetrics.compactBadge : ConsoleMetrics.badge,
+            height: isCompact ? ConsoleMetrics.compactBadge : ConsoleMetrics.badge
+        )
         .background(output.isEnabled ? Color.white : Color.white.opacity(0.12), in: Circle())
         // Retenue mais absente du réseau, ou en attente d'une intervention : elle ne peut pas jouer, et
         // la pastille ne doit pas affirmer le contraire.
@@ -203,8 +215,11 @@ struct ConsoleSpeakerTile: View {
     }
 
     private var buttons: some View {
-        HStack(spacing: 8) {
-            ConsoleRoundButton(symbol: PanelSpeakerMuteButton.symbol, isOn: output.isEnabled && output.isMuted) {
+        HStack(spacing: isCompact ? 2 : 8) {
+            ConsoleRoundButton(
+                symbol: PanelSpeakerMuteButton.symbol, isOn: output.isEnabled && output.isMuted,
+                diameter: isCompact ? ConsoleMetrics.compactRoundButton : ConsoleMetrics.roundButton
+            ) {
                 PanelSpeakerMute.toggle(output)
             }
             // Décochée, elle ne joue pas : couper son son ne voudrait rien dire.
@@ -219,7 +234,13 @@ struct ConsoleSpeakerTile: View {
             .accessibilityHint("L'enceinte reste connectée, et les autres continuent de jouer.")
             .accessibilityAddTraits(.isToggle)
 
-            ConsoleRoundButton(symbol: "slider.horizontal.3", isOn: showsSettings) {
+            // Le niveau, que la tuile simplifiée n'a plus la place de poser sur sa propre ligne.
+            if isCompact { trimLabel.frame(maxWidth: .infinity) }
+
+            ConsoleRoundButton(
+                symbol: "slider.horizontal.3", isOn: showsSettings,
+                diameter: isCompact ? ConsoleMetrics.compactRoundButton : ConsoleMetrics.roundButton
+            ) {
                 showsSettings.toggle()
             }
             .help("Réglages de \(output.displayName) : délai, tonalité, adresse")
@@ -248,7 +269,7 @@ struct ConsoleSpeakerTile: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .lineLimit(6)
+                .lineLimit(isCompact ? 4 : 6)
                 .fixedSize(horizontal: false, vertical: true)
                 .help(message)
         }

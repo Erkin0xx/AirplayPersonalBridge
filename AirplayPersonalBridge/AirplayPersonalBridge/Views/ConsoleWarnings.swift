@@ -122,3 +122,82 @@ struct ConsoleWarnings: View {
         .accessibilityElement(children: .combine)
     }
 }
+
+/// Les avertissements d'une fenêtre basse : le plus grave sur une ligne, le décompte des autres, et tous
+/// en entier au clic. Leur ligne est réservée comme celle de `ConsoleWarnings` : rien ne bouge à leur arrivée.
+struct ConsoleCompactWarnings: View {
+    let warnings: [ConsoleWarning]
+
+    static let height: CGFloat = 22
+
+    @State private var showsAll = false
+
+    var body: some View {
+        if let first = warnings.first {
+            Button {
+                showsAll.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(
+                        systemName: first.tone == .critical
+                            ? "exclamationmark.triangle.fill" : "exclamationmark.circle.fill"
+                    )
+                    .foregroundStyle(first.tone == .critical ? Color.red : Color.orange)
+                    .accessibilityHidden(true)
+                    Text(first.subject)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Color.white.opacity(0.9))
+                        .layoutPriority(1)
+                    Text(first.text)
+                        .foregroundStyle(Color.white.opacity(0.62))
+                        .truncationMode(.tail)
+                    if warnings.count > 1 {
+                        Text("+\(warnings.count - 1)")
+                            .fontWeight(.semibold)
+                            .foregroundStyle(Color.white.opacity(0.9))
+                            .padding(.horizontal, 6)
+                            .background(Color.white.opacity(0.14), in: Capsule())
+                            .layoutPriority(1)
+                    }
+                }
+                .font(.system(size: 11.5))
+                .lineLimit(1)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(warnings.map { "\($0.subject) : \($0.text)" }.joined(separator: "\n"))
+            .accessibilityLabel("Avertissements")
+            .accessibilityValue(warnings.map { "\($0.subject) : \($0.text)" }.joined(separator: ". "))
+            .accessibilityHint("Affiche les avertissements en entier.")
+            .popover(isPresented: $showsAll, arrowEdge: .top) {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(warnings) { warning in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Label {
+                                Text(warning.subject).font(.headline)
+                            } icon: {
+                                Image(
+                                    systemName: warning.tone == .critical
+                                        ? "exclamationmark.triangle.fill" : "exclamationmark.circle.fill"
+                                )
+                                .foregroundStyle(warning.tone == .critical ? Color.red : Color.orange)
+                            }
+                            Text(warning.text)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                            if let pane = warning.settingsPane {
+                                Button("Ouvrir les Réglages…") { pane.open() }
+                                    .controlSize(.small)
+                                    .padding(.top, 2)
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+                .frame(width: 320, alignment: .leading)
+            }
+        }
+    }
+}

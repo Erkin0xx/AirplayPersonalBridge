@@ -16,21 +16,50 @@ struct ConsoleLayout: Equatable {
     var scrolls: Bool
     /// Le plafond de la hauteur des tuiles : un curseur n'a pas à faire toute la hauteur d'un grand écran.
     var maxTileHeight: CGFloat
+    /// Du bord de la fenêtre au contenu.
+    var margin: CGFloat
+    /// La hauteur manque (fenêtre plus basse que l'ancienne taille minimale) : la recherche rejoint la
+    /// ligne des avertissements, qui n'en garde qu'un, et la barre de lecture s'amincit. Tout ce que les
+    /// curseurs y gagnent, ils le prennent.
+    var isCompact: Bool
+    /// Même ainsi, le curseur passerait sous sa hauteur utile : la tuile se simplifie (un en-tête d'une
+    /// ligne de nom et une d'état, le niveau entre ses deux boutons).
+    var compactTiles: Bool
 
     /// En deçà, la barre de lecture n'a plus la place de son titre, de son curseur et de sa commande.
     static let minimumColumnWidth: CGFloat = 720
     static let minimumTileHeight: CGFloat = 250
     static let tileHeightCeiling: CGFloat = 480
+    /// La hauteur de la vue dans une fenêtre à l'ancienne taille minimale : à partir d'elle, rien ne change.
+    static let roomyHeight: CGFloat = WindowSizing.roomy.height - 48
+    /// En deçà, les marges se resserrent : chaque point compte pour les tuiles.
+    static let narrowWidth: CGFloat = 760
+    static let narrowMargin: CGFloat = 16
+    /// En deçà, la barre de lecture s'amincit même dans une fenêtre haute : son titre y tient en entier.
+    static let slimTransportWidth: CGFloat = 520
+    /// Ce qui entoure les tuiles dans une fenêtre basse : marges, barre de lecture amincie, et la ligne des
+    /// avertissements.
+    static let compactChromeHeight: CGFloat = 118
+    /// La tuile entière demande cette hauteur pour que son curseur garde une course utile.
+    static let fullTileHeight: CGFloat = 300
+    /// La tuile simplifiée la plus basse : son curseur y garde 96 points.
+    static let smallestTileHeight: CGFloat = 200
 
     /// - Parameter speakerCount: les tuiles d'enceintes ; à zéro, une tuile d'attente les remplace.
     static func make(size: CGSize, speakerCount: Int) -> ConsoleLayout {
         let rowWidth = rowWidth(speakerCount: speakerCount)
-        let available = max(size.width - 2 * ConsoleMetrics.margin, 0)
+        let margin = size.width < narrowWidth ? narrowMargin : ConsoleMetrics.margin
+        let available = max(size.width - 2 * margin, 0)
+        let isCompact = size.height < roomyHeight
+        let tileRoom = size.height - compactChromeHeight
         return ConsoleLayout(
             rowWidth: rowWidth,
             columnWidth: min(available, max(rowWidth, minimumColumnWidth)),
             scrolls: rowWidth > available,
-            maxTileHeight: min(max(size.height * 0.66, minimumTileHeight), tileHeightCeiling)
+            maxTileHeight: isCompact
+                ? min(max(tileRoom, smallestTileHeight), tileHeightCeiling)
+                : min(max(size.height * 0.66, minimumTileHeight), tileHeightCeiling),
+            margin: margin, isCompact: isCompact, compactTiles: isCompact && tileRoom < fullTileHeight
         )
     }
 
@@ -62,26 +91,47 @@ struct ConsoleView: View {
             let layout = ConsoleLayout.make(size: proxy.size, speakerCount: speakers.count)
             VStack(spacing: 0) {
                 console(layout)
-                    .frame(minHeight: ConsoleLayout.minimumTileHeight, maxHeight: layout.maxTileHeight)
-                footer
-                    .frame(width: layout.columnWidth)
-                    .padding(.top, 12)
+                    .frame(
+                        minHeight: layout.isCompact
+                            ? ConsoleLayout.smallestTileHeight : ConsoleLayout.minimumTileHeight,
+                        maxHeight: layout.maxTileHeight
+                    )
+                if !layout.isCompact {
+                    footer
+                        .frame(width: layout.columnWidth)
+                        .padding(.top, 12)
+                }
                 // Le volume général et la commande, en grand sous les curseurs des enceintes.
-                TransportBar(state: state)
+                TransportBar(
+                    state: state, width: layout.columnWidth,
+                    isCompact: layout.isCompact || layout.columnWidth < ConsoleLayout.slimTransportWidth
+                )
                     .frame(width: layout.columnWidth)
-                    .padding(.top, 14)
+                    .padding(.top, layout.isCompact ? 10 : 14)
                 // Les avertissements en petit sous la barre, à une place réservée : leur arrivée ne déplace
                 // rien.
                 // Toutes les enceintes, masquées comprises : masquer une tuile ne fait pas taire son
                 // avertissement.
-                ConsoleWarnings(
-                    warnings: ConsoleWarning.list(for: state, speakers: PanelSpeakerOrder.sorted(state.outputs))
-                )
-                    .frame(width: layout.columnWidth)
-                    .padding(.top, 8)
+                let warnings = ConsoleWarning.list(for: state, speakers: PanelSpeakerOrder.sorted(state.outputs))
+                if layout.isCompact {
+                    // Une seule ligne dans une fenêtre basse : le premier avertissement, les autres au clic,
+                    // et la recherche au bout.
+                    HStack(spacing: 8) {
+                        ConsoleCompactWarnings(warnings: warnings)
+                        Spacer(minLength: 0)
+                        if !state.outputs.isEmpty { search(showsTitle: false) }
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(width: layout.columnWidth, height: ConsoleCompactWarnings.height)
+                    .padding(.top, 6)
+                } else {
+                    ConsoleWarnings(warnings: warnings)
+                        .frame(width: layout.columnWidth)
+                        .padding(.top, 8)
+                }
             }
-            .padding(.top, 12)
-            .padding(.bottom, 16)
+            .padding(.top, layout.isCompact ? 8 : 12)
+            .padding(.bottom, layout.isCompact ? 12 : 16)
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
     }
@@ -112,6 +162,7 @@ struct ConsoleView: View {
                                 listeningPlaceName: state.listeningPlaceName,
                                 stereoPartnerNames: state.stereoPartners(of: output).map(\.displayName),
                                 isAudible: state.captureAlert == nil && !state.isMuted,
+                                isCompact: layout.compactTiles,
                                 toggle: { state.toggleEnabled(output) },
                                 hide: {
                                     withAnimation(PanelMotion.standard(reduceMotion: reduceMotion)) {
@@ -122,7 +173,7 @@ struct ConsoleView: View {
                         }
                     }
                 }
-                .padding(.horizontal, ConsoleMetrics.margin)
+                .padding(.horizontal, layout.margin)
                 .frame(minWidth: proxy.size.width)
                 .frame(height: proxy.size.height)
             }
@@ -130,6 +181,8 @@ struct ConsoleView: View {
             .scrollDisabled(!layout.scrolls)
             // L'ombre des tuiles déborde du défilement, et ne doit pas s'y couper.
             .scrollClipDisabled()
+            // Une souris à molette ne fait pas défiler de côté : un chevron mène aux tuiles hors de vue.
+            .modifier(HorizontalScrollChevrons(inset: 6))
         }
     }
 
@@ -141,13 +194,14 @@ struct ConsoleView: View {
         HStack {
             Spacer(minLength: 0)
             if !state.outputs.isEmpty {
-                search
+                search(showsTitle: true)
             }
         }
         .frame(minHeight: 22, alignment: .top)
     }
 
-    private var search: some View {
+    /// - Parameter showsTitle: dans une fenêtre basse, l'icône seule, au bout de la ligne des avertissements.
+    private func search(showsTitle: Bool) -> some View {
         Button {
             Task { await state.refreshOutputs() }
         } label: {
@@ -162,7 +216,9 @@ struct ConsoleView: View {
                     }
                 }
                 .frame(width: 14, height: 14)
-                Text(state.isBrowsing ? "Recherche…" : "Rechercher des enceintes")
+                if showsTitle {
+                    Text(state.isBrowsing ? "Recherche…" : "Rechercher des enceintes")
+                }
             }
             .font(.system(size: 12.5, weight: .medium))
             .foregroundStyle(Color.white.opacity(0.72))

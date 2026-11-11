@@ -23,12 +23,16 @@ struct ConsoleListeningPlaces: View {
     var body: some View {
         let listeners = state.roomLayout.listeners
         if listeners.count >= 2, let active = state.roomLayout.listener {
-            Group {
+            // La première forme qui tient dans la largeur offerte : les segments, puis un menu au nom du
+            // lieu en vigueur, puis une icône seule. Le choix reste entier dans les trois.
+            ViewThatFits(in: .horizontal) {
                 if listeners.count <= Self.segmentLimit {
                     segments(listeners, active: active)
                 } else {
                     menu(listeners, active: active)
                 }
+                pill(listeners, active: active, showsName: true)
+                pill(listeners, active: active, showsName: false)
             }
             .help("Lieu d'écoute : recale les enceintes pour ce lieu, sans couper le son")
         }
@@ -71,17 +75,55 @@ struct ConsoleListeningPlaces: View {
         .accessibilityLabel("Lieu d'écoute")
     }
 
-    private func menu(_ listeners: [RoomObject], active: RoomObject) -> some View {
+    private func choices(_ listeners: [RoomObject], active: RoomObject) -> some View {
+        Picker(
+            "Lieu d'écoute",
+            selection: Binding(get: { active.id }, set: { state.selectListeningPlace(id: $0) })
+        ) {
+            ForEach(listeners) { listener in
+                Text(Self.name(of: listener)).tag(listener.id)
+            }
+        }
+        .pickerStyle(.inline)
+    }
+
+    /// Replié, à la facture de la pastille de source : l'oreille, le nom du lieu en vigueur s'il tient, et
+    /// le menu des lieux.
+    private func pill(_ listeners: [RoomObject], active: RoomObject, showsName: Bool) -> some View {
         Menu {
-            Picker(
-                "Lieu d'écoute",
-                selection: Binding(get: { active.id }, set: { state.selectListeningPlace(id: $0) })
-            ) {
-                ForEach(listeners) { listener in
-                    Text(Self.name(of: listener)).tag(listener.id)
+            choices(listeners, active: active)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "ear")
+                    .font(.body.weight(.medium))
+                    .accessibilityHidden(true)
+                if showsName {
+                    Text(Self.name(of: active))
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.bold))
+                        .accessibilityHidden(true)
                 }
             }
-            .pickerStyle(.inline)
+            .foregroundStyle(.white)
+            .padding(.horizontal, showsName ? 14 : 0)
+            .frame(minWidth: WindowChromeMetrics.controlHeight)
+            .frame(height: WindowChromeMetrics.controlHeight)
+            .floatingGlass(in: Capsule(), interactive: true)
+            .contentShape(Capsule())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel("Lieu d'écoute")
+        .accessibilityValue(Self.name(of: active))
+    }
+
+    private func menu(_ listeners: [RoomObject], active: RoomObject) -> some View {
+        Menu {
+            choices(listeners, active: active)
         } label: {
             Label(Self.name(of: active), systemImage: "ear")
                 .labelStyle(.titleAndIcon)

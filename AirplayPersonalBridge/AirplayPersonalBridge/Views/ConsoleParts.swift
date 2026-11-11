@@ -17,6 +17,10 @@ enum ConsoleMetrics {
     static let tileHeader: CGFloat = 54
     static let badge: CGFloat = 38
     static let roundButton: CGFloat = 34
+    /// Les mêmes, dans la tuile simplifiée d'une fenêtre basse.
+    static let compactTileHeader: CGFloat = 34
+    static let compactBadge: CGFloat = 30
+    static let compactRoundButton: CGFloat = 30
     /// Du bord de la fenêtre au contenu.
     static let margin: CGFloat = 32
 
