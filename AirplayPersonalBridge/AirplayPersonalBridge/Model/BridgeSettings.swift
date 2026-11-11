@@ -42,10 +42,20 @@ struct BridgeSettings: Codable, Equatable {
         /// `tsid` de la paire stéréo, pour grouper les volumes d'une paire avant que la découverte
         /// l'ait revue (`VolumeGroups`). Facultatif, comme le nom.
         var tightSyncIdentifier: String?
+        /// Cochée au moins une fois : c'est une enceinte dont on se sert. Absent d'un fichier ancien : non.
+        var wasUsed = false
+
+        /// Une enceinte dont on se sert garde sa place dans la liste quand elle est éteinte, en grisé
+        /// (demande de Baptiste du 2026-11-11, pour la Geneva) : cochée, déjà cochée un jour, ou réglée.
+        /// Les réglages comptent pour les fichiers d'avant `wasUsed` : la Geneva y a ses basses. Une
+        /// enceinte seulement aperçue sur le réseau (une télé, un autre Mac) ne s'incruste pas.
+        var keepsPlace: Bool {
+            isEnabled || wasUsed || trimDB != 0 || delayMS != 0 || bassBoostDB != 0 || trebleCutDB != 0
+        }
 
         private enum CodingKeys: String, CodingKey {
             case isEnabled, trimDB, delayMS, bassBoostDB, trebleCutDB, displayName
-            case isMuted, tightSyncIdentifier
+            case isMuted, tightSyncIdentifier, wasUsed
         }
 
         init(
@@ -71,6 +81,7 @@ struct BridgeSettings: Codable, Equatable {
             displayName = fields.value(.displayName, default: nil)
             isMuted = fields.value(.isMuted, default: false)
             tightSyncIdentifier = fields.value(.tightSyncIdentifier, default: nil)
+            wasUsed = fields.value(.wasUsed, default: false)
         }
     }
 

@@ -233,8 +233,10 @@ struct BridgeStatePersistenceTests {
         #expect(state.muteLocalOutput)
         #expect(state.selectedSource == .inputDevice)
 
-        // La sortie cochée attend d'être revue, l'autre attend d'être trouvée.
-        #expect(state.outputs.map(\.id) == [Devices.genevaID])
+        // Les deux attendent d'être revues : cochée ou seulement réglée, une enceinte dont on se sert
+        // garde sa place.
+        #expect(state.outputs.map(\.id) == [Devices.genevaID, Devices.rightID])
+        #expect(harness.output(Devices.rightID)?.isEnabled == false)
         let restored = try #require(harness.output(Devices.genevaID))
         #expect(restored.presence == .unknown)
         #expect(restored.trimDB == 2)
@@ -255,7 +257,7 @@ struct BridgeStatePersistenceTests {
         #expect(right.trimDB == -1)
     }
 
-    @Test("Une sortie décochée qui disparaît puis revient retrouve ses réglages")
+    @Test("Une sortie décochée dont on s'est servi reste en grisé quand elle s'éteint, avec ses réglages")
     func reappearingOutputKeepsSettings() async throws {
         let harness = BridgeHarness()
         await harness.discover(airplay2: [Devices.left])
@@ -266,13 +268,47 @@ struct BridgeStatePersistenceTests {
 
         await harness.discover()
         await harness.discover()
-        #expect(harness.output(Devices.leftID) == nil)
+        // Éteinte : elle garde sa place, hors ligne, et ne se recoche pas toute seule.
+        #expect(harness.output(Devices.leftID)?.presence == .offline)
+        #expect(harness.output(Devices.leftID)?.isEnabled == false)
 
         await harness.discover(airplay2: [Devices.left])
         let back = try #require(harness.output(Devices.leftID))
         #expect(!back.isEnabled)
         #expect(back.trimDB == 5)
         #expect(back.delayMS == 40)
+    }
+
+    @Test("Une enceinte seulement aperçue, jamais cochée ni réglée, disparaît quand elle s'éteint")
+    func unusedOutputLeavesWhenItGoesAway() async throws {
+        var settings = BridgeSettings()
+        settings.outputs[Devices.rightID] = BridgeSettings.Output(isEnabled: true, displayName: "Salon (2)")
+        let harness = BridgeHarness(settings: settings)
+        await harness.discover(airplay2: [Devices.left, Devices.right])
+        let left = try #require(harness.output(Devices.leftID))
+        #expect(!left.isEnabled)
+        #expect(!left.keepsPlace)
+
+        await harness.discover(airplay2: [Devices.right])
+        await harness.discover(airplay2: [Devices.right])
+        #expect(harness.output(Devices.leftID) == nil)
+    }
+
+    @Test("Garder sa place : cochée, déjà cochée un jour, ou réglée ; un ancien fichier compte les réglages")
+    func keepsPlaceRule() throws {
+        #expect(BridgeSettings.Output(isEnabled: true).keepsPlace)
+        #expect(!BridgeSettings.Output(isEnabled: false).keepsPlace)
+        #expect(BridgeSettings.Output(isEnabled: false, bassBoostDB: 5.5).keepsPlace)
+        #expect(BridgeSettings.Output(isEnabled: false, trimDB: -1).keepsPlace)
+        var used = BridgeSettings.Output(isEnabled: false)
+        used.wasUsed = true
+        #expect(used.keepsPlace)
+        let round = try JSONDecoder().decode(BridgeSettings.Output.self, from: JSONEncoder().encode(used))
+        #expect(round.wasUsed)
+        let old = try JSONDecoder().decode(
+            BridgeSettings.Output.self, from: Data(#"{"isEnabled": false, "trimDB": 0}"#.utf8)
+        )
+        #expect(!old.wasUsed && !old.keepsPlace)
     }
 
     @Test("Les réglages d'une sortie absente ne sont pas perdus à la sauvegarde")

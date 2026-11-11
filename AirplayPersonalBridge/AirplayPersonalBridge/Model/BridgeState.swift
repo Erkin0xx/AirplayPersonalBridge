@@ -87,7 +87,18 @@ final class OutputState: Identifiable {
     /// jamais perturber les autres — c'est l'invariant §12, et il vaut aussi pour une action
     /// volontaire.
     var isEnabled = true {
-        didSet { if oldValue != isEnabled { onSettingsChange?() } }
+        didSet {
+            if isEnabled { wasUsed = true }
+            if oldValue != isEnabled { onSettingsChange?() }
+        }
+    }
+
+    /// Cochée au moins une fois (`BridgeSettings.Output.wasUsed`).
+    var wasUsed = false
+
+    /// Elle garde sa place dans la liste même éteinte, en grisé (`BridgeSettings.Output.keepsPlace`).
+    var keepsPlace: Bool {
+        isEnabled || wasUsed || trimDB != 0 || delayMS != 0 || bassBoostDB != 0 || trebleCutDB != 0
     }
 
     /// Correction par sortie, en dB, appliquée en plus du master (décision du jalon 5).
@@ -529,10 +540,10 @@ final class BridgeState {
         self.preferredSourceID = settings.sourceID
         if settings.sourceID == CaptureSource.inputDevice.id { selectedSource = .inputDevice }
 
-        // Une enceinte cochée reste visible avant d'être revue : elle n'a pas à attendre la fin de
-        // la première recherche, et le moteur saura la trouver par son nom si elle est là.
+        // Une enceinte dont on se sert reste visible avant d'être revue, cochée ou non : elle n'a pas à
+        // attendre la fin de la première recherche, et éteinte elle garde sa place, en grisé.
         outputs = settings.outputs
-            .filter(\.value.isEnabled)
+            .filter(\.value.keepsPlace)
             .compactMap { id, record in
                 guard let proto = OutputProtocol(outputID: id) else { return nil }
                 let output = OutputState(
@@ -562,6 +573,7 @@ final class BridgeState {
 
     private func restore(_ record: BridgeSettings.Output, on output: OutputState) {
         output.isEnabled = record.isEnabled
+        output.wasUsed = record.wasUsed || record.isEnabled
         output.trimDB = record.trimDB
         output.isMuted = record.isMuted
         output.tightSyncIdentifier = record.tightSyncIdentifier
@@ -654,7 +666,7 @@ final class BridgeState {
                     id: output.id, displayName: output.displayName, host: output.host,
                     proto: output.proto, presence: output.presence,
                     missedRounds: output.missedRounds,
-                    isRetained: output.isEnabled || activeOutputIDs.contains(output.id),
+                    isRetained: output.keepsPlace || activeOutputIDs.contains(output.id),
                     isInSession: activeOutputIDs.contains(output.id),
                     confirmsTransientPairing: output.confirmsTransientPairing
                 )
@@ -1419,6 +1431,7 @@ final class BridgeState {
                 displayName: output.displayName
             )
             result.outputs[output.id]?.isMuted = output.isMuted
+            result.outputs[output.id]?.wasUsed = output.wasUsed
             result.outputs[output.id]?.tightSyncIdentifier = output.tightSyncIdentifier
         }
         return result
