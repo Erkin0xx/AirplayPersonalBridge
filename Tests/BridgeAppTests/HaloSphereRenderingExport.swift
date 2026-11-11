@@ -5,9 +5,9 @@ import Testing
 
 @testable import BridgeApp
 
-/// Rend la sphère du halo et l'anneau du volume seuls, hors écran, en planches : la bille à plusieurs
-/// instants de son cycle, ses allures, et l'anneau à plusieurs niveaux. C'est le seul moyen de juger le
-/// mouvement des reflets sans lancer l'app.
+/// Rend le centre du halo et l'anneau du volume seuls, hors écran, en planches : le disque à plusieurs
+/// instants de la diffusion, ses allures, des gros plans, et l'anneau à plusieurs niveaux. C'est le seul
+/// moyen de juger le mouvement du logo et des lueurs sans lancer l'app.
 ///
 /// Inerte tant que la variable d'environnement n'est pas posée.
 ///
@@ -25,6 +25,8 @@ struct HaloSphereExport {
         var decibels = -24.0
         var isMuted = false
         var diameter: CGFloat = 280
+        /// Un gros plan : le centre agrandi, rogné au cadre de la case.
+        var zoom: CGFloat = 1
     }
 
     private static func tile(_ cell: Cell, isLiveGround: Bool) -> some View {
@@ -41,7 +43,9 @@ struct HaloSphereExport {
                     isLive: cell.look == .live && cell.isAudible
                 )
             }
+            .scaleEffect(cell.zoom)
             .frame(width: 400, height: 400)
+            .clipped()
             Text(cell.label).font(.caption).foregroundStyle(.white.opacity(0.7))
         }
         .frame(width: 420, height: 430)
@@ -84,33 +88,35 @@ struct HaloSphereExport {
         .enabled(if: ProcessInfo.processInfo.environment["SPHERE_PNG_DIR"] != nil)
     )
     func renderSheets() throws {
-        // Un rendu hors écran ne repasse pas par la vue : les textures de la bille doivent être prêtes.
-        NovaGlassTextures.bakedNow()
         let path = try #require(ProcessInfo.processInfo.environment["SPHERE_PNG_DIR"])
         let directory = URL(fileURLWithPath: path)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try write(Color.clear, size: CGSize(width: 40, height: 40), to: directory.appending(path: ".amorce.png"))
 
-        let quarter = NovaGlassMotion.period / 4
+        // Quatre instants de la diffusion : le logo y est pris dans son mouvement, les lueurs dans leur
+        // dérive.
+        let instants: [TimeInterval] = [0.6, 2.1, 4.4, 7.9]
         try writeRow(
-            (0..<4).map { Cell(label: "cycle \($0)/4", time: quarter * Double($0)) },
-            name: "sphere-cycle", in: directory
-        )
-        // Les huitièmes de cycle, sphère inspirée : les instants entre deux quarts.
-        try writeRow(
-            (0..<4).map {
-                Cell(label: "cycle \(2 * $0 + 1)/8, inspirée", time: quarter * (Double($0) + 0.5) + 3.6)
-            },
-            name: "sphere-cycle-entre", in: directory
+            instants.map { Cell(label: "diffusion, t = \($0) s", time: $0) },
+            name: "centre-diffusion", in: directory
         )
         try writeRow(
             [
                 Cell(label: "repos", look: .resting, isAudible: false),
                 Cell(label: "session sans son (coupé)", isAudible: false, isMuted: true),
                 Cell(label: "démarrage", look: .resting, isAudible: false, glyph: .connecting),
-                Cell(label: "petite sphère 150", diameter: 150),
+                Cell(label: "petit disque 150", time: 2.1, diameter: 150),
             ],
-            name: "sphere-allures", in: directory
+            name: "centre-allures", in: directory
+        )
+        try writeRow(
+            [
+                Cell(label: "repos, gros plan", look: .resting, isAudible: false, zoom: 1.4),
+                Cell(label: "diffusion t = 2,1 s, gros plan", time: 2.1, zoom: 1.4),
+                Cell(label: "diffusion t = 4,4 s, gros plan", time: 4.4, zoom: 1.4),
+                Cell(label: "son coupé, gros plan", isAudible: false, isMuted: true, zoom: 1.4),
+            ],
+            name: "centre-gros-plans", in: directory
         )
         try writeRow(
             [

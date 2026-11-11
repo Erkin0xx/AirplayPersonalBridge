@@ -127,6 +127,35 @@ nonisolated enum BridgeGlyph {
         return path
     }
 
+    // MARK: - Les cinq barres, libres
+
+    /// Les hauteurs des cinq barres, de gauche à droite, dans les unités du cadre : ce qu'il faut pour les
+    /// faire onduler une à une, comme un égaliseur, au centre du halo. `Levels` ne règle que les
+    /// suspentes, et les deux latérales ensemble.
+    struct Bars: Equatable, Sendable {
+        var leftPylon: CGFloat = BridgeGlyph.pylonHeight
+        var left: CGFloat = BridgeGlyph.sideHeight
+        var center: CGFloat = BridgeGlyph.barWidth
+        var right: CGFloat = BridgeGlyph.sideHeight
+        var rightPylon: CGFloat = BridgeGlyph.pylonHeight
+
+        /// Le glyphe tel qu'il est dessiné partout ailleurs.
+        static let rest = Bars()
+    }
+
+    /// Les marques du pont à ces hauteurs, chacune centrée sur la ligne médiane. Au repos, c'est exactement
+    /// `marks(.idle)`.
+    static func marks(bars: Bars) -> CGPath {
+        let path = CGMutablePath()
+        // Les pylônes d'abord, comme `marks` : le même tracé, dans le même ordre.
+        addBar(to: path, x: barCenters[0], height: bars.leftPylon, width: barWidth)
+        addBar(to: path, x: barCenters[4], height: bars.rightPylon, width: barWidth)
+        addBar(to: path, x: barCenters[1], height: bars.left, width: barWidth)
+        addBar(to: path, x: barCenters[2], height: bars.center, width: barWidth)
+        addBar(to: path, x: barCenters[3], height: bars.right, width: barWidth)
+        return path
+    }
+
     // MARK: - La vague de la diffusion
 
     /// La grille de pixels d'un écran : un pixel par point, ou deux.
