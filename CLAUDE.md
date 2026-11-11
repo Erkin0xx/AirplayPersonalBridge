@@ -790,12 +790,20 @@ Relevés du 2026-11-03, implémentés et mesurés les 2026-11-09 et 10 : ADR `01
 - **Aucune image de Grainient dans le dépôt** : sa licence (`grainient.supply/license-agreement`, 2024-08-20) permet l'usage
   personnel mais interdit de redistribuer les fichiers, et le dépôt est sur GitHub. Les trois références (*shadeshifter-05*,
   *Nova*, *Darkshells*) sont reproduites par le code. Aucune n'a de grain visible : celui de l'app est un ajout.
-- **Sphère et anneau du Halo en verre Nova** (`Views/NovaGlass.swift`) : cinq textures `CGImage` cuites une fois (près de deux
-  millions de points), dessinées en `.plusLighter`, qui pivotent et glissent sur 50 s à 20 images/s. **La cuisson se fait hors du
-  fil principal** (`NovaGlassTextures.baked()`), la bille restant sombre et nue en attendant : cuites au premier dessin, elles
-  figeaient la fenêtre 1 s en debug et faisaient dépasser leurs plafonds aux tests de la fermeture. Un rendu hors écran appelle
-  `NovaGlassTextures.bakedNow()` avant de rendre. Le contraste du logo blanc reste ≥ 4,5:1 sur tout le cycle (test). Planches :
-  `SPHERE_PNG_DIR=<dossier> swift test --filter HaloSphereExport`.
+- **Centre du Halo : verre noir, triangle, logo vivant** (`Views/HaloSphere.swift`, maquette 17 retenue par Baptiste le
+  2026-11-11 ; la bille Nova rayée et `NovaGlass.swift` sont retirés, l'anneau du volume n'en dépendait pas). Au repos, un
+  disque « Darkshells » et un triangle lecture ; en diffusion, le logo du pont dont les cinq barres ondulent
+  (`HaloLogoMotion`, `BridgeGlyph.Bars` : courses disjointes, le profil du pont tient à tout instant) et trois lueurs floues qui
+  dérivent (`HaloGlass.lights`) ; son coupé, logo immobile et lueurs voilées, figées. **Tout est en dégradés vectoriels, rien
+  n'est cuit** : le verre immobile est dans deux `Canvas` qui ne se redessinent pas (`HaloGlassPlate`, `Equatable`), seuls les
+  lueurs et le logo suivent l'horloge, à 20 images/s, arrêtés fenêtre inactive ou sous « Réduire les animations ». Le disque ne
+  grossit plus : c'est la lueur autour qui respire. Contraste du logo blanc ≥ 4,5:1 à tout instant (test, 9:1 au pire).
+  Planches : `SPHERE_PNG_DIR=<dossier> swift test --filter HaloSphereExport`. **Leçon gardée de la bille Nova** : une texture
+  calculée point par point se cuit hors du fil principal, jamais au premier dessin (elle figeait la fenêtre 1 s en debug et
+  faisait dépasser leurs plafonds aux tests de la fermeture).
+- **`==` sur deux `CGPath` ne suffit pas à dire deux tracés identiques** : `BridgeGlyph.marks(.idle)`, assemblé par `addPath`,
+  et le même tracé construit barre par barre diffèrent au dernier bit de quelques flottants (cause non établie). Comparer
+  élément par élément, avec une tolérance (`HaloSphereTests.match`).
 - **Masquer est visuel** (`HiddenElements`, `BridgeState+Visibility`) : une enceinte masquée et cochée continue de jouer, et
   disparaît des trois vues et du panneau. Le geste vaut pour toute la paire stéréo. Trois blocs masquables (`WindowBlock`) :
   ondes du Halo, volume général, lieu d'écoute de la Console ; jamais l'état, les avertissements, la source, Diffuser ni le
