@@ -676,12 +676,12 @@ struct HaloEqualiser: View {
     let isMoving: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.appearsActive) private var appearsActive
+    @Environment(\.windowIsOnScreen) private var isOnScreen
 
     var body: some View {
         Group {
             if isMoving && !reduceMotion {
-                TimelineView(.animation(minimumInterval: 1 / 20, paused: !appearsActive)) { timeline in
+                TimelineView(.animation(minimumInterval: 1 / 20, paused: !isOnScreen)) { timeline in
                     canvas(at: timeline.date.timeIntervalSinceReferenceDate)
                 }
             } else {

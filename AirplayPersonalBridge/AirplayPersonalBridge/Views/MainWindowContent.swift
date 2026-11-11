@@ -15,6 +15,8 @@ struct MainWindowContent: View {
 
     var body: some View {
         ContentView(state: lifecycle.state)
+            // Ce qui bouge continue tant que la fenêtre se voit, premier plan ou non.
+            .tracksWindowVisibility()
             .background(WindowAttachmentObserver { lifecycle.mainWindowDidAttach($0) })
     }
 }

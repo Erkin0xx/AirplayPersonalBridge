@@ -333,8 +333,8 @@ struct HaloWaves: View {
     let isAudible: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Fenêtre à l'arrière-plan : les ondes s'arrêtent, personne ne les regarde.
-    @Environment(\.appearsActive) private var appearsActive
+    /// Fenêtre masquée ou réduite (pas seulement à l'arrière-plan) : les ondes s'arrêtent, personne ne les regarde.
+    @Environment(\.windowIsOnScreen) private var isOnScreen
     @State private var grids = HaloWaveGrids()
 
     /// L'image posée quand le mouvement est réduit : les quatre bandes bien réparties.
@@ -351,7 +351,7 @@ struct HaloWaves: View {
                     if reduceMotion {
                         frame(at: Self.stillTime, size: proxy.size)
                     } else {
-                        TimelineView(.animation(minimumInterval: Self.frameInterval, paused: !appearsActive)) {
+                        TimelineView(.animation(minimumInterval: Self.frameInterval, paused: !isOnScreen)) {
                             timeline in
                             frame(at: timeline.date.timeIntervalSinceReferenceDate, size: proxy.size)
                         }

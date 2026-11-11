@@ -113,8 +113,8 @@ extension OutputStatusTone {
 /// lentes pour ne pas passer pour un niveau.
 struct ConsoleLiveBars: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Fenêtre à l'arrière-plan : les barres s'arrêtent, personne ne les regarde.
-    @Environment(\.appearsActive) private var appearsActive
+    /// Fenêtre masquée ou réduite (pas seulement à l'arrière-plan) : les barres s'arrêtent, personne ne les regarde.
+    @Environment(\.windowIsOnScreen) private var isOnScreen
 
     static let barCount = 3
     static let minimumLevel = 0.35
@@ -138,7 +138,7 @@ struct ConsoleLiveBars: View {
             if reduceMotion {
                 bars(Self.restLevels)
             } else {
-                TimelineView(.animation(minimumInterval: 1 / 20, paused: !appearsActive)) { timeline in
+                TimelineView(.animation(minimumInterval: 1 / 20, paused: !isOnScreen)) { timeline in
                     bars(Self.levels(at: timeline.date.timeIntervalSinceReferenceDate))
                 }
             }

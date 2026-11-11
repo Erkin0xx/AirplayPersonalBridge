@@ -350,8 +350,8 @@ struct HaloSphere: View {
     var frozenTime: TimeInterval?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Fenêtre à l'arrière-plan : le centre s'arrête, personne ne le regarde.
-    @Environment(\.appearsActive) private var appearsActive
+    /// Fenêtre masquée ou réduite (pas seulement à l'arrière-plan) : le centre s'arrête, personne ne le regarde.
+    @Environment(\.windowIsOnScreen) private var isOnScreen
 
     /// L'instant posé quand rien ne bouge : expirée, les lueurs à leur place de dessin.
     static let stillTime = HaloGlass.stillTime
@@ -371,7 +371,7 @@ struct HaloSphere: View {
             if look == .live {
                 Group {
                     if isAnimated {
-                        TimelineView(.animation(minimumInterval: Self.frameInterval, paused: !appearsActive)) {
+                        TimelineView(.animation(minimumInterval: Self.frameInterval, paused: !isOnScreen)) {
                             lights(at: $0.date.timeIntervalSinceReferenceDate)
                         }
                         .transition(.opacity)
@@ -409,7 +409,7 @@ struct HaloSphere: View {
                 if reduceMotion {
                     bridge(BridgeGlyph.marks(.connecting))
                 } else {
-                    TimelineView(.animation(minimumInterval: 1 / 15, paused: !appearsActive)) { timeline in
+                    TimelineView(.animation(minimumInterval: 1 / 15, paused: !isOnScreen)) { timeline in
                         bridge(BridgeGlyph.marks(.connecting)).opacity(
                             0.55 + 0.45 * abs(sin(timeline.date.timeIntervalSinceReferenceDate * 2.4))
                         )
@@ -424,7 +424,7 @@ struct HaloSphere: View {
                     .frame(width: diameter, height: diameter)
                     .transition(.opacity)
             } else if isAnimated {
-                TimelineView(.animation(minimumInterval: Self.frameInterval, paused: !appearsActive)) { timeline in
+                TimelineView(.animation(minimumInterval: Self.frameInterval, paused: !isOnScreen)) { timeline in
                     logo(HaloLogoMotion.bars(at: timeline.date.timeIntervalSinceReferenceDate))
                 }
                 .transition(.opacity)

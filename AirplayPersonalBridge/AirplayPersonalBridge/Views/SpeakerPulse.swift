@@ -31,8 +31,8 @@ struct SpeakerPulse: View {
     let reach: Double
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Fenêtre à l'arrière-plan : l'onde s'arrête, personne ne la regarde.
-    @Environment(\.appearsActive) private var appearsActive
+    /// Fenêtre masquée ou réduite (pas seulement à l'arrière-plan) : l'onde s'arrête, personne ne la regarde.
+    @Environment(\.windowIsOnScreen) private var isOnScreen
 
     static let period: TimeInterval = 2.8
     static let ringCount = 3
@@ -46,7 +46,7 @@ struct SpeakerPulse: View {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         } else {
-            TimelineView(.animation(minimumInterval: 1 / 30, paused: !appearsActive)) { timeline in
+            TimelineView(.animation(minimumInterval: 1 / 30, paused: !isOnScreen)) { timeline in
                 Canvas { context, _ in
                     draw(Self.rings(at: timeline.date.timeIntervalSinceReferenceDate), in: &context)
                 }

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import BridgeApp
@@ -183,5 +184,14 @@ struct SystemWindowButtonsTests {
         defer { NotificationCenter.default.removeObserver(observer) }
         WindowControl.close.perform(on: window, optionHeld: false)
         #expect(closed.isSet)
+    }
+
+    @Test("Ce qui bouge continue tant que la fenêtre se voit, même sans le premier plan")
+    func motionFollowsVisibilityNotFocus() {
+        #expect(WindowVisibility.isOnScreen([.visible]))
+        // Réduite, recouverte, sur un autre bureau : `occlusionState` perd `.visible`.
+        #expect(!WindowVisibility.isOnScreen([]))
+        // Hors de la fenêtre principale (aperçu, rendu d'essai), rien ne se fige.
+        #expect(EnvironmentValues().windowIsOnScreen)
     }
 }

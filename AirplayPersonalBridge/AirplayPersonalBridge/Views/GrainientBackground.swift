@@ -350,8 +350,8 @@ struct GrainientBackground: View {
     var isLive: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Fenêtre à l'arrière-plan : le fond se fige, personne ne le regarde.
-    @Environment(\.appearsActive) private var appearsActive
+    /// Fenêtre masquée ou réduite (pas seulement à l'arrière-plan) : le fond se fige, personne ne le regarde.
+    @Environment(\.windowIsOnScreen) private var isOnScreen
     @State private var stills = GrainientStills()
     @State private var motion: GrainientMotion?
 
@@ -370,7 +370,7 @@ struct GrainientBackground: View {
                 still(aspect: aspect, gain: GrainientField.liveGain)
                     .opacity(isLive ? 1 : 0)
                 if animates, let motion {
-                    GrainientMotionLayer(motion: motion, isPaused: !appearsActive)
+                    GrainientMotionLayer(motion: motion, isPaused: !isOnScreen)
                         .transition(.opacity)
                     // Au repos, le même mouvement, assombri : un voile plutôt qu'un second jeu d'images-clés.
                     BridgeTheme.ground.opacity(isLive ? 0 : GrainientField.restVeil)

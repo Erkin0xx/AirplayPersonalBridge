@@ -94,7 +94,7 @@ struct SpeakerCard: View {
     var hide: (() -> Void)?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.appearsActive) private var appearsActive
+    @Environment(\.windowIsOnScreen) private var isOnScreen
     @Environment(\.revealsHoverControls) private var revealsHoverControls
     @State private var isHovering = false
     @State private var isAdjusting = false
@@ -237,7 +237,7 @@ struct SpeakerCard: View {
             Image(systemName: "waveform")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(Color.white)
-                .symbolEffect(.variableColor.iterative, isActive: !reduceMotion && appearsActive)
+                .symbolEffect(.variableColor.iterative, isActive: !reduceMotion && isOnScreen)
                 .accessibilityHidden(true)
         case .idle, .streaming:
             EmptyView()
