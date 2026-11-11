@@ -314,4 +314,20 @@ struct WindowSizingTests {
         #expect(nearEnd.target(forward: false) == 650 - 300 * ScrollEdges.pageShare)
         #expect(ScrollEdges(offset: 0, viewport: 400, content: 300).target(forward: true) == 0)
     }
+
+    @Test("Console étroite : trois enceintes se resserrent pour tenir, quatre défilent à pleine largeur")
+    func consoleTilesNarrowOnlyWhenItHelps() {
+        let narrow = ConsoleLayout.make(size: CGSize(width: 440, height: 400), speakerCount: 3)
+        #expect(!narrow.scrolls)
+        #expect(narrow.tileWidth < ConsoleMetrics.speakerWidth)
+        #expect(narrow.tileWidth >= ConsoleLayout.narrowestTile)
+        // Quatre ne tiendraient pas même resserrées : la rangée défile, les tuiles restent pleines.
+        let crowded = ConsoleLayout.make(size: CGSize(width: 440, height: 400), speakerCount: 4)
+        #expect(crowded.scrolls)
+        #expect(crowded.tileWidth == ConsoleMetrics.speakerWidth)
+        // Dans une grande fenêtre, rien ne change.
+        let roomy = ConsoleLayout.make(size: CGSize(width: 1200, height: 760), speakerCount: 4)
+        #expect(roomy.tileWidth == ConsoleMetrics.speakerWidth)
+        #expect(!roomy.scrolls)
+    }
 }

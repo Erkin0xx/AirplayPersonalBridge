@@ -153,7 +153,7 @@ struct ConsoleViewTests {
         #expect(layout.columnWidth == max(layout.rowWidth, ConsoleLayout.minimumColumnWidth))
     }
 
-    @Test("Chaque enceinte ajoute une tuile et son intervalle ; la rangée défile quand elle déborde")
+    @Test("Chaque enceinte ajoute une tuile et son intervalle ; la rangée ne défile que si elle déborde même resserrée")
     func rowGrowsAndScrolls() {
         var count = 1
         while count <= 8 {
@@ -165,12 +165,17 @@ struct ConsoleViewTests {
                 )
             }
             let layout = ConsoleLayout.make(size: minimum, speakerCount: count)
-            #expect(layout.scrolls == (width > minimum.width - 2 * ConsoleMetrics.margin))
+            // Les tuiles se resserrent d'abord (`narrowestTile`) ; la rangée ne défile qu'au-delà.
+            let narrowest = ConsoleLayout.rowWidth(speakerCount: count, tileWidth: ConsoleLayout.narrowestTile)
+            #expect(layout.scrolls == (narrowest > minimum.width - 2 * ConsoleMetrics.margin))
+            if !layout.scrolls { #expect(layout.rowWidth <= minimum.width - 2 * ConsoleMetrics.margin + 0.5) }
+            _ = width
             // L'en-tête ne déborde jamais de la fenêtre, que la rangée défile ou non.
             #expect(layout.columnWidth <= minimum.width - 2 * ConsoleMetrics.margin)
             count += 1
         }
-        #expect(ConsoleLayout.make(size: minimum, speakerCount: 6).scrolls)
+        #expect(!ConsoleLayout.make(size: minimum, speakerCount: 6).scrolls)
+        #expect(ConsoleLayout.make(size: minimum, speakerCount: 8).scrolls)
         #expect(!ConsoleLayout.make(size: CGSize(width: 1400, height: 848), speakerCount: 6).scrolls)
     }
 

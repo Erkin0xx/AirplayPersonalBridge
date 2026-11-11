@@ -25,6 +25,8 @@ struct ConsoleSpeakerTile: View {
     /// passe entre les deux boutons, et le curseur garde toute la hauteur qui reste.
     var isCompact = false
     /// Le clic sur l'en-tête : `BridgeState.toggleEnabled(_:)`, qui emmène la paire stéréo.
+    /// La largeur de la tuile, resserrée dans une fenêtre étroite (`ConsoleLayout.tileWidth`).
+    var width: CGFloat = ConsoleMetrics.speakerWidth
     var toggle: () -> Void
     /// « Masquer » : au clic droit, et par l'œil barré qui apparaît au survol. Emmène la paire stéréo.
     var hide: (() -> Void)?
@@ -34,8 +36,16 @@ struct ConsoleSpeakerTile: View {
     @State private var isHovering = false
     @State private var showsSettings = false
 
+    /// Tuile resserrée : moins de marge, une pastille plus petite, un nom sur une ligne, pas de ligne de paire.
+    private var isNarrow: Bool { width < 150 }
+
+    /// L'œil « masquer » est affiché : le nom lui laisse sa place au lieu de passer dessous.
+    private var showsHide: Bool { hide != nil && (isHovering || revealsHoverControls) }
+
     private var caption: (text: String, tone: OutputStatusTone) {
-        ConsoleTileCaption.make(
+        // Gardée dans la liste alors que le réseau ne la voit plus : elle est éteinte, pas « AirPlay 1 ».
+        if output.presence == .offline, !output.isEnabled { return ("Éteinte", .muted) }
+        return ConsoleTileCaption.make(
             connection: output.connection, isEnabled: output.isEnabled, isMuted: output.isMuted,
             proto: output.proto.rawValue, statusLine: output.statusLine
         )
@@ -56,8 +66,8 @@ struct ConsoleSpeakerTile: View {
                 buttons
             }
         }
-        .padding(isCompact ? 12 : ConsoleMetrics.tilePadding)
-        .frame(width: ConsoleMetrics.speakerWidth)
+        .padding(isNarrow ? 9 : (isCompact ? 12 : ConsoleMetrics.tilePadding))
+        .frame(width: width)
         .frame(maxHeight: .infinity)
         .modifier(ConsoleTileSurface(isHeldBack: output.consoleIsHeldBack))
         // Dans le coin, par-dessus : la tuile ne change pas de forme au survol, et celle d'une enceinte en
@@ -98,16 +108,17 @@ struct ConsoleSpeakerTile: View {
         } label: {
             // Tout part du haut : les noms sont sur la même ligne d'une tuile à l'autre, qu'elle en ait
             // deux ou trois.
-            HStack(alignment: .top, spacing: isCompact ? 8 : 10) {
+            HStack(alignment: .top, spacing: isNarrow ? 6 : (isCompact ? 8 : 10)) {
                 badge
                 VStack(alignment: .leading, spacing: 1) {
                     // Sans paire à nommer, la troisième ligne revient au nom : « Apple TV Salon » y tient.
                     Text(output.displayName)
                         .font(.system(size: isCompact ? 13.5 : 15, weight: .semibold))
                         .foregroundStyle(output.consoleIsHeldBack || !output.isEnabled ? .secondary : .primary)
-                        .lineLimit(pair == nil && !isCompact ? 2 : 1)
+                        .lineLimit(pair == nil && !isCompact && !isNarrow ? 2 : 1)
                         .minimumScaleFactor(0.85)
                         .truncationMode(.tail)
+                        .padding(.trailing, showsHide ? 22 : 0)
                     HStack(spacing: 4) {
                         indicator
                         Text(caption.text)
@@ -115,7 +126,7 @@ struct ConsoleSpeakerTile: View {
                     }
                     .font(.system(size: isCompact ? 11.5 : 12.5))
                     .lineLimit(1)
-                    if let pair, !isCompact {
+                    if let pair, !isCompact, !isNarrow {
                         Label(pair, systemImage: "link")
                             .labelStyle(ConsolePairLabelStyle())
                             .font(.system(size: 11))
@@ -152,18 +163,20 @@ struct ConsoleSpeakerTile: View {
     }
 
     /// Blanche quand elle est cochée, comme les pastilles du halo : la couleur reste au curseur.
+    private var badgeDiameter: CGFloat {
+        if isNarrow { return 28 }
+        return isCompact ? ConsoleMetrics.compactBadge : ConsoleMetrics.badge
+    }
+
     private var badge: some View {
         Image(
             systemName: SpeakerSymbol.name(
                 displayName: output.displayName, proto: output.proto, unavailability: output.unavailability
             )
         )
-        .font(.system(size: isCompact ? 14 : 17, weight: .medium))
+        .font(.system(size: isNarrow ? 13 : (isCompact ? 14 : 17), weight: .medium))
         .foregroundStyle(output.isEnabled ? Color.black.opacity(0.82) : Color.white.opacity(0.7))
-        .frame(
-            width: isCompact ? ConsoleMetrics.compactBadge : ConsoleMetrics.badge,
-            height: isCompact ? ConsoleMetrics.compactBadge : ConsoleMetrics.badge
-        )
+        .frame(width: badgeDiameter, height: badgeDiameter)
         .background(output.isEnabled ? Color.white : Color.white.opacity(0.12), in: Circle())
         // Retenue mais absente du réseau, ou en attente d'une intervention : elle ne peut pas jouer, et
         // la pastille ne doit pas affirmer le contraire.

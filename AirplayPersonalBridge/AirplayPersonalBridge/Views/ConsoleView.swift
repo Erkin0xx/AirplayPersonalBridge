@@ -12,6 +12,9 @@ struct ConsoleLayout: Equatable {
     /// La largeur de l'en-tête, des alertes et du pied : celle de la rangée quand elle tient, pour que
     /// le titre parte du bord de la première tuile et la commande s'arrête à celui de la dernière.
     var columnWidth: CGFloat
+    /// La largeur d'une tuile d'enceinte : pleine quand la rangée tient, resserrée dans une fenêtre étroite
+    /// pour que toutes les enceintes restent visibles avant de devoir défiler.
+    var tileWidth: CGFloat = ConsoleMetrics.speakerWidth
     /// La rangée dépasse : elle défile, d'un bord de la fenêtre à l'autre.
     var scrolls: Bool
     /// Le plafond de la hauteur des tuiles : un curseur n'a pas à faire toute la hauteur d'un grand écran.
@@ -47,15 +50,18 @@ struct ConsoleLayout: Equatable {
 
     /// - Parameter speakerCount: les tuiles d'enceintes ; à zéro, une tuile d'attente les remplace.
     static func make(size: CGSize, speakerCount: Int) -> ConsoleLayout {
-        let rowWidth = rowWidth(speakerCount: speakerCount)
         let margin = size.width < narrowWidth ? narrowMargin : ConsoleMetrics.margin
         let available = max(size.width - 2 * margin, 0)
+        let tileWidth = tileWidth(speakerCount: speakerCount, available: available)
+        let rowWidth = rowWidth(speakerCount: speakerCount, tileWidth: tileWidth)
         let isCompact = size.height < roomyHeight
         let tileRoom = size.height - compactChromeHeight
         return ConsoleLayout(
             rowWidth: rowWidth,
             columnWidth: min(available, max(rowWidth, minimumColumnWidth)),
-            scrolls: rowWidth > available,
+            tileWidth: tileWidth,
+            // Un demi-point de marge : la largeur resserrée est une division.
+            scrolls: rowWidth > available + 0.5,
             maxTileHeight: isCompact
                 ? min(max(tileRoom, smallestTileHeight), tileHeightCeiling)
                 : min(max(size.height * 0.66, minimumTileHeight), tileHeightCeiling),
@@ -63,10 +69,23 @@ struct ConsoleLayout: Equatable {
         )
     }
 
-    static func rowWidth(speakerCount: Int) -> CGFloat {
+    static func rowWidth(speakerCount: Int, tileWidth: CGFloat = ConsoleMetrics.speakerWidth) -> CGFloat {
         let count = max(speakerCount, 0)
         guard count > 0 else { return ConsoleMetrics.placeholderWidth }
-        return CGFloat(count) * ConsoleMetrics.speakerWidth + CGFloat(count - 1) * ConsoleMetrics.tileSpacing
+        return CGFloat(count) * tileWidth + CGFloat(count - 1) * ConsoleMetrics.tileSpacing
+    }
+
+    /// La tuile la plus étroite : son curseur de 72 points et ses deux boutons y tiennent encore.
+    static let narrowestTile: CGFloat = 122
+
+    /// La largeur d'une tuile pour que la rangée tienne dans la place : pleine si possible, resserrée
+    /// jusqu'à `narrowestTile` si cela suffit à tout montrer. Sinon la rangée défile, et autant garder des
+    /// tuiles pleines : les resserrer sans éviter le défilement ne ferait que tronquer leurs textes.
+    static func tileWidth(speakerCount: Int, available: CGFloat) -> CGFloat {
+        let count = CGFloat(max(speakerCount, 1))
+        let fitting = (available - (count - 1) * ConsoleMetrics.tileSpacing) / count
+        guard fitting >= narrowestTile else { return ConsoleMetrics.speakerWidth }
+        return min(fitting, ConsoleMetrics.speakerWidth)
     }
 }
 
@@ -162,7 +181,7 @@ struct ConsoleView: View {
                                 listeningPlaceName: state.listeningPlaceName,
                                 stereoPartnerNames: state.stereoPartners(of: output).map(\.displayName),
                                 isAudible: state.captureAlert == nil && !state.isMuted,
-                                isCompact: layout.compactTiles,
+                                isCompact: layout.compactTiles, width: layout.tileWidth,
                                 toggle: { state.toggleEnabled(output) },
                                 hide: {
                                     withAnimation(PanelMotion.standard(reduceMotion: reduceMotion)) {
