@@ -178,7 +178,18 @@ fi
 # sous le même identifiant de bundle embrouillerait `open -b` et les réglages système.
 if [ "$DESTINATION" = "$DEFAULT_DESTINATION" ]; then
   log "Enregistrement auprès de LaunchServices..."
-  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_DEST"
+  LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+  # `ditto` puis `mv` gardent la date du dossier de compilation : le bundle installé portait celle
+  # du 1er novembre à chaque réinstallation, et le Dock comme Spotlight gardaient l'icône de leur
+  # cache, une ancienne icône générique blanche. Le dater du jour les oblige à la relire.
+  touch "$APP_DEST"
+  "$LSREGISTER" -f "$APP_DEST"
+  # Même identifiant de bundle que l'app installée : la copie de compilation et la copie préparée
+  # (déjà déplacée, mais enregistrée d'office parce qu'elle était sous /Applications) ne doivent
+  # pas lui disputer l'icône ni `open -b`.
+  "$LSREGISTER" -u "$BUILT_APP" 2>/dev/null || true
+  "$LSREGISTER" -u "$STAGED_APP" 2>/dev/null || true
+  mdimport "$APP_DEST" 2>/dev/null || true
 else
   log "Destination d'essai : LaunchServices n'est pas sollicité."
 fi
