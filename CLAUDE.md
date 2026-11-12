@@ -891,6 +891,10 @@ scripts/install-app.sh --open  # compile en Release, signe, remplace l'app dans 
   Automation (-1744). Arrêt propre borné à 5 s (`QuitSequence`) : `TEARDOWN` et capture, puis sortie, volume et silence du Mac
   rendus, puis `sudo -n killall coreaudiod` (règle `/etc/sudoers.d/airplay-bridge` posée par `install-driver.sh`), 1 s au plus.
   **Chaque réinstallation coupe donc le son du Mac une à deux secondes.** Sans la règle : une ligne OSLog, et l'app quitte.
+- **Icône vieille dans le Dock ou Spotlight, juste dans le Finder** : caches d'icône périmés, pas l'icône. `ditto` + `mv` gardaient
+  la date du bundle d'une installation à l'autre ; `install-app.sh` le date du jour et retire de Launch Services ses autres copies
+  (même identifiant). Déjà installé : `touch` du bundle, `lsregister -f`, mettre de côté `$(getconf DARWIN_USER_CACHE_DIR)com.apple.dock.iconcache`,
+  `killall Dock`. Vérifier le rendu système avec `NSWorkspace.icon(forFile:)` avant de toucher aux PNG.
 - **OpenSSL est lié en statique** (`libcrypto.a`) : plus de référence à `/opt/homebrew` à l'exécution, mais toujours requis à
   la compilation. Le lien exige de renommer `poly1305_init` dans `CChachaPoly`, seul symbole en conflit.
 
