@@ -780,12 +780,13 @@ Relevés du 2026-11-03, implémentés et mesurés les 2026-11-09 et 10 : ADR `01
 - **Le fond se dessine à un seul endroit**, `Views/GrainientBackground.swift` (style *shadeshifter-05* de Grainient dans la
   palette de l'app : rampe en bandes obliques, nappe bleue en bas à droite, assombrie à 0,39 en diffusion et 0,085 au repos,
   grain fixe de 256 px). **Animé par Core Animation, pas par SwiftUI** : 120 images-clés de 160×100 calculées une fois par
-  proportions de fenêtre, hors du MainActor, enchaînées par une `CAKeyframeAnimation` sur `contents` (cycle de 36 s). L'app ne
-  se réveille pas pendant le mouvement. Une image fixe de la même recette vit sous le calque : c'est elle que montrent le
-  repos, « Réduire les animations » et les rendus hors écran.
+  proportions de fenêtre, hors du MainActor, enchaînées par une `CAKeyframeAnimation` sur `contents` (cycle de 64 s). L'app ne
+  se réveille pas pendant le mouvement. **Il bouge tout le temps, au repos comme en diffusion** (Baptiste, 2026-11-11) : au
+  repos, les mêmes images-clés sous un voile sombre (`restVeil`) ; c'est la couleur qui dit « ça joue ». Une image fixe de la
+  même recette vit sous le calque : c'est elle que montrent « Réduire les animations » et les rendus hors écran.
 - **Un mouvement réglé sans le voir est trop faible** : le premier réglage (54 s, ondulation de 3,5 % de la largeur, ~10 pt/s)
   tournait bien, mais Baptiste voyait « une texture fixe ». Réglage vu depuis : ondulation de 9 %, pente des bandes qui varie,
-  nappe qui dérive et respire, ~48 pt/s au plus, 14 pt au plus entre deux images-clés à 1200 pt de large. Sonde dans une vraie
+  nappe qui dérive et respire, à 36 s d'abord (~48 pt/s au plus), puis 64 s à sa demande (« plus doucement »), 14 pt au plus entre deux images-clés à 1200 pt de large. Sonde dans une vraie
   fenêtre : `swift run BackgroundMotionProbe [court]`. **Elle affiche une petite fenêtre et prend le premier plan** : pas
   quand Baptiste travaille. `swift test` ne peut pas devenir l'app active, le fond y reste en pause. Coût du process mesuré
   par `BACKGROUND_CPU_PROBE=30 swift test -c release --filter GrainientBackgroundCPUProbe` sur l'ancien réglage : égal à
@@ -825,6 +826,19 @@ Relevés du 2026-11-03, implémentés et mesurés les 2026-11-09 et 10 : ADR `01
   rangée défilante puis compactes, tuiles de la Console défilantes, lieu d'écoute replié en bouton, panneau des enceintes du
   Plan replié en barre et rouvert en surimpression. Rendus à toutes les tailles :
   `WINDOW_PNG_DIR=<dossier> swift test --filter SmallWindowExport`.
+- **Ce qui bouge suit « la fenêtre se voit », pas « l'app est au premier plan »** (`Views/WindowVisibility.swift`,
+  `\.windowIsOnScreen`, tiré de `NSWindow.occlusionState`) : Baptiste garde la fenêtre à côté de son travail et veut la voir
+  vivre. `appearsActive` figeait tout dès qu'une autre app passait devant. Le mouvement s'arrête fenêtre réduite, recouverte,
+  sur un autre bureau, app masquée. Le panneau de la barre de menus garde `appearsActive`.
+- **Une enceinte dont on se sert garde sa place quand elle est éteinte, en grisé** (`keepsPlace` : cochée, cochée un jour
+  — `wasUsed`, persisté —, ou réglée). Les réglages comptent pour les fichiers d'avant `wasUsed` : la Geneva y a ses basses.
+  Une enceinte seulement aperçue (télé, autre Mac) quitte la liste en s'éteignant. Pour s'en débarrasser : Masquer.
+- **Pas de rose sur une commande, dans le panneau non plus** : `PanelPalette.engaged` (blanc en sombre, presque noir en
+  clair) et `onEngaged` pour l'icône. Seule la pastille d'état garde l'accent. L'anneau de focus du volume du Halo est blanc,
+  et n'apparaît qu'après une flèche du clavier : la fenêtre lui donnait le focus à l'ouverture, d'où un cercle rose permanent.
+- **Console étroite** : les tuiles se resserrent jusqu'à 122 pt (`ConsoleLayout.tileWidth`) seulement si cela suffit à
+  montrer toutes les enceintes ; sinon la rangée défile à pleine largeur. Resserrer sans éviter le défilement tronquait
+  seulement les textes.
 - **Masquer est visuel** (`HiddenElements`, `BridgeState+Visibility`) : une enceinte masquée et cochée continue de jouer, et
   disparaît des trois vues et du panneau. Le geste vaut pour toute la paire stéréo. Trois blocs masquables (`WindowBlock`) :
   ondes du Halo, volume général, lieu d'écoute de la Console ; jamais l'état, les avertissements, la source, Diffuser ni le

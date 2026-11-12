@@ -1341,3 +1341,21 @@ Baptiste a installé la première passe et l'a jugée dans l'app. Ses retours, e
 440×400, les étiquettes du plan se chevauchent ; le coût CPU fenêtre visible n'est toujours pas mesuré (fond à 24 images/s
 demandées au serveur de rendu, ondes et centre à 20 images/s).
 
+### Après la clôture : retours à l'usage sur la fenêtre (2026-11-11 au 13)
+
+Baptiste se sert de l'app installée et corrige à mesure. **Tout ce qui suit est installé** ; la preuve est le test et le
+rendu, puis son regard dans l'app, noté quand il l'a dit.
+
+| Retour de Baptiste | Ce qui est fait | Preuve |
+|---|---|---|
+| « Enlève le contour rose » | C'était l'anneau de focus clavier du volume du Halo, affiché dès l'ouverture. Blanc, et seulement après une flèche du clavier | lecture du code, capture de Baptiste |
+| « Que le fond soit tout le temps animé, et plus doucement » | Animé au repos aussi (voile sombre sur les mêmes images-clés), cycle de 64 s au lieu de 36 | test |
+| « Que la Geneva soit affichée même éteinte, en grisé » | `keepsPlace` : une enceinte cochée, cochée un jour ou réglée garde sa place hors ligne | test (4) ; **vu** : sa capture du 13 la montre grisée, « Hors ligne », dans le Halo et la Console |
+| « Dans la menu bar, enlève le rose, remets en blanc les icônes » | Pastilles, coches, silences et Diffuser en blanc ; seule la pastille d'état reste rose | rendu du panneau |
+| « Quand l'app n'est pas au premier plan ça ne bouge pas, j'aimerais que si » | Les animations suivent la visibilité de la fenêtre (`occlusionState`), plus le premier plan | test de la règle ; **non vu** |
+| « Vue buggée réduite » (Console) | Tuiles resserrées pour tenir, nom dégagé sous l'œil « masquer », « Éteinte » au lieu de « AirPlay 1 » | test, rendu à 600×480 et 440×400 ; son cas exact (Geneva éteinte + paire à 440) n'est pas rendu |
+| Un widget à la taille de son horloge, lecture à gauche, trois enceintes à droite | Quatre maquettes demandées sur le canevas ; rien de codé | — |
+
+**Tests** : 1 176 tests verts. **Ouvert** : le widget (WidgetKit n'a pas de curseur : ce sera une petite fenêtre flottante
+de l'app) ; coût CPU fenêtre visible, maintenant que tout bouge en permanence, toujours pas mesuré.
+
