@@ -6,6 +6,16 @@
 import AppKit
 import AudioCore
 import Foundation
+import OSLog
+
+private let lifecycleLog = Logger(subsystem: AudioLog.subsystem, category: "lifecycle")
+
+/// Ce que seule une vue d'une scène SwiftUI sait faire, et dont l'app a besoin hors de toute scène : le
+/// widget, qui vit dans un `NSPanel`, rouvre la fenêtre principale par là. Relevé par la première vue de
+/// scène qui apparaît (`capturesSceneActions`).
+struct SceneActions {
+    var openMainWindow: () -> Void
+}
 
 /// Identifiant de la fenêtre unique de l'app, partagé entre la scène et le panneau qui la rouvre.
 enum MainWindow {
@@ -39,6 +49,10 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
     let state: BridgeState
     let loginItem: LoginItemController
     let dock: DockIconController
+    /// Le widget, s'il a une fenêtre : `nil` pour les tests qui n'en donnent pas.
+    let widget: WidgetController?
+    /// Les actions des scènes, dès qu'une vue les a relevées.
+    var sceneActions: SceneActions?
     private let coreAudio: any CoreAudioRestarting
     private let quitBudget: QuitSequence.Budget
 
@@ -52,23 +66,32 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
 
     /// Celle qu'emploie `@NSApplicationDelegateAdaptor`, seule à relancer le vrai coreaudiod.
     override convenience init() {
+        let state = BridgeState(environment: .live)
+        let widgetWindow = LiveWidgetWindow(state: state)
         self.init(
-            state: BridgeState(environment: .live),
+            state: state,
             loginItem: LoginItemController(),
             dock: DockIconController(),
-            coreAudio: LiveCoreAudioRestarter(command: .killCoreAudio)
+            coreAudio: LiveCoreAudioRestarter(command: .killCoreAudio),
+            widgetWindow: widgetWindow
         )
+        widgetWindow.openMainWindow = { [weak self] in self?.showMainWindowFromWidget() }
     }
 
-    /// - Parameter coreAudio: sans valeur par défaut, pour qu'aucun test ne relance coreaudiod par
-    ///   mégarde : chacun passe une doublure.
+    /// - Parameters:
+    ///   - coreAudio: sans valeur par défaut, pour qu'aucun test ne relance coreaudiod par mégarde :
+    ///     chacun passe une doublure.
+    ///   - widgetWindow: la fenêtre du widget. Sans elle, pas de widget : aucun test n'en montre un par
+    ///     mégarde.
     init(
         state: BridgeState, loginItem: LoginItemController, dock: DockIconController,
-        coreAudio: any CoreAudioRestarting, quitBudget: QuitSequence.Budget = AppLifecycle.quitBudget
+        coreAudio: any CoreAudioRestarting, quitBudget: QuitSequence.Budget = AppLifecycle.quitBudget,
+        widgetWindow: (any WidgetWindowing)? = nil
     ) {
         self.state = state
         self.loginItem = loginItem
         self.dock = dock
+        self.widget = widgetWindow.map { WidgetController(state: state, window: $0) }
         self.coreAudio = coreAudio
         self.quitBudget = quitBudget
         super.init()
@@ -83,6 +106,9 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
         observePower()
         // Ici et non dans une vue : à l'ouverture de session, aucune n'apparaît.
         state.startBackgroundWork()
+        // Le widget se rouvre s'il était affiché, ouverture de session comprise : il ne prend ni le
+        // premier plan ni l'icône du Dock.
+        widget?.start()
     }
 
     func noteLaunch(asLoginItem: Bool) {
@@ -185,6 +211,17 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
         guard let mainWindow else { return }
         if mainWindow.isMiniaturized { mainWindow.deminiaturize(nil) }
         if mainWindow.isVisible { bringToFront(mainWindow) }
+    }
+
+    /// « Ouvrir la fenêtre… » du menu du widget. Le widget vit hors de toute scène : il passe par l'action
+    /// qu'une vue de scène a relevée. Aucune n'est encore apparue : rien à ouvrir par ce chemin, et la
+    /// barre de menus reste là.
+    func showMainWindowFromWidget() {
+        guard let sceneActions else {
+            lifecycleLog.error("Fenêtre demandée par le widget avant qu'une scène ait donné son action")
+            return
+        }
+        showMainWindow(using: sceneActions.openMainWindow)
     }
 
     // MARK: - Fenêtre des réglages

@@ -53,6 +53,7 @@ struct MenuBarPanel: View {
             ),
             panelOpenings: openings
         )
+        .capturesSceneActions(for: lifecycle)
         .background(
             PanelOpenObserver {
                 lifecycle.panelDidOpen()
@@ -620,6 +621,8 @@ struct MenuBarPanelContent: View {
     private var footer: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button("Ouvrir la fenêtre…", action: actions.openMainWindow)
+            // Le widget : la petite fenêtre qui reste au-dessus des autres (`WidgetView`).
+            Button(WidgetCopy.toggleTitle(isShown: state.widget.isShown)) { state.widget.isShown.toggle() }
             // La fenêtre Réglages de l'app (⌘,) : la vue, et ce qui est masqué.
             Button(action: actions.openSettings) {
                 HStack(spacing: 6) {

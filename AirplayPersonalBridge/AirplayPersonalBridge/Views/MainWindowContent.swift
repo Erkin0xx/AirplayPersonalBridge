@@ -18,6 +18,26 @@ struct MainWindowContent: View {
             // Ce qui bouge continue tant que la fenêtre se voit, premier plan ou non.
             .tracksWindowVisibility()
             .background(WindowAttachmentObserver { lifecycle.mainWindowDidAttach($0) })
+            .capturesSceneActions(for: lifecycle)
+    }
+}
+
+extension View {
+    /// Donne à l'app les actions que seule une vue de scène obtient (`SceneActions`). À poser sur une vue
+    /// de chaque scène qui peut apparaître la première.
+    func capturesSceneActions(for lifecycle: AppLifecycle) -> some View {
+        modifier(SceneActionsCapture(lifecycle: lifecycle))
+    }
+}
+
+private struct SceneActionsCapture: ViewModifier {
+    let lifecycle: AppLifecycle
+    @Environment(\.openWindow) private var openWindow
+
+    func body(content: Content) -> some View {
+        content.onAppear {
+            lifecycle.sceneActions = SceneActions(openMainWindow: { openWindow(id: MainWindow.id) })
+        }
     }
 }
 
