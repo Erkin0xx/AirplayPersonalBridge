@@ -78,6 +78,31 @@ nonisolated enum HaloRingGeometry {
 /// système est rétabli explicitement, comme pour `PanelVolumeSlider` : flèches du clavier, VoiceOver,
 /// anneau de focus. La valeur reste linéaire en dB, comme les autres commandes du volume général : elles
 /// bougent ensemble.
+/// Les mesures de l'anneau : celles de la vue Halo par défaut, plus fines pour le widget, où le même anneau
+/// entoure un disque de 96 pt.
+struct HaloRingMetrics: Equatable {
+    /// Un tube plutôt qu'un trait : il lui faut un peu d'épaisseur pour montrer son profil.
+    var lineWidth = HaloVolumeRing.lineWidth
+    var knobDiameter = HaloVolumeRing.knobDiameter
+    /// La demi-largeur de la bande qui répond à la souris.
+    var grabHalfWidth = HaloVolumeRing.grabHalfWidth
+    /// Ce que le carré de l'anneau garde autour du trait : la prise, le halo, l'anneau de focus.
+    var overhang = HaloMetrics.ringOverhang
+    /// Le halo froid de l'arc allumé.
+    var haloReach = HaloRingPaint.haloReach
+
+    /// La vue Halo de la fenêtre.
+    static let window = HaloRingMetrics()
+    /// Le widget : un trait de 3,5 pt, une prise de 13 pt, et une bande saisissable de 24 pt, qui s'arrête
+    /// à 2 pt du disque : un clic au bord du disque lance la diffusion, il ne règle pas le volume.
+    static let widget = HaloRingMetrics(
+        lineWidth: 3.5, knobDiameter: 13, grabHalfWidth: 12, overhang: 12, haloReach: 4
+    )
+
+    /// Le côté du carré qu'occupe l'anneau.
+    func side(forRadius radius: CGFloat) -> CGFloat { 2 * (radius + overhang) }
+}
+
 struct HaloVolumeRing: View {
     @Binding var decibels: Double
     @Binding var isMuted: Bool
@@ -89,6 +114,7 @@ struct HaloVolumeRing: View {
     var isLive = false
     /// Le niveau auquel le clic droit ramène.
     var defaultDecibels = BridgeState.defaultMasterVolumeDB
+    var metrics = HaloRingMetrics.window
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var isFocused: Bool
@@ -126,7 +152,7 @@ struct HaloVolumeRing: View {
     }
 
     var body: some View {
-        let side = Self.side(forRadius: radius)
+        let side = metrics.side(forRadius: radius)
         let center = CGPoint(x: side / 2, y: side / 2)
         let knob = HaloRingGeometry.point(forFraction: fraction, center: center, radius: Double(radius))
         let isActive = isHovering || course != nil
@@ -135,15 +161,20 @@ struct HaloVolumeRing: View {
             // La piste, et sous elle l'arc éteint : coupé, il reste où il était, c'est ce niveau-là que
             // le rétablissement rendra.
             Canvas { context, _ in
-                HaloRingPaint.drawTrack(in: &context, center: center, radius: radius, fraction: fraction)
+                HaloRingPaint.drawTrack(
+                    in: &context, center: center, radius: radius, fraction: fraction, lineWidth: metrics.lineWidth
+                )
             }
             // L'arc allumé, par-dessus : il s'efface au repos et s'éteint quand le son est coupé.
             Canvas { context, _ in
-                HaloRingPaint.drawLitArc(in: &context, center: center, radius: radius, fraction: fraction)
+                HaloRingPaint.drawLitArc(
+                    in: &context, center: center, radius: radius, fraction: fraction,
+                    lineWidth: metrics.lineWidth, haloReach: metrics.haloReach
+                )
             }
             .opacity(HaloRingPaint.litOpacity(isMuted: isMuted, isLive: isLive))
-            HaloRingKnob(isMuted: isMuted)
-                .frame(width: Self.knobDiameter, height: Self.knobDiameter)
+            HaloRingKnob(isMuted: isMuted, diameter: metrics.knobDiameter)
+                .frame(width: metrics.knobDiameter, height: metrics.knobDiameter)
                 .scaleEffect(isActive ? Self.knobGrowth : 1)
                 .position(knob)
             // L'anneau de focus du clavier, hors du trait.
@@ -155,7 +186,7 @@ struct HaloVolumeRing: View {
         .frame(width: side, height: side)
         // Seule la bande de l'anneau répond : le centre est à la sphère, qui est un bouton.
         .contentShape(
-            .interaction, HaloRingBand(radius: radius, halfWidth: Self.grabHalfWidth), eoFill: true
+            .interaction, HaloRingBand(radius: radius, halfWidth: metrics.grabHalfWidth), eoFill: true
         )
         .gesture(drag(center: center))
         .onHover { isHovering = $0 }
@@ -286,8 +317,10 @@ enum HaloRingPaint {
 
     /// La piste vide : un tube de verre noir, un peu translucide pour vivre sur le fond, et son liseré
     /// gris vers le bord intérieur. Par-dessus, l'arc éteint du niveau.
-    static func drawTrack(in context: inout GraphicsContext, center: CGPoint, radius: CGFloat, fraction: Double) {
-        let width = HaloVolumeRing.lineWidth
+    static func drawTrack(
+        in context: inout GraphicsContext, center: CGPoint, radius: CGFloat, fraction: Double,
+        lineWidth width: CGFloat = HaloVolumeRing.lineWidth
+    ) {
         let ring = circle(center: center, radius: radius)
         context.stroke(ring, with: .color(Color(.sRGB, red: 0.043, green: 0.043, blue: 0.047, opacity: 0.66)), lineWidth: width)
         // Un rien de clair partout : sur un fond presque noir, le tube se devinerait à peine.
@@ -312,9 +345,11 @@ enum HaloRingPaint {
 
     /// L'arc rempli : un tube blanc, plus clair en son milieu et bleuté sur ses bords, un trait
     /// spéculaire, et un halo froid très discret.
-    static func drawLitArc(in context: inout GraphicsContext, center: CGPoint, radius: CGFloat, fraction: Double) {
+    static func drawLitArc(
+        in context: inout GraphicsContext, center: CGPoint, radius: CGFloat, fraction: Double,
+        lineWidth width: CGFloat = HaloVolumeRing.lineWidth, haloReach: CGFloat = HaloRingPaint.haloReach
+    ) {
         guard fraction > 0 else { return }
-        let width = HaloVolumeRing.lineWidth
         let path = arc(center: center, radius: radius, to: fraction)
         let cool = Color(.sRGB, red: 0.412, green: 0.565, blue: 0.718)  // #6990B7
 
@@ -359,6 +394,7 @@ enum HaloRingPaint {
 /// La prise de l'anneau : une bille de verre blanc, avec son reflet et une ombre fine.
 private struct HaloRingKnob: View {
     let isMuted: Bool
+    var diameter = HaloVolumeRing.knobDiameter
 
     var body: some View {
         Circle()
@@ -367,7 +403,7 @@ private struct HaloRingKnob: View {
                     colors: isMuted
                         ? [Color(white: 0.84), Color(white: 0.66), Color(white: 0.5)]
                         : [.white, Color(.sRGB, red: 0.95, green: 0.97, blue: 0.985), Color(.sRGB, red: 0.74, green: 0.82, blue: 0.89)],
-                    center: UnitPoint(x: 0.36, y: 0.3), startRadius: 0, endRadius: HaloVolumeRing.knobDiameter * 0.78
+                    center: UnitPoint(x: 0.36, y: 0.3), startRadius: 0, endRadius: diameter * 0.78
                 )
             )
             .overlay {
@@ -384,9 +420,9 @@ private struct HaloRingKnob: View {
                 // Le reflet de la bille.
                 Ellipse()
                     .fill(Color.white.opacity(isMuted ? 0.35 : 0.95))
-                    .frame(width: HaloVolumeRing.knobDiameter * 0.3, height: HaloVolumeRing.knobDiameter * 0.2)
+                    .frame(width: diameter * 0.3, height: diameter * 0.2)
                     .rotationEffect(.degrees(-35))
-                    .offset(x: HaloVolumeRing.knobDiameter * 0.2, y: HaloVolumeRing.knobDiameter * 0.18)
+                    .offset(x: diameter * 0.2, y: diameter * 0.18)
             }
             .shadow(color: .black.opacity(0.45), radius: 3, y: 1)
     }

@@ -137,6 +137,13 @@ struct WindowOptionsButton: View {
                     .help("Vue de la fenêtre, enceintes et éléments masqués (⌘,)")
                     Button {
                         isPresented = false
+                        state.widget.isShown.toggle()
+                    } label: {
+                        Label(WidgetCopy.toggleTitle(isShown: state.widget.isShown), systemImage: WidgetSymbol.name)
+                    }
+                    .help("Une petite fenêtre qui reste au-dessus des autres : diffuser et régler les volumes")
+                    Button {
+                        isPresented = false
                         showDiagnostics()
                     } label: {
                         Label("Diagnostic…", systemImage: "waveform.path.ecg")

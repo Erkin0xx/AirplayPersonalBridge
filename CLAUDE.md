@@ -862,6 +862,14 @@ Relevés du 2026-11-03, implémentés et mesurés les 2026-11-09 et 10 : ADR `01
   `scratchpad/options-popup/probe/probe.swift` (non versionnée).
 - **Diffuser se déclenche par ⌘↩, jamais par `.defaultAction`** : Retour valide un champ de l'inspecteur, et cette validation ne
   doit pas faire partir le son.
+- **Widget** (2026-11-13) : 345 × 165 pt, deux styles (`WidgetStyle` : Halo, Bandeau), dans un `NSPanel` sans chrome et non
+  activant (`App/WidgetWindow.swift`), pas une scène SwiftUI ni WidgetKit. Les vues écrivent `state.widget`, `WidgetController`
+  fait suivre la fenêtre ; il ne touche pas à l'icône du Dock. Le fond se saisit par `WidgetBackdrop` (`performDrag`), jamais
+  par `isMovableByWindowBackground`, qui emporterait la fenêtre sous un curseur qu'on glisse. **Un `ScrollView` prend les clics
+  entre ses éléments** : la rangée des enceintes n'en est un qu'au-delà de trois (mutation vérifiée par `WidgetHitTests`). Hors
+  scène, pas d'`openWindow` : une vue de scène le relève (`capturesSceneActions`). Rendu :
+  `WINDOW_PNG_DIR=<dossier> swift test --filter WidgetExport`. **Jamais vu dans l'app** : flottement, déplacement, place
+  mémorisée et premier plan restent à juger par Baptiste.
 - **Écran verrouillé, ni capture ni fenêtre** : `screencapture` échoue (« could not create image from display »), et une app
   lancée par un agent n'ouvre aucune fenêtre visible ni ne devient active (sonde du 2026-11-10 : `screenLocked=1`). Le verre se
   juge par Baptiste, dans l'app.

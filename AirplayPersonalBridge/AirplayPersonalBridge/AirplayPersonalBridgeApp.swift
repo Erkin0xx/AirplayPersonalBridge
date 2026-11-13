@@ -39,7 +39,10 @@ struct AirplayPersonalBridgeApp: App {
         MenuBarExtra {
             MenuBarPanel(lifecycle: lifecycle)
         } label: {
+            // L'icône est la seule vue de scène présente à coup sûr dès le lancement : le widget, hors de
+            // toute scène, rouvre la fenêtre par l'action qu'elle relève.
             MenuBarLabel(state: lifecycle.state)
+                .capturesSceneActions(for: lifecycle)
         }
         .menuBarExtraStyle(.window)
     }

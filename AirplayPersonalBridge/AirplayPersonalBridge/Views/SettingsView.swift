@@ -19,7 +19,7 @@ struct SettingsView: View {
     /// fenêtre est ouverte, sinon l'interrupteur disparaîtrait sous le doigt, sans retour possible.
     @State private var reshown: [String: String] = [:]
 
-    static let size = CGSize(width: 500, height: 640)
+    static let size = CGSize(width: 500, height: 700)
 
     var body: some View {
         Form {
@@ -31,6 +31,25 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 .help("Trois mises en scène du même réglage : rien ne change dans ce qui joue.")
+            }
+
+            Section {
+                Toggle("Afficher le widget", isOn: $state.widget.isShown)
+                Picker("Style", selection: $state.widget.style) {
+                    ForEach(WidgetStyle.allCases) { style in
+                        Text(style.title).tag(style)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .help("Halo : le disque et l'anneau du volume. Bandeau : un bouton et de grandes pastilles.")
+                Toggle("Toujours au-dessus", isOn: $state.widget.floatsOnTop)
+            } header: {
+                Text("Widget")
+            } footer: {
+                Text(
+                    "Une petite fenêtre, sur tous les bureaux : diffuser, volume général, volume de chaque "
+                        + "enceinte. On la déplace par son fond ; clic droit sur le fond pour son menu."
+                )
             }
 
             Section {

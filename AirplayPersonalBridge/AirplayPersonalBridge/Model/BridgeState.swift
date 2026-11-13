@@ -342,6 +342,15 @@ final class BridgeState {
         }
     }
 
+    /// Le widget : affiché ou non, son style, sa place (`WidgetSettings`). La fenêtre du widget suit cette
+    /// valeur (`WidgetController`) ; les vues ne font que l'écrire.
+    var widget = WidgetSettings() {
+        didSet {
+            guard oldValue != widget else { return }
+            scheduleSettingsSave()
+        }
+    }
+
     /// La bascule de la sortie du Mac vers le pilote (`BridgeState+VideoSync.swift`).
     @ObservationIgnored let videoSync: VideoSyncSwitch
 
@@ -537,6 +546,7 @@ final class BridgeState {
         self.syncsVideo = settings.syncsVideo
         self.windowLayout = settings.windowLayout
         self.hiddenElements = settings.hiddenElements
+        self.widget = settings.widget
         self.preferredSourceID = settings.sourceID
         if settings.sourceID == CaptureSource.inputDevice.id { selectedSource = .inputDevice }
 
@@ -1423,6 +1433,7 @@ final class BridgeState {
         result.syncsVideo = syncsVideo
         result.windowLayout = windowLayout
         result.hiddenElements = hiddenElements
+        result.widget = widget
         result.videoSyncMemory = videoSync.memory
         for output in outputs {
             result.outputs[output.id] = BridgeSettings.Output(
