@@ -135,10 +135,21 @@ final class LiveWidgetWindow: WidgetWindowing {
     func setFloating(_ floats: Bool) {
         self.floats = floats
         panel?.level = Self.level(floats: floats)
+        panel?.collectionBehavior = Self.collectionBehavior(floats: floats)
     }
 
+    /// Posé sur le bureau, le widget vit juste au-dessus des icônes du Finder : sous toutes les fenêtres,
+    /// comme un widget de macOS. Flottant, il passe au-dessus d'elles.
     static func level(floats: Bool) -> NSWindow.Level {
-        floats ? .floating : .normal
+        floats ? .floating : NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 1)
+    }
+
+    /// Sur tous les bureaux dans les deux cas. Posé sur le bureau, il ne bouge pas avec Mission Control
+    /// (`.stationary`), comme le fond d'écran ; flottant, il passe aussi par-dessus une app en plein écran.
+    static func collectionBehavior(floats: Bool) -> NSWindow.CollectionBehavior {
+        floats
+            ? [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+            : [.canJoinAllSpaces, .stationary, .ignoresCycle]
     }
 
     private func place(_ panel: NSPanel, at saved: CGPoint?) {
@@ -204,8 +215,7 @@ final class LiveWidgetWindow: WidgetWindowing {
         panel.isMovableByWindowBackground = false
         panel.isMovable = true
         panel.level = level(floats: floats)
-        // Sur tous les bureaux, et par-dessus une app en plein écran.
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        panel.collectionBehavior = collectionBehavior(floats: floats)
         // L'app perd le premier plan en permanence : le widget reste.
         panel.hidesOnDeactivate = false
         // Il ne prend le clavier que si une commande le demande : un clic sur un curseur ne retire pas la

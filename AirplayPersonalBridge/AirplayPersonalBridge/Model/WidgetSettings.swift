@@ -54,8 +54,10 @@ struct WidgetSettings: Codable, Equatable, Sendable {
     /// Le widget est affiché : il se rouvre au lancement suivant.
     var isShown = false
     var style = WidgetStyle.default
-    /// Au-dessus des autres fenêtres. Sans cela, il vit à leur niveau et passe dessous.
-    var floatsOnTop = true
+    /// Au-dessus des autres fenêtres. Sans cela, et par défaut, il est **posé sur le bureau**, comme un
+    /// widget de macOS : sous toutes les fenêtres, au-dessus du fond d'écran (Baptiste, 2026-11-13 : « je
+    /// voulais pouvoir le mettre sur le bureau, pas qui fly »).
+    var floatsOnTop = false
     /// Là où on l'a laissé. `nil` : jamais déplacé, il s'ouvre dans le coin de l'écran.
     var position: Position?
 
@@ -65,7 +67,7 @@ struct WidgetSettings: Codable, Equatable, Sendable {
 
     init() {}
 
-    init(isShown: Bool, style: WidgetStyle = .default, floatsOnTop: Bool = true, position: Position? = nil) {
+    init(isShown: Bool, style: WidgetStyle = .default, floatsOnTop: Bool = false, position: Position? = nil) {
         self.isShown = isShown
         self.style = style
         self.floatsOnTop = floatsOnTop
@@ -78,7 +80,7 @@ struct WidgetSettings: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         isShown = (try? container.decode(Bool.self, forKey: .isShown)) ?? false
         style = (try? container.decode(WidgetStyle.self, forKey: .style)) ?? .default
-        floatsOnTop = (try? container.decode(Bool.self, forKey: .floatsOnTop)) ?? true
+        floatsOnTop = (try? container.decode(Bool.self, forKey: .floatsOnTop)) ?? false
         let decoded = try? container.decode(Position.self, forKey: .position)
         position = decoded.flatMap { $0.isPlausible ? $0 : nil }
     }

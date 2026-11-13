@@ -53,13 +53,13 @@ struct WidgetSettingsTests {
         #expect(loaded == settings)
     }
 
-    @Test("Un fichier d'avant le widget ne l'affiche pas, et le fait flotter le jour où on l'ouvre")
+    @Test("Un fichier d'avant le widget ne l'affiche pas, et le pose sur le bureau le jour où on l'ouvre")
     func missingKey() throws {
         let settings = try decode(#"{"masterVolumeDB": -31}"#)
         #expect(settings.widget == WidgetSettings())
         #expect(!settings.widget.isShown)
         #expect(settings.widget.style == .halo)
-        #expect(settings.widget.floatsOnTop)
+        #expect(!settings.widget.floatsOnTop)
         #expect(settings.widget.position == nil)
         #expect(settings.masterVolumeDB == -31)
     }
@@ -331,7 +331,7 @@ struct WidgetMenuTests {
     @Test("Le fond dessine ce menu, et une ligne cliquée fait son action")
     func backdropMenu() throws {
         let view = WidgetBackdrop.BackdropView()
-        view.entries = WidgetMenu.entries(for: WidgetSettings(isShown: true, style: .band))
+        view.entries = WidgetMenu.entries(for: WidgetSettings(isShown: true, style: .band, floatsOnTop: true))
         var performed: [WidgetMenuAction] = []
         view.perform = { performed.append($0) }
 
@@ -519,10 +519,16 @@ struct WidgetControllerTests {
         #expect(floating.collectionBehavior.contains(.fullScreenAuxiliary))
         #expect(!floating.hidesOnDeactivate)
 
-        let ordinary = LiveWidgetWindow.makePanel(content: NSView(), floats: false)
-        #expect(ordinary.level == .normal)
+        // Posé sur le bureau : sous toutes les fenêtres, au-dessus des icônes, immobile sous Mission Control.
+        let desk = LiveWidgetWindow.makePanel(content: NSView(), floats: false)
+        #expect(desk.level.rawValue < NSWindow.Level.normal.rawValue)
+        #expect(desk.level.rawValue > Int(CGWindowLevelForKey(.desktopIconWindow)))
+        #expect(desk.collectionBehavior.contains(.canJoinAllSpaces))
+        #expect(desk.collectionBehavior.contains(.stationary))
+        #expect(!desk.collectionBehavior.contains(.fullScreenAuxiliary))
         #expect(LiveWidgetWindow.level(floats: true) == .floating)
-        #expect(LiveWidgetWindow.level(floats: false) == .normal)
+        // Par défaut, sur le bureau.
+        #expect(!WidgetSettings(isShown: true).floatsOnTop)
     }
 
     @Test("Le panneau est transparent autour du rectangle arrondi, avec une ombre, et se déplace par son fond seul")

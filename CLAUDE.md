@@ -870,6 +870,11 @@ Relevés du 2026-11-03, implémentés et mesurés les 2026-11-09 et 10 : ADR `01
   scène, pas d'`openWindow` : une vue de scène le relève (`capturesSceneActions`). Rendu :
   `WINDOW_PNG_DIR=<dossier> swift test --filter WidgetExport`. **Jamais vu dans l'app** : flottement, déplacement, place
   mémorisée et premier plan restent à juger par Baptiste.
+- **Le widget se pose sur le bureau, il ne flotte pas** (Baptiste, 2026-11-13) : par défaut son panneau est au niveau
+  `desktopIconWindow + 1` (sous toutes les fenêtres, au-dessus des icônes), `.stationary`, sur tous les bureaux, comme un
+  widget de macOS. « Toujours au-dessus des fenêtres » (`floatsOnTop`, faux par défaut) le remet en `.floating`. Ce n'est
+  pas un widget de la galerie de macOS : WidgetKit n'a pas de curseur (ADR 017). Il s'ouvre depuis la barre de menus, le
+  bouton « … » ou les Réglages.
 - **Écran verrouillé, ni capture ni fenêtre** : `screencapture` échoue (« could not create image from display »), et une app
   lancée par un agent n'ouvre aucune fenêtre visible ni ne devient active (sonde du 2026-11-10 : `screenLocked=1`). Le verre se
   juge par Baptiste, dans l'app.

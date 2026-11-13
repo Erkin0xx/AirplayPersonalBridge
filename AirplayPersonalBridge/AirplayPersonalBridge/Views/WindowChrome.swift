@@ -141,7 +141,7 @@ struct WindowOptionsButton: View {
                     } label: {
                         Label(WidgetCopy.toggleTitle(isShown: state.widget.isShown), systemImage: WidgetSymbol.name)
                     }
-                    .help("Une petite fenêtre qui reste au-dessus des autres : diffuser et régler les volumes")
+                    .help("Un widget posé sur le bureau : diffuser et régler les volumes")
                     Button {
                         isPresented = false
                         showDiagnostics()

@@ -42,7 +42,8 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 .help("Halo : le disque et l'anneau du volume. Bandeau : un bouton et de grandes pastilles.")
-                Toggle("Toujours au-dessus", isOn: $state.widget.floatsOnTop)
+                Toggle("Toujours au-dessus des fenêtres", isOn: $state.widget.floatsOnTop)
+                    .help("Désactivé, le widget est posé sur le bureau, sous les fenêtres, comme un widget de macOS.")
             } header: {
                 Text("Widget")
             } footer: {
