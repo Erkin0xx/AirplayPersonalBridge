@@ -62,7 +62,10 @@ struct WidgetSettings: Codable, Equatable, Sendable {
     var position: Position?
 
     private enum CodingKeys: String, CodingKey {
-        case isShown, style, floatsOnTop, position
+        case isShown, style, position
+        // Pas `floatsOnTop` : la première version du widget flottait par défaut et l'écrivait à `true`.
+        // Sous une autre clé, cet ancien réglage est ignoré, et le widget se pose sur le bureau.
+        case floatsOnTop = "staysAboveWindows"
     }
 
     init() {}

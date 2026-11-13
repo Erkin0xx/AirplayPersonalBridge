@@ -67,12 +67,23 @@ struct WidgetSettingsTests {
     @Test("Un style inconnu donne le style par défaut, sans coûter les autres champs")
     func unknownStyle() throws {
         let settings = try decode(
-            #"{"widget": {"isShown": true, "style": "cadran", "floatsOnTop": false, "position": {"x": 10, "y": 20}}}"#
+            #"{"widget": {"isShown": true, "style": "cadran", "staysAboveWindows": true, "position": {"x": 10, "y": 20}}}"#
         )
         #expect(settings.widget.style == .default)
         #expect(settings.widget.isShown)
-        #expect(!settings.widget.floatsOnTop)
+        #expect(settings.widget.floatsOnTop)
         #expect(settings.widget.position == WidgetSettings.Position(x: 10, y: 20))
+    }
+
+    @Test("L'ancien réglage « flottant » de la première version est ignoré : le widget se pose sur le bureau")
+    func legacyFloatingFlagIsIgnored() throws {
+        // Ce que la première version écrivait, avec son défaut flottant.
+        let settings = try decode(
+            #"{"widget": {"floatsOnTop": true, "isShown": true, "position": {"x": 31, "y": 194}, "style": "halo"}}"#
+        )
+        #expect(!settings.widget.floatsOnTop)
+        #expect(settings.widget.isShown)
+        #expect(settings.widget.position == WidgetSettings.Position(x: 31, y: 194))
     }
 
     @Test("Une position illisible ou hors de tout écran est oubliée, le reste est gardé")
@@ -523,6 +534,8 @@ struct WidgetControllerTests {
         let desk = LiveWidgetWindow.makePanel(content: NSView(), floats: false)
         #expect(desk.level.rawValue < NSWindow.Level.normal.rawValue)
         #expect(desk.level.rawValue > Int(CGWindowLevelForKey(.desktopIconWindow)))
+        // Le niveau des widgets de macOS, relevé sur ceux du Centre de notifications.
+        #expect(desk.level.rawValue == Int(CGWindowLevelForKey(.desktopIconWindow)) + 2)
         #expect(desk.collectionBehavior.contains(.canJoinAllSpaces))
         #expect(desk.collectionBehavior.contains(.stationary))
         #expect(!desk.collectionBehavior.contains(.fullScreenAuxiliary))

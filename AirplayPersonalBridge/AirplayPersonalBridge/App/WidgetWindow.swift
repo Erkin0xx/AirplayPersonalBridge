@@ -138,10 +138,11 @@ final class LiveWidgetWindow: WidgetWindowing {
         panel?.collectionBehavior = Self.collectionBehavior(floats: floats)
     }
 
-    /// Posé sur le bureau, le widget vit juste au-dessus des icônes du Finder : sous toutes les fenêtres,
-    /// comme un widget de macOS. Flottant, il passe au-dessus d'elles.
+    /// Posé sur le bureau, le widget vit au niveau des widgets de macOS (relevé le 2026-11-13 : ceux du
+    /// Centre de notifications sont à `desktopIconWindow + 2`, les icônes du Finder à `desktopIconWindow`) :
+    /// sous toutes les fenêtres. Flottant, il passe au-dessus d'elles.
     static func level(floats: Bool) -> NSWindow.Level {
-        floats ? .floating : NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 1)
+        floats ? .floating : NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 2)
     }
 
     /// Sur tous les bureaux dans les deux cas. Posé sur le bureau, il ne bouge pas avec Mission Control
