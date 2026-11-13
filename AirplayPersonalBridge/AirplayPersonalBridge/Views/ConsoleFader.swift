@@ -86,6 +86,8 @@ struct ConsoleFader: View {
     var mark: Double?
     var width: CGFloat = 72
     var cornerRadius: CGFloat = 24
+    /// Les mesures du trait, de la prise et du repère : celles de la console, ou plus fines (le widget).
+    var metrics = DarkshellFaderMetrics.console
     /// Pour VoiceOver.
     let label: String
     let valueText: String
@@ -104,7 +106,7 @@ struct ConsoleFader: View {
 
     /// Ce qui reste rempli au minimum : la place de l'icône pour le général, un pied de voile pour une
     /// enceinte.
-    private var floor: CGFloat { look == .general ? 58 : 26 }
+    private var floor: CGFloat { metrics.floor ?? (look == .general ? 58 : 26) }
 
     var body: some View {
         GeometryReader { geometry in
@@ -132,9 +134,14 @@ struct ConsoleFader: View {
                     }
                     Rectangle()
                         .fill(levelColor)
-                        .frame(height: DarkshellFaderGeometry.lineThickness)
+                        .frame(height: metrics.lineThickness)
                         .offset(y: level)
-                    grip(centerY: DarkshellFaderGeometry.gripCenterY(levelY: level, trackHeight: height))
+                    grip(
+                        centerY: DarkshellFaderGeometry.gripCenterY(
+                            levelY: level, trackHeight: height, gripHeight: metrics.grip.height,
+                            lineThickness: metrics.lineThickness
+                        )
+                    )
                 }
                 .frame(width: geometry.size.width, height: height, alignment: .top)
                 .overlay(alignment: .bottom) { glyph }
@@ -148,7 +155,7 @@ struct ConsoleFader: View {
         .background {
             shape
                 .fill(Color.black)
-                .shadow(color: .black.opacity(0.32), radius: 11, y: 10)
+                .shadow(color: .black.opacity(0.32), radius: metrics.shadowRadius, y: metrics.shadowY)
                 .accessibilityHidden(true)
         }
         .frame(width: width)
@@ -197,9 +204,9 @@ struct ConsoleFader: View {
     private func grip(centerY: CGFloat) -> some View {
         Capsule()
             .fill(levelColor)
-            .shadow(color: .black.opacity(0.6), radius: 4, y: 2)
-            .frame(width: DarkshellFaderGeometry.grip.width, height: DarkshellFaderGeometry.grip.height)
-            .offset(y: centerY - DarkshellFaderGeometry.grip.height / 2)
+            .shadow(color: .black.opacity(0.6), radius: metrics.gripShadowRadius, y: metrics.gripShadowY)
+            .frame(width: metrics.grip.width, height: metrics.grip.height)
+            .offset(y: centerY - metrics.grip.height / 2)
             .accessibilityHidden(true)
     }
 
@@ -228,12 +235,12 @@ struct ConsoleFader: View {
     /// voile, sans barrer celui-ci.
     private func marks(atY y: CGFloat) -> some View {
         HStack {
-            Rectangle().frame(width: DarkshellFaderGeometry.mark.width, height: DarkshellFaderGeometry.mark.height)
-            Spacer()
-            Rectangle().frame(width: DarkshellFaderGeometry.mark.width, height: DarkshellFaderGeometry.mark.height)
+            Rectangle().frame(width: metrics.mark.width, height: metrics.mark.height)
+            Spacer(minLength: 0)
+            Rectangle().frame(width: metrics.mark.width, height: metrics.mark.height)
         }
         .foregroundStyle(Darkshell.markColor.opacity(isSilenced ? 0.5 : 1))
-        .padding(.horizontal, Darkshell.lipWidth + DarkshellFaderGeometry.markInset)
+        .padding(.horizontal, Darkshell.lipWidth + metrics.markInset)
         .offset(y: y)
         .allowsHitTesting(false)
         .accessibilityHidden(true)

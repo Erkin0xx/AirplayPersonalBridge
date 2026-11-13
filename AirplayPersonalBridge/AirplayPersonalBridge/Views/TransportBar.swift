@@ -168,6 +168,9 @@ struct TransportBar: View {
 struct StreamingRoundButton: View {
     let state: BridgeState
     var diameter: CGFloat = 52
+    /// Quand ça joue, le disque de verre noir du Halo et le pont qui ondule, au lieu du rond rouge à
+    /// carré : le widget « Bandeau » (demande de Baptiste). Un clic arrête, comme sur le disque du Halo.
+    var showsBridgeWhenLive = false
 
     var body: some View {
         let isStopSide = state.streamingPhase == .running || state.streamingPhase == .stopping
@@ -175,6 +178,15 @@ struct StreamingRoundButton: View {
         Button {
             state.toggleStreaming()
         } label: {
+            if showsBridgeWhenLive, isStopSide {
+                HaloSphere(
+                    look: .live, isAudible: state.isHaloAudible,
+                    // Les trois points le temps d'une transition, comme sur le disque du Halo.
+                    glyph: state.status.menuBar == .connecting ? .connecting : .idle, diameter: diameter
+                )
+                .frame(width: diameter, height: diameter)
+                .contentShape(Circle())
+            } else {
             ZStack {
                 Circle().fill(isStopSide ? Color(red: 0.85, green: 0.18, blue: 0.13) : Color.white)
                 if isTransition {
@@ -192,6 +204,7 @@ struct StreamingRoundButton: View {
             .frame(width: diameter, height: diameter)
             .shadow(color: .black.opacity(0.3), radius: 8, y: 3)
             .contentShape(Circle())
+            }
         }
         .buttonStyle(.plain)
         // ⌘↩ et non `.defaultAction` : Retour valide un champ, et ne doit pas faire partir le son.

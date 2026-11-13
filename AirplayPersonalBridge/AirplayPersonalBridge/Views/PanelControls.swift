@@ -157,6 +157,11 @@ struct PanelVolumeSlider: View {
     /// La matière : celle du panneau, ou la coque noire de la vue Console. Les gestes, le clavier et
     /// VoiceOver sont les mêmes.
     var look: ControlLook = .panel
+    /// La hauteur du rail, et le diamètre de sa prise.
+    var height = PanelMetrics.pastille
+    /// La valeur écrite dans le rail, à la main ou son coupé. Le widget la lit à côté, et n'a pas la
+    /// place de la loger dans un rail aussi court.
+    var showsInlineValue = true
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var isFocused: Bool
@@ -165,7 +170,6 @@ struct PanelVolumeSlider: View {
     /// Le clic donne aussi le focus, mais l'anneau n'a de sens que pour qui navigue au clavier.
     @State private var isPointerFocus = false
 
-    private let height = PanelMetrics.pastille
     private let keyStep = 1.5
 
     /// Coupé, le curseur reste où il était, éteint : c'est ce niveau-là que le rétablissement rendra,
@@ -216,7 +220,7 @@ struct PanelVolumeSlider: View {
                         isLit: isHovering || isDragging, symbol: glyph
                     )
                 }
-                valueLabel(width: geometry.size.width, knobEnd: offset + height)
+                if showsInlineValue { valueLabel(width: geometry.size.width, knobEnd: offset + height) }
             }
             .contentShape(Capsule())
             .gesture(drag(travel: travel))

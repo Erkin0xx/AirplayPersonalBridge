@@ -129,8 +129,11 @@ enum DarkshellFaderGeometry {
 
     /// Le centre de la prise : à cheval sur le trait, mais retenue à l'intérieur du liseré. Au maximum le
     /// trait touche la lèvre, et une prise centrée dessus serait rognée de moitié.
-    static func gripCenterY(levelY: CGFloat, trackHeight: CGFloat) -> CGFloat {
-        let half = grip.height / 2
+    static func gripCenterY(
+        levelY: CGFloat, trackHeight: CGFloat, gripHeight: CGFloat = grip.height,
+        lineThickness: CGFloat = lineThickness
+    ) -> CGFloat {
+        let half = gripHeight / 2
         let lowest = Darkshell.lipWidth + half
         let highest = trackHeight - Darkshell.lipWidth - half
         // Un rail plus bas que la prise : elle reste au milieu.
@@ -143,6 +146,38 @@ enum DarkshellFaderGeometry {
     /// quand la valeur y est.
     static func markY(fill: CGFloat, trackHeight: CGFloat) -> CGFloat {
         levelY(fill: fill, trackHeight: trackHeight)
+    }
+}
+
+/// Les mesures d'un curseur vertical : celles de la console par défaut, plus fines pour le widget, où le
+/// même curseur tient dans 22 pt de large. La matière et le comportement ne changent pas.
+struct DarkshellFaderMetrics: Equatable {
+    var lineThickness = DarkshellFaderGeometry.lineThickness
+    var grip = DarkshellFaderGeometry.grip
+    var mark = DarkshellFaderGeometry.mark
+    /// Du liseré à un tiret du repère.
+    var markInset = DarkshellFaderGeometry.markInset
+    /// Ce qui reste rempli au minimum. `nil` : le socle de l'allure du curseur (`ConsoleFader.Look`).
+    var floor: CGFloat?
+    /// L'ombre portée de la coque.
+    var shadowRadius: CGFloat = 11
+    var shadowY: CGFloat = 10
+    /// L'ombre de la prise.
+    var gripShadowRadius: CGFloat = 4
+    var gripShadowY: CGFloat = 2
+
+    /// La vue Console.
+    static let console = DarkshellFaderMetrics()
+
+    /// Un curseur étroit ou court (le widget) : trait d'un point, prise et tirets à la mesure de la largeur,
+    /// ombre courte. D'après les maquettes 23 et 24.
+    static func compact(width: CGFloat, floor: CGFloat) -> DarkshellFaderMetrics {
+        DarkshellFaderMetrics(
+            lineThickness: 1,
+            grip: CGSize(width: max(9, (width * 0.36).rounded()), height: 3),
+            mark: CGSize(width: max(3, (width * 0.11).rounded()), height: 1),
+            markInset: 2, floor: floor, shadowRadius: 4.5, shadowY: 4, gripShadowRadius: 1.5, gripShadowY: 1
+        )
     }
 }
 
