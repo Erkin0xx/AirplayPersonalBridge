@@ -1354,8 +1354,9 @@ rendu, puis son regard dans l'app, noté quand il l'a dit.
 | « Dans la menu bar, enlève le rose, remets en blanc les icônes » | Pastilles, coches, silences et Diffuser en blanc ; seule la pastille d'état reste rose | rendu du panneau |
 | « Quand l'app n'est pas au premier plan ça ne bouge pas, j'aimerais que si » | Les animations suivent la visibilité de la fenêtre (`occlusionState`), plus le premier plan | test de la règle ; **non vu** |
 | « Vue buggée réduite » (Console) | Tuiles resserrées pour tenir, nom dégagé sous l'œil « masquer », « Éteinte » au lieu de « AirPlay 1 » | test, rendu à 600×480 et 440×400 ; son cas exact (Geneva éteinte + paire à 440) n'est pas rendu |
-| Un widget à la taille de son horloge, lecture à gauche, trois enceintes à droite | Quatre maquettes demandées sur le canevas ; rien de codé | — |
+| Un widget à la taille de son horloge, lecture à gauche, trois enceintes à droite ; maquettes 23 et 24 retenues, la 24 avec un curseur horizontal du volume général à la place du titre et le logo dans le bouton quand ça joue | Panneau flottant de 345×165 (`WidgetController`, ADR 017), styles « Halo » et « Bandeau », ouvert depuis la barre de menus, le bouton « … » et les Réglages ; style, position et « toujours au-dessus » mémorisés | test (50, 8 mutations), rendu des deux styles au repos et en diffusion, `xcodebuild`. **Fusionné et poussé le 2026-11-13, pas installé** : Discord et Dia jouaient. Flottement, déplacement par le fond, position mémorisée : **jamais vus** |
 
-**Tests** : 1 176 tests verts. **Ouvert** : le widget (WidgetKit n'a pas de curseur : ce sera une petite fenêtre flottante
-de l'app) ; coût CPU fenêtre visible, maintenant que tout bouge en permanence, toujours pas mesuré.
+**Tests** : 1 176 tests verts avant le widget, 1 226 avec. Le 2026-11-13 la suite complète échoue sur des tests
+chronométrés, Mac à une charge de 29 (Spotlight à 255 % d'un cœur) ; les suites d'interface seules passent (190 tests).
+**Ouvert** : installer et juger le widget ; coût CPU fenêtre visible, maintenant que tout bouge en permanence, toujours pas mesuré.
 
