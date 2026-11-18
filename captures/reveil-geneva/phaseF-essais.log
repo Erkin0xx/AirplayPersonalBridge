@@ -1,0 +1,41 @@
+## Standby Mode=1, veille auto 21:12:36
+21:13:04 essai tcp
+    tcp 5000: TimeoutError:timed out
+    tcp 7000: TimeoutError:timed out
+    tcp 80: TimeoutError:timed out
+    tcp 443: TimeoutError:timed out
+    tcp 8080: TimeoutError:timed out
+    tcp 10200: TimeoutError:timed out
+    tcp 15555: TimeoutError:timed out
+21:13:49 aucune réponse au ping en 45 s
+21:13:49 essai wol
+    magic→255.255.255.255:9×3
+    magic→255.255.255.255:7×3
+    magic→192.168.1.255:9×3
+    magic→192.168.1.255:7×3
+    magic→192.168.1.39:9×3
+    magic→192.168.1.39:7×3
+21:14:50 aucune réponse au ping en 60 s
+## Standby Mode=1 après redémarrage, veille auto 21:39:42
+21:40:27 essai tcp
+    tcp 5000: TimeoutError:timed out
+    tcp 7000: TimeoutError:timed out
+    tcp 80: TimeoutError:timed out
+    tcp 443: TimeoutError:timed out
+    tcp 8080: TimeoutError:timed out
+    tcp 10200: TimeoutError:timed out
+    tcp 15555: TimeoutError:timed out
+21:41:09 aucune réponse au ping en 40 s
+21:41:09 essai wol
+    magic→255.255.255.255:9×3
+    magic→255.255.255.255:7×3
+    magic→192.168.1.255:9×3
+    magic→192.168.1.255:7×3
+    magic→192.168.1.39:9×3
+    magic→192.168.1.39:7×3
+21:41:59 aucune réponse au ping en 50 s
+21:41:59 essai ping
+    --- 192.168.1.39 ping statistics ---
+    mdns A: rien
+    mdns SRV raop: rien
+21:42:31 aucune réponse au ping en 30 s

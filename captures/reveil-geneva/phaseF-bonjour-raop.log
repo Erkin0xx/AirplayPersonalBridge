@@ -1,0 +1,15 @@
+Browsing for _raop._tcp.local
+DATE: ---Wed 18 Nov 2026---
+20:56:13.422  ...STARTING...
+Timestamp     A/R    Flags  if Domain               Service Type         Instance Name
+20:56:13.423  Add        3  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:56:13.423  Add        3  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:56:13.423  Add        3  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:56:13.423  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:56:13.423  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:57:40.883  Add        2  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
+21:12:36.917  Rmv        0  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
+21:24:09.101  Add        2  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
+21:24:10.200  Rmv        0  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
+21:24:11.067  Add        2  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
+21:39:42.763  Rmv        0  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva

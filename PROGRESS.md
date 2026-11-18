@@ -1376,6 +1376,12 @@ contre le matériel réel** (la Geneva), en capture, sauf mention contraire.
   réglage.
 - **Recommandation** : activer ce réglage à l'essai (gratuit, réversible), puis refaire la phase D. S'il ne la réveille pas,
   un pousse-bouton Bluetooth (~30 €) sur le bouton de mise en marche, piloté par CoreBluetooth.
-- **Décision attendue de Baptiste** : autoriser ou non l'écriture du « Standby Mode ».
+- **Décision de Baptiste, le soir même** : aller jusqu'au réveil. Le « Standby Mode » est **écrit à `state=1`** (21:00) et
+  laissé ainsi sur l'enceinte.
+- **Phase F, validée contre le matériel réel, une seule fois** : le réglage n'agit qu'après un redémarrage. Éteinte au
+  bouton, la Geneva revient seule sur le réseau ~2 min plus tard, annoncée en AirPlay, et coupe tout 15 min après l'appui.
+- **Reste ouvert** : l'essai décisif (une session AirPlay la rallume-t-elle dans cette fenêtre ? que fait le voyant ?),
+  la prolongation de la fenêtre, et l'extinction automatique avec le réglage relu. Il demande à Baptiste d'allumer,
+  d'éteindre et de regarder le voyant : `docs/reveil_geneva.md` § 8.
 - Écartés : prise connectée (elle reste en veille au retour du courant) ; infrarouge tant que le code Power est inconnu et
   qu'aucune télécommande d'origine n'est disponible.

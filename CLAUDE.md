@@ -574,7 +574,11 @@ Ce qui suit vient des commits 824f16d à 0cf8a31, puis de la session de test mat
     `:8080/description.xml`, qui **répond au `M-SEARCH` depuis le port 3911**, sans aucune action de marche ou de veille.
   - **Réglage caché « Standby Mode »** : `POST /goform/aformHandlerConfigureStandByMode` `state=1`/`0`. Son aide promet
     qu'elle sortira de veille quand on la choisit en AirPlay. Geneva a retiré l'interrupteur de sa page, et aucune lecture
-    n'expose l'état. **Jamais essayé** : c'est une écriture de réglage, à faire seulement si Baptiste l'a décidé.
+    n'expose l'état. **Écrit à `state=1` le 2026-11-18 à 21:00, à la demande de Baptiste, et laissé ainsi** (200 en 7,6 s,
+    délai de 20 s : la page met ~11 s). Sans effet avant un redémarrage. Après : éteinte au bouton, elle quitte le réseau
+    **sans goodbye**, **revient seule ~2 min plus tard** et s'annonce en AirPlay avec les mêmes TXT, puis coupe tout **15 min
+    après l'appui** (capture, une fois). **Pas établi** : le voyant dans cette fenêtre, qu'une session AirPlay la rallume,
+    qu'on puisse prolonger la fenêtre. Détail et essai décisif : `docs/reveil_geneva.md` § 8.
 - **HomePod gen 2**, « Salon » (192.168.1.66, à gauche face à la télé) et « Salon (2) » (192.168.1.69, à droite,
   leader de la paire : bit 13 de `flags`). Ils forment une **paire stéréo** (même `tsid`), et font partie du groupe
   « Home cinéma » de l'Apple TV (même `gid`, `psgsz=3`). firmware `osvers=27.2`, `srcvers=1005.13.2`.

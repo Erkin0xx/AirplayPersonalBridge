@@ -10,8 +10,9 @@ Niveaux de preuve : **capture** (trace `tshark`), **mesuré** (sonde scriptée, 
 
 **Rien de ce qui passe par le réseau ne réveille la Geneva**, ni une coupure de courant. Seuls son bouton, et d'après le
 manuel sa télécommande infrarouge, la rallument. Mais son firmware contient un réglage caché, « Standby Mode », qui
-promet exactement ce que veut Baptiste : sortir de veille quand on la choisit comme sortie AirPlay. Il n'a pas été essayé,
-puisque le brief interdit de modifier un réglage de l'enceinte. C'est la recommandation : l'activer à l'essai.
+promet exactement ce que veut Baptiste : sortir de veille quand on la choisit comme sortie AirPlay. Le brief interdisait de
+l'écrire ; Baptiste l'a ensuite demandé, et **il est activé depuis le 2026-11-18 à 21:00** : voir le § 8, où l'essai
+décisif reste à faire. Les § 1 à 7 décrivent l'enceinte **avant** cette écriture.
 
 ## 1. La carte des états
 
@@ -180,3 +181,53 @@ Dans `captures/reveil-geneva/` (les `.pcapng` sont ignorés par git) :
 - `bonjour-raop.log`, `bonjour-airplay.log` : apparitions et départs Bonjour. Pendant le scan à haut débit (20:37 à
   20:41), l'enceinte saturée a manqué des réponses mDNS : ces départs-là ne sont pas des extinctions.
 - `phaseD-essais.log` : sortie des essais de réveil.
+
+## 8. Le « Standby Mode » activé (phase F, 2026-11-18 de 21:00 à 21:45) — essai décisif à faire
+
+Baptiste a demandé d'aller jusqu'au réveil : l'interdiction d'écrire ce réglage est levée. Une mise à jour du firmware et
+une remise en réglages d'usine restent exclues sans son accord.
+
+**L'écriture** (mesuré, 21:00:17, enceinte allumée) :
+
+```
+curl -s -m 20 -H 'Content-type: application/x-www-form-urlencoded' --data 'state=1' \
+     http://<ip>/goform/aformHandlerConfigureStandByMode
+→ 2qwhgpstgriz0qwhgpstgriz1qwhgpstgrizEndRes   (HTTP 200 en 7,6 s ; le dernier champ à 1 = accepté)
+```
+
+`state=0` le défait. `index.asp` met ~11 s à répondre (la page scanne les réseaux Wi-Fi) : tout délai court échoue.
+
+**Ce qui a été observé ensuite** (capture `phaseF-standby-mode.pcapng`) :
+
+| Heure | Événement | Preuve |
+|---|---|---|
+| 21:00:17 | réglage écrit, enceinte restée allumée, **sans redémarrage** | mesuré |
+| 21:12:36 | extinction automatique, goodbye mDNS, plus aucune trame : **comme avant**. SYN TCP (en unicast, ARP encore en cache) et Wake-on-LAN sans effet | capture |
+| 21:24:07 | rallumée au bouton par Baptiste : le réglage est donc relu **après un redémarrage** | capture |
+| **21:24:42** | éteinte au bouton d'arrêt (dit par Baptiste). Dernière réponse au ping à 21:24:37,95. **Aucun goodbye mDNS**, puis aucune trame pendant ~132 s | capture |
+| **21:26:49** | **elle revient seule sur le réseau** : sondes mDNS, réponse ARP, annonce ARP (21:26:53), puis `_http`, `_airplay`, `_raop` avec des TXT **identiques** à ceux de la marche | capture |
+| **21:39:42** | goodbye mDNS, plus aucune trame : **15 min 00 s après l'appui sur le bouton d'arrêt** | capture |
+| 21:40:27 à 21:42:31 | TCP, Wake-on-LAN, ping, mDNS : sans effet, comme en veille profonde | mesuré |
+
+**Lecture** : une fois relu au démarrage, le réglage crée un état nouveau, une **veille réseau** : éteinte au bouton, elle
+redémarre son réseau (~2 min), s'annonce en AirPlay comme si elle était allumée, puis coupe tout 15 min après l'appui.
+Trois choses ne sont **pas** établies :
+
+1. **Le voyant pendant cette veille réseau** : personne ne l'a regardé. Si elle était simplement rallumée, ce ne serait
+   pas une veille.
+2. **Qu'une session AirPlay la rallume** dans cette fenêtre : aucun essai n'y a été lancé, la fenêtre n'a été comprise
+   qu'après coup, dans la capture.
+3. **Qu'on puisse prolonger la fenêtre** au-delà de 15 min, par une activité réseau périodique ou autrement. Sans cela,
+   le gain se limite au quart d'heure qui suit l'extinction, et l'extinction automatique (21:12:36, avant le
+   redémarrage) reste à refaire avec le réglage relu.
+
+**Aussi essayé, sans résultat** : pages cachées de la page de configuration (noms courants, toutes en 404) ; Bluetooth
+(l'enceinte n'est pas appairée au Mac et n'apparaît dans `blueutil --inquiry` ni allumée ni en veille).
+
+**L'essai décisif** est scripté (`standby-wake.sh`, hors dépôt) et attend une action de Baptiste : allumer, attendre le
+vert fixe, éteindre d'un appui court, puis regarder le voyant quatre minutes. Au retour de l'enceinte sur le réseau, le
+script ouvre une session RAOP inaudible (−50 dBFS, volume −30, 25 s) et relève l'heure à laquelle elle quitte le réseau :
+15 min après l'appui si la session n'a rien changé, 15 min après la session si elle l'a rallumée.
+
+Journaux de la phase F dans `captures/reveil-geneva/` : `phaseF-monitor.log`, `phaseF-bonjour-raop.log`,
+`phaseF-essais.log`.
