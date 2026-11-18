@@ -1,0 +1,381 @@
+Browsing for _raop._tcp.local
+DATE: ---Wed 18 Nov 2026---
+19:43:23.845  ...STARTING...
+Timestamp     A/R    Flags  if Domain               Service Type         Instance Name
+19:43:23.847  Add        3  14 local.               _raop._tcp.          3282417C5FA0@Salon
+19:43:23.847  Add        3  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+19:43:23.847  Add        3  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+19:43:23.847  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+19:43:23.847  Add        3  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+19:43:23.847  Add        2  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
+19:57:06.462  Rmv        0  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
+19:58:05.161  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+19:58:05.161  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+19:58:05.161  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+19:58:05.161  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+19:58:05.161  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+19:58:30.304  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+19:58:30.342  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+19:58:30.434  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+19:58:31.118  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+19:58:31.118  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+19:59:14.423  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+19:59:14.423  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+19:59:14.423  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+19:59:14.423  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+19:59:14.423  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+19:59:19.545  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+19:59:19.564  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+19:59:19.620  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+19:59:20.539  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+19:59:20.539  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:00:03.777  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:00:03.777  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:00:03.777  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:00:03.777  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:00:03.777  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:00:16.650  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:00:16.654  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:00:16.671  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:00:17.508  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:00:17.508  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:01:00.808  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:01:00.808  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:01:00.808  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:01:00.808  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:01:00.808  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:01:05.974  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:01:06.051  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:01:06.062  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:01:06.821  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:01:06.821  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:01:50.100  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:01:50.100  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:01:50.100  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:01:50.100  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:01:50.100  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:01:53.644  Add        3  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:01:53.644  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:01:53.650  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:01:54.616  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:01:54.616  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:02:37.871  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:02:37.871  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:02:37.871  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:02:37.871  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:02:37.871  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:02:42.006  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:02:42.031  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:02:42.155  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:02:43.160  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:02:43.160  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:03:26.409  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:03:26.409  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:03:26.409  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:03:26.409  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:03:26.409  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:03:30.065  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:03:30.122  Add        3  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:03:30.122  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:03:31.238  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:03:31.238  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:04:12.971  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:04:12.971  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:04:12.971  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:04:12.971  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:04:12.971  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:04:22.655  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:04:22.657  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:04:22.686  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:04:23.675  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:04:23.675  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:05:06.919  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:05:06.919  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:05:06.919  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:05:06.919  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:05:06.919  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:05:09.915  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:05:09.922  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:05:09.984  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:05:10.946  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:05:10.946  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:05:54.109  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:05:54.109  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:05:54.109  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:05:54.109  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:05:54.109  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:06:01.716  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:06:01.762  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:06:01.765  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:06:02.845  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:06:02.845  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:06:46.092  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:06:46.092  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:06:46.092  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:06:46.092  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:06:46.092  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:06:51.794  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:06:51.904  Add        3  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:06:51.904  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:06:52.756  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:06:52.756  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:07:36.004  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:07:36.004  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:07:36.004  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:07:36.004  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:07:36.004  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:07:39.787  Add        3  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:07:39.787  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:07:39.801  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:07:40.806  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:07:40.806  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:08:22.574  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:08:22.574  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:08:22.574  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:08:22.574  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:08:22.574  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:08:25.288  Add        3  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:08:25.288  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:08:25.295  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:08:26.441  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:08:26.441  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:09:09.768  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:09:09.768  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:09:09.768  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:09:09.768  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:09:09.768  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:09:14.112  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:09:14.264  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:09:14.329  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:09:15.176  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:09:15.176  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:09:58.424  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:09:58.424  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:09:58.424  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:09:58.424  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:09:58.424  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:10:01.396  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:10:01.496  Add        3  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:10:01.496  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:10:02.548  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:10:02.548  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:10:45.808  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:10:45.808  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:10:45.808  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:10:45.808  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:10:45.808  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:10:49.501  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:10:49.639  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:10:49.732  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:10:50.622  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:10:50.622  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:11:32.382  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:11:32.382  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:11:32.382  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:11:32.382  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:11:32.382  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:11:36.420  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:11:36.428  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:11:36.445  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:11:37.221  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:11:37.221  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:12:18.969  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:12:18.969  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:12:18.969  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:12:18.969  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:12:18.969  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:12:22.617  Add        3  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:12:22.617  Add        3  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:12:22.617  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:12:23.769  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:12:23.769  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:13:05.533  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:13:05.533  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:13:05.533  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:13:05.533  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:13:05.533  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:13:08.994  Add        3  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:13:08.994  Add        3  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:13:08.994  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:13:09.880  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:13:09.880  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:13:53.176  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:13:53.176  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:13:53.176  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:13:53.176  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:13:53.176  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:13:58.897  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:13:58.909  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:13:58.920  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:13:59.796  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:13:59.796  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:14:43.062  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:14:43.062  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:14:43.062  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:14:43.062  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:14:43.062  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:14:46.262  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:14:46.268  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:14:46.274  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:14:47.334  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:14:47.334  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:15:30.617  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:15:30.617  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:15:30.617  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:15:30.617  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:15:30.617  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:15:34.159  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:15:34.160  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:15:34.205  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:15:34.987  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:15:34.987  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:16:18.267  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:16:18.267  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:16:18.267  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:16:18.267  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:16:18.267  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:16:24.061  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:16:24.065  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:16:24.087  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:16:24.880  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:16:24.880  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:17:08.221  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:17:08.221  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:17:08.221  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:17:08.221  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:17:08.221  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:17:16.788  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:17:16.812  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:17:16.827  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:17:17.920  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:17:17.920  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:18:01.032  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:18:01.032  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:18:01.032  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:18:01.032  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:18:01.032  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:18:05.980  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:18:06.004  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:18:06.024  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:18:07.017  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:18:07.017  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:18:50.304  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:18:50.304  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:18:50.304  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:18:50.304  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:18:50.304  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:18:57.674  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:18:57.706  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:18:57.725  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:18:58.734  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:18:58.734  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:19:41.902  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:19:41.902  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:19:41.902  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:19:41.902  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:19:41.902  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:19:44.957  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:19:44.973  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:19:45.013  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:19:45.826  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:19:45.826  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:20:29.063  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:20:29.063  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:20:29.063  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:20:29.063  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:20:29.063  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:20:34.909  Add        3  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:20:34.909  Add        3  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:20:34.909  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:20:35.972  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:20:35.972  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:21:19.224  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:21:19.224  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:21:19.224  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:21:19.224  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:21:19.224  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:21:33.780  Add        3  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:21:33.780  Add        3  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:21:33.780  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:21:34.428  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:21:34.428  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:22:17.630  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:22:17.630  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:22:17.630  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:22:17.630  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:22:17.630  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:22:23.953  Add        3  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:22:23.953  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:22:24.149  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:22:24.783  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:22:24.783  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:23:08.050  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:23:08.050  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:23:08.050  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:23:08.050  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:23:08.050  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:23:12.420  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:23:12.452  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:23:12.457  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:23:13.574  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:23:13.574  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:23:56.835  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:23:56.835  Rmv        1  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:23:56.835  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:23:56.835  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:23:56.835  Rmv        0  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:24:00.784  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:24:00.804  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:24:00.806  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:24:01.679  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:24:01.679  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:27:50.033  Add        2  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
+20:37:18.901  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:37:18.901  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:37:18.901  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:37:18.901  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:37:18.901  Rmv        1  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:37:18.901  Rmv        0  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
+20:38:04.206  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:38:04.225  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:38:04.461  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:38:05.351  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:38:05.351  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:38:05.533  Add        2  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
+20:38:48.630  Rmv        1  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
+20:38:48.630  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:38:48.630  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:38:48.630  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:38:48.630  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:38:48.630  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:39:25.374  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:39:25.387  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:39:25.473  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:39:26.367  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:39:26.367  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:39:26.705  Add        2  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
+20:40:09.603  Rmv        1  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
+20:40:09.603  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:40:09.603  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:40:09.603  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:40:09.603  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:40:09.603  Rmv        0  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:40:23.963  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:40:23.998  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:40:24.013  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:40:24.788  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:40:24.788  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:41:04.572  Add        2  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
+20:41:08.115  Rmv        1   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:41:08.115  Rmv        1  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:41:08.115  Rmv        1  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:41:08.115  Rmv        1  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:41:08.115  Rmv        1  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:41:08.115  Rmv        0  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
+20:41:09.741  Add        3  14 local.               _raop._tcp.          3282417C5FA0@Salon
+20:41:09.741  Add        3  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+20:41:09.741  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+20:41:10.967  Add        3   1 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:41:10.967  Add        2  14 local.               _raop._tcp.          0203F5613C90@MacBook Pro de Erki
+20:49:57.868  Add        2  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
+20:50:04.868  Rmv        0  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva

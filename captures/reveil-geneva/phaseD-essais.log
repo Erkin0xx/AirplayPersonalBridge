@@ -1,0 +1,71 @@
+20:00:05 essai wol
+    magic→255.255.255.255:9×3
+    magic→255.255.255.255:7×3
+    magic→192.168.1.255:9×3
+    magic→192.168.1.255:7×3
+    magic→192.168.1.39:9×3
+    magic→192.168.1.39:7×3
+20:01:05 aucune réponse au ping en 60 s
+20:01:10 essai ping
+    --- 192.168.1.39 ping statistics ---
+    mdns A: rien
+    mdns SRV raop: rien
+20:02:10 aucune réponse au ping en 60 s
+20:02:10 essai tcp
+    tcp 5000: OSError:[Errno 64] Host is down
+    tcp 7000: OSError:[Errno 64] Host is down
+    tcp 80: OSError:[Errno 64] Host is down
+    tcp 443: OSError:[Errno 64] Host is down
+    tcp 8080: OSError:[Errno 64] Host is down
+    tcp 10200: OSError:[Errno 64] Host is down
+    tcp 15555: OSError:[Errno 64] Host is down
+20:03:10 aucune réponse au ping en 60 s
+20:03:10 essai ssdp
+Traceback (most recent call last):
+  File "/private/tmp/claude-501/-Users-baptiste-Documents-Projet-AirPlay-App/8434ed54-9f9b-45e7-8a19-d6e709082196/scratchpad/geneva/wake.py", line 57, in <module>
+    for l in probe(name): print("   ", l, flush=True)
+             ~~~~~^^^^^^
+  File "/private/tmp/claude-501/-Users-baptiste-Documents-Projet-AirPlay-App/8434ed54-9f9b-45e7-8a19-d6e709082196/scratchpad/geneva/wake.py", line 41, in probe
+    for _ in range(2): s.sendto(msg, (dst, 1900))
+                       ~~~~~~~~^^^^^^^^^^^^^^^^^^
+OSError: [Errno 64] Host is down
+20:03:21 essai ssdp
+    M-SEARCH multicast+unicast, réponses de la Geneva : 0
+20:04:22 aucune réponse au ping en 60 s
+## répétition 2 (veille auto n°2)
+20:44:30 essai wol
+    magic→255.255.255.255:9×3
+    magic→255.255.255.255:7×3
+    magic→192.168.1.255:9×3
+    magic→192.168.1.255:7×3
+    magic→192.168.1.39:9×3
+    magic→192.168.1.39:7×3
+20:45:31 aucune réponse au ping en 60 s
+20:45:31 essai ping
+    --- 192.168.1.39 ping statistics ---
+    mdns A: rien
+    mdns SRV raop: rien
+20:46:32 aucune réponse au ping en 60 s
+## arrêt par le bouton
+20:50:33 essai wol
+    magic→255.255.255.255:9×3
+    magic→255.255.255.255:7×3
+    magic→192.168.1.255:9×3
+    magic→192.168.1.255:7×3
+    magic→192.168.1.39:9×3
+    magic→192.168.1.39:7×3
+20:51:34 aucune réponse au ping en 60 s
+20:51:34 essai ping
+    --- 192.168.1.39 ping statistics ---
+    mdns A: réponse
+    mdns SRV raop: réponse
+20:52:35 aucune réponse au ping en 60 s
+20:52:35 essai tcp
+    tcp 5000: OSError:[Errno 64] Host is down
+    tcp 7000: OSError:[Errno 64] Host is down
+    tcp 80: OSError:[Errno 64] Host is down
+    tcp 443: OSError:[Errno 64] Host is down
+    tcp 8080: OSError:[Errno 64] Host is down
+    tcp 10200: OSError:[Errno 64] Host is down
+    tcp 15555: OSError:[Errno 64] Host is down
+20:53:36 aucune réponse au ping en 60 s

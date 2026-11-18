@@ -1360,3 +1360,22 @@ rendu, puis son regard dans l'app, noté quand il l'a dit.
 chronométrés, Mac à une charge de 29 (Spotlight à 255 % d'un cœur) ; les suites d'interface seules passent (190 tests).
 **Ouvert** : installer et juger le widget ; coût CPU fenêtre visible, maintenant que tout bouge en permanence, toujours pas mesuré.
 
+
+### Réveiller la Geneva à distance (2026-11-18)
+
+Brief `docs/prompt_reveil_geneva.md`, rapport `docs/reveil_geneva.md`. **Aucun code de l'app touché.** Tout est **validé
+contre le matériel réel** (la Geneva), en capture, sauf mention contraire.
+
+- **Résultat : rien sur le réseau ne la réveille.** En veille, elle ne répond plus à rien, pas même à l'ARP. Essais sans
+  effet, chacun observé 60 s et en capture, dans les deux états d'arrêt (veille automatique deux fois, bouton d'arrêt une
+  fois) : Wake-on-LAN, ARP, ping, mDNS, TCP, SSDP, session RAOP. Également sans effet : le sélecteur AirPlay de l'iPhone et
+  deux coupures de courant (vu par Baptiste). Seul le bouton la rallume.
+- **Extinction automatique mesurée** : 14 min 57 s après l'arrivée sur le réseau, sans audio (le manuel annonce 15 min).
+- **Découverte** : le firmware (plateforme Microchip JukeBlox, hypothèse forte) contient un réglage « Standby Mode » masqué
+  par Geneva, censé la sortir de veille quand on la choisit en AirPlay. **Non essayé** : le brief interdisait d'écrire un
+  réglage.
+- **Recommandation** : activer ce réglage à l'essai (gratuit, réversible), puis refaire la phase D. S'il ne la réveille pas,
+  un pousse-bouton Bluetooth (~30 €) sur le bouton de mise en marche, piloté par CoreBluetooth.
+- **Décision attendue de Baptiste** : autoriser ou non l'écriture du « Standby Mode ».
+- Écartés : prise connectée (elle reste en veille au retour du courant) ; infrarouge tant que le code Power est inconnu et
+  qu'aucune télécommande d'origine n'est disponible.

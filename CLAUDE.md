@@ -559,8 +559,22 @@ Ce qui suit vient des commits 824f16d à 0cf8a31, puis de la session de test mat
   des HomePod, et Baptiste n'entend plus d'écho. Le récepteur tient déjà compte de sa latence pour l'instant annoncé.
 - **Garder la Geneva éveillée : −50 dBFS au moins, jamais −60.** Une session RAOP à −50 dBFS 60 Hz, volume −30, relancée en
   boucle, l'a tenue allumée près de 2 h 30 (ping 60/60). À **−60 dBFS** 60 Hz, volume −30, elle a fermé la session et **quitté
-  le réseau 15 min plus tard** (2026-11-02, 21:18 : FIN sur le RTSP, puis ping 0/60 et plus d'annonce Bonjour). Éteinte ainsi,
-  rien ne la réveille à distance : il faut que Baptiste la rallume. Un ping seul ne prouve rien.
+  le réseau 15 min plus tard** (2026-11-02, 21:18 : FIN sur le RTSP, puis ping 0/60 et plus d'annonce Bonjour). Un ping seul
+  ne prouve rien.
+- **Geneva en veille : rien sur le réseau ne la réveille** (éprouvé le 2026-11-18, `docs/reveil_geneva.md`, captures dans
+  `captures/reveil-geneva/`). Elle s'endort **14 min 57 s** après son arrivée sur le réseau si aucun audio n'entre (mesuré
+  deux fois ; un scan TCP ou des requêtes HTTP ne la retiennent pas). Extinction automatique et bouton d'arrêt laissent la
+  même trace : goodbye mDNS (TTL 0, PTR seulement : `A` et `SRV` restent dans le cache du Mac, `dns-sd -G` y répond encore),
+  puis **plus aucune trame**, ARP compris. Sans effet, chacun 60 s et en capture : Wake-on-LAN (diffusion et MAC, ports 9 et 7),
+  ARP, ping, mDNS, TCP, SSDP, session RAOP, sélecteur AirPlay de l'iPhone, **coupure de courant** (elle reste en veille au
+  retour du courant). Seul le bouton la rallume (~30 s : orange ~20 s, vert clignotant ~10 s), un bouton allume et l'autre
+  éteint ; la télécommande infrarouge d'origine aussi, d'après le manuel. **Power maintenu 10 s = réglages d'usine.**
+  - MAC `F8:F2:5A:01:12:61` (OUI de G-Lab, la marque). Ports TCP 80, 443, 5000, 8080, 10200, 15555. Plateforme **Microchip
+    JukeBlox** (hypothèse forte : logo de la page, UPnP `schemas-smsc-com`, service `_JB2XiOSApp._tcp`). UPnP MediaRenderer sur
+    `:8080/description.xml`, qui **répond au `M-SEARCH` depuis le port 3911**, sans aucune action de marche ou de veille.
+  - **Réglage caché « Standby Mode »** : `POST /goform/aformHandlerConfigureStandByMode` `state=1`/`0`. Son aide promet
+    qu'elle sortira de veille quand on la choisit en AirPlay. Geneva a retiré l'interrupteur de sa page, et aucune lecture
+    n'expose l'état. **Jamais essayé** : c'est une écriture de réglage, à faire seulement si Baptiste l'a décidé.
 - **HomePod gen 2**, « Salon » (192.168.1.66, à gauche face à la télé) et « Salon (2) » (192.168.1.69, à droite,
   leader de la paire : bit 13 de `flags`). Ils forment une **paire stéréo** (même `tsid`), et font partie du groupe
   « Home cinéma » de l'Apple TV (même `gid`, `psgsz=3`). firmware `osvers=27.2`, `srcvers=1005.13.2`.
