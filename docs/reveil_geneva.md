@@ -230,4 +230,5 @@ script ouvre une session RAOP inaudible (−50 dBFS, volume −30, 25 s) et rel�
 15 min après l'appui si la session n'a rien changé, 15 min après la session si elle l'a rallumée.
 
 Journaux de la phase F dans `captures/reveil-geneva/` : `phaseF-monitor.log`, `phaseF-bonjour-raop.log`,
-`phaseF-essais.log`.
+`phaseF-essais.log`. Capture et sondes arrêtées le 2026-11-19 à 14:26 : l'enceinte n'a pas été rallumée depuis 21:39:42,
+aucune trame d'elle entre-temps, et le script de l'essai décisif n'est plus armé (il a attendu 14 h).
