@@ -13,3 +13,10 @@ Timestamp     A/R    Flags  if Domain               Service Type         Instanc
 21:24:10.200  Rmv        0  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
 21:24:11.067  Add        2  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
 21:39:42.763  Rmv        0  14 local.               _raop._tcp.          F8F25A011261@Erki’s geneva
+DATE: ---Thu 19 Nov 2026---
+ 2:09:39.144  Rmv        0  14 local.               _raop._tcp.          3282417C5FA0@Salon
+ 2:10:01.115  Rmv        0  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+ 2:11:21.122  Add        2  14 local.               _raop._tcp.          3282417C5FA0@Salon
+ 2:11:50.335  Add        2  14 local.               _raop._tcp.          AA7CB1CFC6E7@Salon (2)
+ 2:16:51.591  Rmv        0  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
+ 2:18:12.808  Add        2  14 local.               _raop._tcp.          96A1F186B7D1@Apple TV Salon
